@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 import orjson
+from aiohttp import ClientPayloadError
 from omegaconf import OmegaConf
 from pydantic import BaseModel, Field
 from tqdm.asyncio import tqdm
@@ -438,10 +439,17 @@ Aggregate metrics: {aggregate_metrics_fpath}""")
         semaphore = semaphore or nullcontext()
 
         async def _post_subroutine(row: Dict) -> Tuple[Dict, Dict]:
-            async with semaphore:
-                res = await server_client.post(server_name=row["agent_ref"]["name"], url_path="/run", json=row)
-                await raise_for_status(res)
-                return row, await get_response_json(res)
+            while True:
+                async with semaphore:
+                    try:
+                        res = await server_client.post(
+                            server_name=row["agent_ref"]["name"], url_path="/run", json=row
+                        )
+                        await raise_for_status(res)
+                        return row, await get_response_json(res)
+                    except ClientPayloadError as e:
+                        print(f"Retrying /run for agent={row['agent_ref']['name']} after {type(e).__name__}: {e}")
+                await asyncio.sleep(0.5)
 
         return tqdm.as_completed(
             map(_post_subroutine, examples),
