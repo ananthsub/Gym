@@ -13,11 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from asyncio import Semaphore, get_running_loop
+from asyncio import Semaphore
 from time import time
 from typing import Any, Dict, List, Optional, Union
 
-import ray
 from lcb_integration.compute_code_generation_metrics import check_correctness_remote
 from lcb_integration.extraction_utils import LMStyle, extract_code
 from pydantic import BaseModel
@@ -171,8 +170,6 @@ class CompCodingResourcesServer(SimpleResourcesServer):
 
         # 4) run (no sandbox)
         async with self._semaphore:
-            loop = get_running_loop()
-
             """
             Sample looks like this:
             ```json
@@ -207,7 +204,7 @@ class CompCodingResourcesServer(SimpleResourcesServer):
             )
 
             future = check_correctness_remote.remote(*task_args)
-            result, metadata = await loop.run_in_executor(None, ray.get, future)
+            result, metadata = await future
 
             unit_tests_time_taken = time() - start_time
 
