@@ -47,6 +47,7 @@ from nemo_gym.config_types import BaseNeMoGymCLIConfig
 from nemo_gym.global_config import (
     DRY_RUN_KEY_NAME,
     NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME,
+    NEMO_GYM_CONFIG_DICT_PATH_ENV_VAR_NAME,
     NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME,
     NEMO_GYM_RESERVED_TOP_LEVEL_KEYS,
     GlobalConfigDictParserConfig,
@@ -128,8 +129,27 @@ class RunHelper:  # pragma: no cover
         # Note: This function will modify the global config dict - update `ray_head_node_address`
         initialize_ray()
 
-        # Assume Nemo Gym Run is for a single agent.
-        escaped_config_dict_yaml_str = shlex.quote(OmegaConf.to_yaml(global_config_dict))
+        # Materialize the resolved global config to a tempfile and pass the
+        # PATH (not the contents) to each child via NEMO_GYM_CONFIG_DICT_PATH.
+        #
+        # The legacy mechanism embedded the entire YAML inline as an env-var
+        # assignment in every spawn command; at high N (~256+ sub-server
+        # entries) this exceeded Linux's `ARG_MAX` (typically 2 MB) and the
+        # /bin/bash spawn failed with `OSError: [Errno 7] Argument list too
+        # long`. Confirmed deterministically at N=256 in the scale-sim Axis-B
+        # sweep. The path-based form puts O(1) bytes on every spawn command
+        # line regardless of N. See
+        # `investigations/nemo-gym-scale-testing.md` §10.3.1 (assumption A10)
+        # for the full reasoning.
+        #
+        # Tempfile lives under `${RAY_TMPDIR}` (or /tmp fallback) — same
+        # convention production already uses for Ray socket paths to keep them
+        # off Lustre's 107-byte AF_UNIX limit. Cleaned up on RunHelper.shutdown.
+        _ray_tmpdir = os.environ.get("RAY_TMPDIR") or "/tmp"
+        Path(_ray_tmpdir).mkdir(parents=True, exist_ok=True)
+        self._global_config_tempfile_path = Path(_ray_tmpdir) / f"nemo_gym_global_config_{os.getpid()}.yaml"
+        self._global_config_tempfile_path.write_text(OmegaConf.to_yaml(global_config_dict))
+        global_config_dict_path_quoted = shlex.quote(str(self._global_config_tempfile_path))
 
         # We always run the head server in this `run` command.
         self._head_server, self._head_server_thread, self._head_server_instance = HeadServer.run_webserver()
@@ -170,7 +190,7 @@ class RunHelper:  # pragma: no cover
             dir_path = _cwd_path if _cwd_is_server else PARENT_DIR / _server_rel_path
 
             command = f"""{setup_env_command(dir_path, global_config_dict, top_level_path)} \\
-    && {NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME}={escaped_config_dict_yaml_str} \\
+    && {NEMO_GYM_CONFIG_DICT_PATH_ENV_VAR_NAME}={global_config_dict_path_quoted} \\
     {NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME}={shlex.quote(top_level_path)} \\
     python {str(entrypoint_fpath)}"""
 
@@ -344,6 +364,16 @@ rpc_client.h:203: Failed to connect to GCS within 60 seconds. GCS may have been 
 
         self._head_server = None
         self._head_server_thread = None
+
+        # Clean up the materialized global-config tempfile we wrote on start().
+        # Best-effort: missing-OK, since the file may already be gone if a
+        # previous shutdown / pre-cell-cleanup wiped it.
+        path = getattr(self, "_global_config_tempfile_path", None)
+        if path is not None:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except Exception as e:
+                print(f"Note: failed to remove global-config tempfile {path}: {e}")
 
         print("NeMo Gym finished!")
 

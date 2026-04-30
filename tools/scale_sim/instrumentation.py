@@ -46,15 +46,20 @@ class _RolloutRecord:
     error_classes: List[str]
     succeeded: bool
     completed_at: float
+    # Optional: which agent name this rollout was dispatched to. Set when the
+    # driver runs in multi-agent mode (Axis B). Always present at completion
+    # time but may be None on partial records.
+    agent_name: Optional[str] = None
 
 
 class RetryTracker:
     """Per-rollout retry instrumentation. Thread-safe append, async-safe summary.
 
     Use ``record_attempt(rollout_idx, error_class)`` for each retry attempt and
-    ``record_completion(rollout_idx, succeeded)`` once the rollout finishes (or is
-    abandoned). ``summary_window(n_seconds)`` returns sliding-window aggregates for
-    the early-stop check.
+    ``record_completion(rollout_idx, succeeded, agent_name)`` once the rollout
+    finishes (or is abandoned). ``summary_window(n_seconds)`` returns sliding-window
+    aggregates for the early-stop check. ``summary_by_agent()`` breaks the totals
+    down per agent for Axis-B analysis (returns ``{}`` if no agent_name was passed).
     """
 
     def __init__(self, output_jsonl_path: Path) -> None:
@@ -82,7 +87,12 @@ class RetryTracker:
             if error_class is not None:
                 rec.error_classes.append(error_class)
 
-    def record_completion(self, rollout_idx: int, succeeded: bool) -> None:
+    def record_completion(
+        self,
+        rollout_idx: int,
+        succeeded: bool,
+        agent_name: Optional[str] = None,
+    ) -> None:
         import orjson
 
         with self._lock:
@@ -95,10 +105,12 @@ class RetryTracker:
                     error_classes=[],
                     succeeded=succeeded,
                     completed_at=time.time(),
+                    agent_name=agent_name,
                 )
             else:
                 rec.succeeded = succeeded
                 rec.completed_at = time.time()
+                rec.agent_name = agent_name
             self._completed.append(rec)
             self._jsonl_file.write(
                 orjson.dumps(
@@ -109,6 +121,7 @@ class RetryTracker:
                         "error_classes": rec.error_classes,
                         "succeeded": rec.succeeded,
                         "completed_at": rec.completed_at,
+                        "agent_name": rec.agent_name,
                     }
                 ).decode()
                 + "\n"
@@ -132,6 +145,24 @@ class RetryTracker:
         with self._lock:
             completed = [r for r in self._completed if r.completed_at >= cutoff]
         return _summarize(completed)
+
+    def summary_by_agent(self) -> Dict[str, Dict]:
+        """Per-agent breakdown over all completed rollouts.
+
+        Returns an empty dict if no rollout had an ``agent_name`` (single-agent runs).
+        Otherwise returns ``{agent_name: <same-shape-as-summary_all>}`` with one row
+        per agent that has at least one completion.
+        """
+        with self._lock:
+            completed = list(self._completed)
+        if not any(r.agent_name for r in completed):
+            return {}
+        by_agent: Dict[str, List[_RolloutRecord]] = {}
+        for r in completed:
+            if r.agent_name is None:
+                continue
+            by_agent.setdefault(r.agent_name, []).append(r)
+        return {name: _summarize(recs) for name, recs in sorted(by_agent.items())}
 
 
 def _summarize(records: List[_RolloutRecord]) -> Dict:

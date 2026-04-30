@@ -45,6 +45,16 @@ from nemo_gym.config_types import (
 
 _GLOBAL_CONFIG_DICT = None
 NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME = "NEMO_GYM_CONFIG_DICT"
+# Path-based alternative to NEMO_GYM_CONFIG_DICT for the resolved global config.
+# When the spawn-side embeds the full YAML in a command-line env-var assignment
+# (the original mechanism), at high N the YAML can exceed Linux's `ARG_MAX`
+# (typically 2 MB) and `Popen('/bin/bash', shell=True)` fails with
+# `OSError: [Errno 7] Argument list too long`. Confirmed deterministically at
+# N≈256 sub-server topologies. The path-based variant materializes the YAML to
+# a tempfile once per `ng_run` and passes the path instead — O(constant) bytes
+# on every child command line regardless of N.
+# Either env var is honored on read; if both are set, path wins.
+NEMO_GYM_CONFIG_DICT_PATH_ENV_VAR_NAME = "NEMO_GYM_CONFIG_DICT_PATH"
 NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME = "NEMO_GYM_CONFIG_PATH"
 CONFIG_PATHS_KEY_NAME = "config_paths"
 ENTRYPOINT_KEY_NAME = "entrypoint"
@@ -613,6 +623,18 @@ def get_global_config_dict(
     global _GLOBAL_CONFIG_DICT
     if _GLOBAL_CONFIG_DICT is not None:
         return _GLOBAL_CONFIG_DICT
+
+    # Prefer the path-based env var if set — it carries O(1) bytes on the spawn
+    # command line regardless of how large the resolved global config is. This
+    # is the path that survives high-N (~256+ sub-servers) where the legacy
+    # contents-in-env-var mechanism hits Linux ARG_MAX. Fall back to the
+    # contents env var for backward compat with older parents.
+    nemo_gym_config_dict_path_from_env = getenv(NEMO_GYM_CONFIG_DICT_PATH_ENV_VAR_NAME)
+    if nemo_gym_config_dict_path_from_env:
+        with open(nemo_gym_config_dict_path_from_env) as _f:
+            global_config_dict = OmegaConf.create(_f.read())
+        _GLOBAL_CONFIG_DICT = global_config_dict
+        return global_config_dict
 
     nemo_gym_config_dict_str_from_env = getenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME)
     if nemo_gym_config_dict_str_from_env:
