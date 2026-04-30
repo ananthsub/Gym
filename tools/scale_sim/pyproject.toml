@@ -1,0 +1,25 @@
+# This file exists solely to satisfy nemo-gym's per-server editable-install heuristic.
+#
+# `nemo_gym/cli_setup_command.py:127` does:
+#     is_editable_install = (dir_path.resolve() / "../../pyproject.toml").exists()
+# where `dir_path` is the per-server directory (e.g.
+# `tools/scale_sim/resources_servers/synthetic_resources/`).
+#
+# That heuristic assumes servers live at `<gym_root>/<server_type>/<name>/`, where
+# `../../` is the gym root. Our scale-sim servers live one extra directory deep at
+# `<gym_root>/tools/scale_sim/<server_type>/<name>/`, so `../../` lands here.
+#
+# Without a `pyproject.toml` at this path, the heuristic decides "not editable",
+# strips the `../..` line from each per-server `requirements.txt`, and tries to
+# fetch `nemo-gym==<version>` from PyPI — which fails for unreleased versions.
+#
+# This stub flips the heuristic to "editable", so the per-server `requirements.txt`
+# entry `-e nemo-gym[dev] @ ../../../../` is honored as-is and resolves to the
+# actual gym repo root.
+#
+# This file is NOT a real package definition — nothing installs from it.
+
+[project]
+name = "scale-sim-marker"
+version = "0.0.0"
+description = "Marker file for nemo-gym editable-install heuristic. Not a real package."

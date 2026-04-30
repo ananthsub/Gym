@@ -1,0 +1,78 @@
+# Axis C — payload width. One cell of the §5.3 sweep matrix.
+# 8 K concurrent /run requests, 1 hop, 4 MB bodies (the predicted M3 cliff).
+#
+# Run from `tools/scale_sim/`:
+#
+#   python data/generate_data.py --n 10000 --user-input-size-bytes 1024 --output data/axis_c_10k.jsonl
+#   ng_run "+config_paths=[configs/axis_c_8k_4mb.yaml]"
+#   python load_driver.py --config configs/axis_c_8k_4mb.yaml --input-jsonl data/axis_c_10k.jsonl
+
+head_server:
+  host: 0.0.0.0
+  port: 5000
+
+global_aiohttp_connector_limit: 102400
+global_aiohttp_connector_limit_per_host: 16384
+
+synthetic_resources_inst:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 4194304    # 4 MB
+        body_shape: realistic_messages
+        realistic_chunk_bytes: 256
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 65536
+        body_shape: flat_padding
+      port: 5001
+
+synthetic_model_inst:
+  responses_api_models:
+    synthetic_model:
+      entrypoint: app.py
+      async_latency_ms: 200
+      cpu_burn_ms: 0
+      # 4K prompt + 16K generation + 1 reasoning item × 128K tokens.
+      # Body ≈ 4.5 MB on the wire. Models a long-thinking trajectory with one
+      # `<think>` block, the kind of payload the next model is plausibly producing.
+      prompt_tokens: 4096
+      output_tokens: 16384
+      include_token_ids_and_log_probs: true
+      n_reasoning_items: 1
+      reasoning_tokens_per_item: 131072
+      tool_name: synthetic_tool
+      port: 5002
+
+synthetic_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_inst
+      model_server:
+        type: responses_api_models
+        name: synthetic_model_inst
+      datasets:
+        - name: axis_c
+          type: example
+          jsonl_fpath: data/axis_c_10k.jsonl
+          num_repeats: 1
+      port: 5003
+
+scale_sim:
+  agent_name: synthetic_simple_agent
+  concurrency: 8192
+  total_requests: 10000
+  early_stop_failure_rate: 0.10
+  early_stop_retry_rate: 0.30
+  early_stop_wall_clock_s: 900
+  early_stop_window_s: 30

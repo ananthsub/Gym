@@ -1,0 +1,18 @@
+# Standalone config for the synthetic_model server.
+# The actual sweep configs in tools/scale_sim/configs/*.yaml override these defaults.
+synthetic_model:
+  responses_api_models:
+    synthetic_model:
+      entrypoint: app.py
+      async_latency_ms: 50
+      cpu_burn_ms: 0
+      # Sequence-length-driven payload knobs (see README for sizing math).
+      prompt_tokens: 512
+      output_tokens: 256
+      chars_per_token: 4
+      include_token_ids_and_log_probs: true
+      n_reasoning_items: 0
+      reasoning_tokens_per_item: 0
+      vocab_size: 200000
+      tool_name: synthetic_tool
+      inject_500_rate: 0.0
