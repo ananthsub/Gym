@@ -137,6 +137,19 @@ def _tail_log(path: Path, n_lines: int = 60) -> str:
     return "\n".join(lines[-n_lines:])
 
 
+_RAY_GCS_PORT = 6379
+_RAY_CLIENT_SERVER_PORT = 6380
+_RAY_DASHBOARD_PORT = 8265
+_RAY_MIN_WORKER_PORT = 2000
+_RAY_MAX_WORKER_PORT = 2999
+_RAY_NODE_MANAGER_PORT = 6701
+_RAY_OBJECT_MANAGER_PORT = 6702
+_RAY_RUNTIME_ENV_AGENT_PORT = 6703
+_RAY_DASHBOARD_AGENT_GRPC_PORT = 6704
+_RAY_DASHBOARD_AGENT_LISTEN_PORT = 6705
+_RAY_METRICS_EXPORT_PORT = 6706
+
+
 def _pre_cell_cleanup() -> None:
     """Clear leftover Ray + sub-server state on the host before launching a new cell.
 
@@ -153,16 +166,74 @@ def _pre_cell_cleanup() -> None:
     case is normal on the first cell of a fresh allocation.
     """
     subprocess.run(
-        "pkill -9 -f 'raylet|gcs_server|plasma_store|ng_run|nemo_gym|synthetic_resources|synthetic_model|simple_agent' || true",
+        "pkill -9 -f 'raylet|gcs_server|plasma_store|ng_run|nemo_gym|synthetic_resources|synthetic_model|simple_agent|ray::' || true",
         shell=True, check=False, timeout=10,
     )
     # Wait briefly for the kernel to actually reap the killed processes and
     # release their listening ports before we wipe the state dirs.
     time.sleep(0.5)
     subprocess.run(
+        "ray stop --force 2>/dev/null || true",
+        shell=True, check=False, timeout=10,
+    )
+    subprocess.run(
         "rm -rf /tmp/ray /tmp/ray_temp /tmp/ray-* 2>/dev/null || true",
         shell=True, check=False, timeout=10,
     )
+
+
+def _pre_start_ray() -> None:
+    """Start a Ray cluster on the local host with all ports pinned below the
+    kernel's ephemeral floor.
+
+    Why pin: by default `ray.init()` (called inside `nemo_gym.server_utils.initialize_ray`)
+    auto-assigns the GCS port to a random number in the 10K–40K range. On most
+    Linux configurations this sits inside `net.ipv4.ip_local_port_range`
+    (32768–60999 default; 9000–65000 on OCI-HSG-style hosts). With N≥128
+    sub-servers each issuing parallel TCP connect()s to the GCS, the kernel
+    can hand the GCS's destination port out as an ephemeral source port for an
+    unrelated outgoing connection (TOCTOU between Ray's `CheckPortFree` and
+    `bind`), causing `EADDRINUSE` failures.
+
+    `ray.init()` with no args inside `ng_run` will detect the cluster started
+    here (via /tmp/ray/ pointers or `RAY_ADDRESS` env if we set it) and connect
+    rather than start a new one. So no `nemo_gym` change is required.
+
+    Port layout (all below the OCI-HSG ephemeral floor of 9000):
+        6379         GCS server
+        6380         Ray Client server
+        2000-2999    Ray worker gRPC
+        6701-6706    Ray management ports (node-mgr, object-mgr, etc.)
+        8265         Dashboard
+
+    Note: gym sub-servers use 5000-5999 separately (`head_server.port` etc.);
+    these don't overlap.
+    """
+    cmd = (
+        f"ray start --head "
+        f"--disable-usage-stats "
+        f"--node-ip-address=127.0.0.1 "
+        f"--port={_RAY_GCS_PORT} "
+        f"--ray-client-server-port={_RAY_CLIENT_SERVER_PORT} "
+        f"--dashboard-port={_RAY_DASHBOARD_PORT} "
+        f"--include-dashboard=False "
+        f"--min-worker-port={_RAY_MIN_WORKER_PORT} "
+        f"--max-worker-port={_RAY_MAX_WORKER_PORT} "
+        f"--node-manager-port={_RAY_NODE_MANAGER_PORT} "
+        f"--object-manager-port={_RAY_OBJECT_MANAGER_PORT} "
+        f"--runtime-env-agent-port={_RAY_RUNTIME_ENV_AGENT_PORT} "
+        f"--dashboard-agent-grpc-port={_RAY_DASHBOARD_AGENT_GRPC_PORT} "
+        f"--dashboard-agent-listen-port={_RAY_DASHBOARD_AGENT_LISTEN_PORT} "
+        f"--metrics-export-port={_RAY_METRICS_EXPORT_PORT}"
+    )
+    print(f"[sweep] pre-starting Ray with pinned ports: GCS={_RAY_GCS_PORT}", flush=True)
+    rc = subprocess.run(cmd, shell=True, check=False, timeout=120).returncode
+    if rc != 0:
+        print(
+            f"[sweep] WARNING: pre-started ray exited rc={rc}. "
+            f"`ng_run` will fall back to auto-assigning GCS port (may collide with ephemeral range at high N).",
+            flush=True,
+        )
 
 
 def _run_one_cell(
@@ -184,6 +255,14 @@ def _run_one_cell(
     # earlier "trust the previous cell tore itself down" approach.
     print("[sweep] pre-cell cleanup (pkill ray/gym + rm /tmp/ray)", flush=True)
     _pre_cell_cleanup()
+
+    # 0.5. Pre-start Ray with pinned ports so ng_run's `ray.init()` connects to
+    # an existing cluster on known-safe ports instead of auto-assigning into the
+    # kernel ephemeral range. Critical at high N (~128+) where TOCTOU port
+    # collisions cause sub-server `ray.init()` failures — see investigations/
+    # nemo-gym-scale-testing.md §10.3.4 (A13). At low N this is a no-op
+    # quality-of-life improvement.
+    _pre_start_ray()
 
     ng_log = (output_dir / "ng_run.log").open("w")
     driver_log = (output_dir / "driver.log").open("w")
