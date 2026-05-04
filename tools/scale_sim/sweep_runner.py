@@ -162,22 +162,47 @@ def _pre_cell_cleanup() -> None:
     is idempotent across whatever exit mode the previous cell took — graceful,
     SIGKILL'd, OOM'd, manual Ctrl-C — they all look the same to the next cell.
 
-    The pkill regex covers raylet/gcs/plasma binaries plus the ray python
-    helpers (monitor, log_monitor, dashboard, client server, in-actor `ray::`
-    namespace) so that the subsequent `ray stop --force` finds little left to
-    do. Even with that, `ray stop --force` can occasionally hang on cluster
-    state inspection at high N — we give it 60 s and treat a timeout as a
-    warning, not a fatal error, so a slow cleanup never wedges the whole sweep.
+    Cleanup steps, in order:
+
+    1. ``pkill -9 -f`` over a broad regex covering raylet/gcs/plasma binaries,
+       the `nemo_gym` / `ng_run` parent processes, the bash wrappers spawned by
+       ng_run (whose cmdline carries the cd-path containing the server-type
+       string), and the ray python helpers. Importantly we also include
+       ``app\.py`` and ``app\.so`` so that an *orphaned* sub-server python
+       interpreter is killed too: ng_run launches each sub-server as a bash
+       chain that ends in ``... && python app.py``, and the python child's
+       cmdline is just ``python -u app.py`` (no "synthetic_resources" path
+       fragment). Without an `app.py` clause, killing bash leaves python alive
+       still bound to its listening port — the next cell's ng_run then hits
+       EADDRINUSE on every sub-server. Confirmed deterministically in the
+       multi-agent sweep N=4 sub-sweep B cells.
+    2. Port-range backstop: kill anything still listening on 5000-5999 via
+       ``fuser -k`` per port. Catches anything the pkill regex missed.
+    3. ``ray stop --force`` to drain the ray cluster state machine. Can take
+       30-60 s after a high-N cell, so we give it 60 s and treat a timeout as
+       a warning rather than aborting the cell.
+    4. ``rm -rf /tmp/ray*`` to remove the stale session-dir + cluster-id
+       pointers that would otherwise wedge the next ``ray.init()``.
     """
     _shell("pre-cell pkill",
            "pkill -9 -f 'raylet|gcs_server|plasma_store|ng_run|nemo_gym"
            "|synthetic_resources|synthetic_model|simple_agent"
            "|ray::|ray/_private/log_monitor|ray/autoscaler/_private/monitor"
-           "|ray/dashboard/dashboard|ray.util.client.server' || true",
+           "|ray/dashboard/dashboard|ray.util.client.server"
+           "|app\\.py|app\\.so' || true",
            timeout=30)
     # Wait briefly for the kernel to actually reap the killed processes and
     # release their listening ports before we wipe the state dirs.
     time.sleep(0.5)
+    _shell("port-range fuser kill",
+           # Iterate per port: `fuser -k -KILL <port>/tcp` doesn't accept ranges.
+           # `command -v fuser >/dev/null` keeps this a no-op on hosts without
+           # psmisc installed (rare but possible on minimal containers).
+           "command -v fuser >/dev/null && "
+           "for p in $(seq 5000 5999); do "
+           "  fuser -k -KILL ${p}/tcp 2>/dev/null; "
+           "done; true",
+           timeout=30)
     _shell("ray stop --force",
            "ray stop --force 2>/dev/null || true",
            timeout=60)
