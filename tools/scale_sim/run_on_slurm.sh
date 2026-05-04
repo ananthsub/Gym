@@ -24,7 +24,7 @@
 #
 # Usage (batch — multi-cell sweep via sweep_runner.py):
 #
-#     CONFIG="tools/scale_sim/configs/axis_a_8k.yaml tools/scale_sim/configs/axis_c_8k_4mb.yaml" \
+#     CONFIG="tools/scale_sim/configs/single_agent_base.yaml tools/scale_sim/configs/axis_c_8k_4mb.yaml" \
 #     bash tools/scale_sim/run_on_slurm.sh batch
 #
 # Required env vars (defaults wired for the llmservice_nemotron_ultra cluster):

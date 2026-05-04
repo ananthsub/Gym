@@ -7,8 +7,8 @@
 # agent instances + N resources instances + 1 shared model into
 # configs/_generated/multi_agent_n{N}.yaml, which is what gets passed to ng_run.
 #
-# Knobs are mirrored from configs/axis_a_8k.yaml so multi-agent results are
-# directly comparable to the single-agent 8K-concurrency baseline cell.
+# Knobs are mirrored from configs/single_agent_base.yaml so multi-agent results
+# are directly comparable to the single-agent baseline cells.
 #
 # Topology (locked, see investigations/nemo-gym-multi-agent-design.md):
 #   1 head + 1 shared synthetic_model + N synthetic_resources + N simple_agent
@@ -28,7 +28,7 @@ global_aiohttp_connector_limit_per_host: 16384
 # resources / agent / 1 model instances. Edit here, not in the generated YAML.
 
 multi_agent:
-  # Shared synthetic_model knobs. Same as axis_a_8k.yaml.
+  # Shared synthetic_model knobs. Same as single_agent_base.yaml.
   model:
     async_latency_ms: 200
     cpu_burn_ms: 0

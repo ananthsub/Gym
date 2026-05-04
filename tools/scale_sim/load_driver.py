@@ -87,7 +87,7 @@ class LoadDriver:
         self.scale_sim_cfg: DictConfig = scale_sim_cfg
 
         # agent_names is the multi-agent field; falls back to the existing
-        # singleton agent_name field for single-agent configs (smoke, axis_a_8k, etc.).
+        # singleton agent_name field for single-agent configs (smoke, single_agent_base, etc.).
         # Per-row dispatch via agent_ref.name matches RolloutCollectionHelper exactly.
         agent_names_cfg = scale_sim_cfg.get("agent_names")
         if agent_names_cfg:

@@ -146,7 +146,7 @@ tools/scale_sim/
 │
 ├── configs/
 │   ├── smoke.yaml                             16 concurrent, ~5 KB body, ~30s sanity check
-│   ├── axis_a_8k.yaml                         8K concurrent, output=16K (~430 KB body)
+│   ├── single_agent_base.yaml                 single-agent sweep base template (1 model + 1 resources + 1 agent)
 │   ├── axis_c_8k_4mb.yaml                     8K concurrent, output=16K + 1 reasoning × 128K tokens (~4.5 MB body)
 │   ├── multi_agent_base.yaml                  multi-agent sweep base template (N agents + N resources + 1 model)
 │   └── _gen_multi_agent.py                    multi-agent cell-config generator

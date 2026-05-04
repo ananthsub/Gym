@@ -16,7 +16,7 @@ Usage::
 
     # Concurrency × num_workers cross product
     python run_sweep.py \\
-        --base configs/axis_a_8k.yaml \\
+        --base configs/single_agent_base.yaml \\
         --concurrency 1024,4096,8192,16384,32768 \\
         --num-workers 1,8 \\
         --exp-name axis_a_c_x_w
@@ -24,7 +24,7 @@ Usage::
     # Sequence-length sweep — the right way to test body-size scaling.
     # output_tokens drives text + token_ids + log_probs sizes proportionally.
     python run_sweep.py \\
-        --base configs/axis_a_8k.yaml \\
+        --base configs/single_agent_base.yaml \\
         --concurrency 8192 \\
         --output-tokens 256,1024,4096,16384 \\
         --num-workers 8 \\
@@ -35,7 +35,7 @@ Usage::
     # Matched-list zip mode: 16K@8K, 128K@1K, 256K@512, 512K@256, 1M@128 keeps
     # peak model-server body memory at ~80 GB across all cells.
     python run_sweep.py \\
-        --base configs/axis_a_8k.yaml \\
+        --base configs/single_agent_base.yaml \\
         --output-tokens 16384,131072,262144,524288,1048576 \\
         --concurrency 8192,1024,512,256,128 \\
         --total-requests 20000,4000,2000,1000,500 \\
@@ -45,7 +45,7 @@ Usage::
 
     # Long-thinking sweep: vary reasoning content while output stays fixed.
     python run_sweep.py \\
-        --base configs/axis_a_8k.yaml \\
+        --base configs/single_agent_base.yaml \\
         --concurrency 8192 \\
         --output-tokens 1024 \\
         --n-reasoning-items 1 \\
@@ -55,14 +55,14 @@ Usage::
 
     # Hop-depth sweep
     python run_sweep.py \\
-        --base configs/axis_a_8k.yaml \\
+        --base configs/single_agent_base.yaml \\
         --concurrency 8192 \\
         --n-hops 1,4,16,64 \\
         --exp-name axis_c_depth
 
     # Defect-#5 ablation: semaphore on/off at high concurrency
     python run_sweep.py \\
-        --base configs/axis_a_8k.yaml \\
+        --base configs/single_agent_base.yaml \\
         --concurrency 16384 \\
         --num-workers 8 \\
         --semaphore-enabled true,false \\
@@ -70,7 +70,7 @@ Usage::
 
     # Training-mode ablation: drop token_ids/log_probs to isolate their cost.
     python run_sweep.py \\
-        --base configs/axis_a_8k.yaml \\
+        --base configs/single_agent_base.yaml \\
         --concurrency 8192 \\
         --output-tokens 16384 \\
         --include-token-ids-and-log-probs true,false \\
@@ -80,7 +80,7 @@ Usage::
     # Zip mode (parallel lists, no cross product) — useful when one parameter
     # implies another (e.g. larger concurrency needs larger total_requests)
     python run_sweep.py \\
-        --base configs/axis_a_8k.yaml \\
+        --base configs/single_agent_base.yaml \\
         --concurrency 8192,16384,32768 \\
         --total-requests 10000,20000,40000 \\
         --num-workers 8 \\

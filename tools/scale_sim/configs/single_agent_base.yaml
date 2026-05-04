@@ -1,12 +1,23 @@
-# Axis A — concurrent fan-in. One cell of the §5.1 sweep matrix.
-# 8 K concurrent /run requests, 1 hop, 16 KB bodies.
+# Single-agent — base template for the single-agent sweep matrix.
+#
+# Topology: 1 head + 1 model + 1 resources + 1 simple_agent. Sub-sweeps
+# 01_concurrency_baseline / 02_output_tokens_far_tail / 03_n_hops_curve /
+# 04_defect_5_ablation all override individual scale_sim.* knobs on top of
+# this file. Defaults below are picked so that, with no overrides, the cell
+# matches the §5.1 reference point: 8 K concurrent /run requests, 1 hop,
+# 16 KB tool/4 KB verify bodies, 1 K output tokens.
 #
 # Run from `tools/scale_sim/`:
 #
-#   python data/generate_data.py --n 10000 --user-input-size-bytes 1024 --output data/axis_a_10k.jsonl
-#   ng_run "+config_paths=[configs/axis_a_8k.yaml]"
+#   python data/generate_data.py --n 10000 --user-input-size-bytes 1024 \
+#       --output data/single_agent_10k.jsonl
+#   ng_run "+config_paths=[configs/single_agent_base.yaml]"
 #   # ... wait for "All N / N servers ready!" ...
-#   python load_driver.py --config configs/axis_a_8k.yaml --input-jsonl data/axis_a_10k.jsonl
+#   python load_driver.py --config configs/single_agent_base.yaml \
+#       --input-jsonl data/single_agent_10k.jsonl
+#
+# For the multi-agent (N agents + N resources + 1 shared model) sweep, see
+# configs/multi_agent_base.yaml.
 
 head_server:
   host: 0.0.0.0
@@ -62,9 +73,9 @@ synthetic_simple_agent:
         type: responses_api_models
         name: synthetic_model_inst
       datasets:
-        - name: axis_a
+        - name: single_agent
           type: example
-          jsonl_fpath: data/axis_a_10k.jsonl
+          jsonl_fpath: data/single_agent_10k.jsonl
           num_repeats: 1
       port: 5003
 
@@ -74,5 +85,11 @@ scale_sim:
   total_requests: 10000
   early_stop_failure_rate: 0.10
   early_stop_retry_rate: 0.30
-  early_stop_wall_clock_s: 600
+  # Lowered from 600 s to 300 s. The wall-clock-bound sub-sweep cells
+  # (n_hops=16+, output_tokens=512K+, concurrency=16K) saturate the consumer
+  # event loop well within 300 s — the additional 300 s of the old budget
+  # only collected redundant percentile data on the same plateau. Cuts total
+  # single-agent matrix wall-clock by ~25% with no loss in characterization
+  # of the M3 cliff shape.
+  early_stop_wall_clock_s: 300
   early_stop_window_s: 30

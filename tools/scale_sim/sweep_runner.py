@@ -11,13 +11,13 @@ Usage::
 
     cd tools/scale_sim/
     python sweep_runner.py \
-        --config configs/axis_a_8k.yaml \
-        --input-jsonl data/axis_a_10k.jsonl \
+        --config configs/single_agent_base.yaml \
+        --input-jsonl data/single_agent_10k.jsonl \
         --git-sha "$(git rev-parse --short HEAD)"
 
 To run multiple configs back-to-back::
 
-    python sweep_runner.py --config configs/axis_a_8k.yaml configs/axis_c_8k_4mb.yaml ...
+    python sweep_runner.py --config configs/single_agent_base.yaml configs/axis_c_8k_4mb.yaml ...
 """
 
 from __future__ import annotations
