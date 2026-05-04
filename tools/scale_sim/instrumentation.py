@@ -47,7 +47,7 @@ class _RolloutRecord:
     succeeded: bool
     completed_at: float
     # Optional: which agent name this rollout was dispatched to. Set when the
-    # driver runs in multi-agent mode (Axis B). Always present at completion
+    # driver runs in multi-agent mode. Always present at completion
     # time but may be None on partial records.
     agent_name: Optional[str] = None
 
@@ -59,7 +59,7 @@ class RetryTracker:
     ``record_completion(rollout_idx, succeeded, agent_name)`` once the rollout
     finishes (or is abandoned). ``summary_window(n_seconds)`` returns sliding-window
     aggregates for the early-stop check. ``summary_by_agent()`` breaks the totals
-    down per agent for Axis-B analysis (returns ``{}`` if no agent_name was passed).
+    down per agent for multi-agent analysis (returns ``{}`` if no agent_name was passed).
     """
 
     def __init__(self, output_jsonl_path: Path) -> None:

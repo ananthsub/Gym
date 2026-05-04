@@ -86,7 +86,7 @@ class LoadDriver:
             raise ValueError(f"Config {config_path} has no top-level `scale_sim:` block.")
         self.scale_sim_cfg: DictConfig = scale_sim_cfg
 
-        # agent_names is the multi-agent (Axis B) field; falls back to the existing
+        # agent_names is the multi-agent field; falls back to the existing
         # singleton agent_name field for single-agent configs (smoke, axis_a_8k, etc.).
         # Per-row dispatch via agent_ref.name matches RolloutCollectionHelper exactly.
         agent_names_cfg = scale_sim_cfg.get("agent_names")
@@ -249,7 +249,7 @@ class LoadDriver:
     async def _run_spinup_only(self) -> None:
         """Sample idle resource cost of the running ng_run topology, no traffic.
 
-        Used by the Axis-B pre-flight sweep to answer "what does N sub-servers
+        Used by the multi-agent pre-flight sweep to answer "what does N sub-servers
         existing cost on the head node" without driving any rollouts. The driver
         itself is the wrong process to sample sub-server RSS / FD counts from
         (it lives outside ng_run's process tree); KernelWatcher's host-wide
@@ -381,7 +381,7 @@ class LoadDriver:
             "retry_summary": all_summary,
             "latency_summary": latency_summary,
         }
-        # Per-agent breakdown is empty for single-agent runs; non-empty for Axis B.
+        # Per-agent breakdown is empty for single-agent runs; non-empty for multi-agent.
         per_agent = self.tracker.summary_by_agent()
         if per_agent:
             summary["per_agent"] = per_agent
@@ -430,7 +430,7 @@ def main() -> None:
         default="loaded",
         help=(
             "loaded (default): drive concurrent /run requests through the gym stack. "
-            "spinup_only: skip dispatch, sample idle resource cost for --idle-window-s seconds (Axis B pre-flight)."
+            "spinup_only: skip dispatch, sample idle resource cost for --idle-window-s seconds (multi-agent pre-flight)."
         ),
     )
     parser.add_argument(

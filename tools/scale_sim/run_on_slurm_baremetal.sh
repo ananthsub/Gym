@@ -16,10 +16,10 @@
 #
 #     bash tools/scale_sim/run_on_slurm_baremetal.sh interactive
 #
-# Usage (batch — runs the full M1 sweep matrix overnight):
+# Usage (batch — runs the full single-agent sweep matrix overnight):
 #
-#     DRIVER_SCRIPT=tools/scale_sim/run_all_m1_sweeps.sh \
-#     JOB_NAME=scale-sim-m1 TIME=4:00:00 \
+#     DRIVER_SCRIPT=tools/scale_sim/run_single_agent_sweep.sh \
+#     JOB_NAME=scale-single-agent TIME=4:00:00 \
 #       bash tools/scale_sim/run_on_slurm_baremetal.sh batch
 #
 # Usage (batch — single config via sweep_runner.py):
@@ -145,12 +145,12 @@ case "$MODE" in
         exit 1
       fi
       # Export GYM_VENV and CONTAINER_GYM_PATH so container-defaulted scripts
-      # like run_all_m1_sweeps.sh point at the bare-metal venv + repo instead of
+      # like run_single_agent_sweep.sh point at the bare-metal venv + repo instead of
       # /opt/ray_venvs/... and /opt/nemo-rl/.... Both names are unfortunate on
       # bare metal, but they're what the existing scripts expect.
       cat > "$DRIVER_FILE" <<DRIVER_EOF
 #!/bin/bash
-# Wraps a custom driver script (e.g. run_all_m1_sweeps.sh).
+# Wraps a custom driver script (e.g. run_single_agent_sweep.sh).
 set -uo pipefail
 export GYM_VENV=${GYM_VENV}
 export CONTAINER_GYM_PATH=${GYM_DIR}

@@ -1,0 +1,86 @@
+# Multi-agent — base template for the multi-agent sweep.
+#
+# This file is NOT a runnable cell config on its own. It carries the per-server
+# knobs and the `scale_sim:` block that don't depend on N, plus a top-level
+# `multi_agent:` block of metadata the generator reads. The generator
+# (configs/_gen_multi_agent.py) takes this file + --n-agents N and stamps out N
+# agent instances + N resources instances + 1 shared model into
+# configs/_generated/multi_agent_n{N}.yaml, which is what gets passed to ng_run.
+#
+# Knobs are mirrored from configs/axis_a_8k.yaml so multi-agent results are
+# directly comparable to the single-agent 8K-concurrency baseline cell.
+#
+# Topology (locked, see investigations/nemo-gym-multi-agent-design.md):
+#   1 head + 1 shared synthetic_model + N synthetic_resources + N simple_agent
+# Total uvicorn processes per cell: 2N + 2.
+
+head_server:
+  host: 0.0.0.0
+  port: 5000
+
+# Big aiohttp connector pool — one consumer event loop fanning out to N servers
+# at a few thousand in-flight needs more than the default 100-per-host cap.
+global_aiohttp_connector_limit: 102400
+global_aiohttp_connector_limit_per_host: 16384
+
+# ---------- Per-server knob template ----------
+# The generator reads these blocks and stamps them into the N replicated
+# resources / agent / 1 model instances. Edit here, not in the generated YAML.
+
+multi_agent:
+  # Shared synthetic_model knobs. Same as axis_a_8k.yaml.
+  model:
+    async_latency_ms: 200
+    cpu_burn_ms: 0
+    prompt_tokens: 512
+    output_tokens: 1024
+    chars_per_token: 4
+    include_token_ids_and_log_probs: true
+    n_reasoning_items: 0
+    reasoning_tokens_per_item: 0
+    tool_name: synthetic_tool
+
+  # Per-instance synthetic_resources knobs (same shape, replicated N times).
+  resources:
+    tool:
+      async_latency_ms: 100
+      cpu_burn_ms: 0
+      body_size_bytes: 16384
+      body_shape: flat_padding
+    verify:
+      async_latency_ms: 50
+      cpu_burn_ms: 0
+      body_size_bytes: 4096
+      body_shape: flat_padding
+    inject_500_rate: 0.0
+    inject_hang_rate: 0.0
+
+  # Per-instance simple_agent knobs.
+  agent:
+    max_steps: 1
+    domain: other
+
+  # Port allocation: head=5000, model=5001, resources_i=5002+i, agent_i=5002+N+i.
+  # Generator owns the math; this is only documented for reference.
+  port_base: 5001
+
+  # Dataset metadata that goes into each generated agent instance. The driver
+  # reads its own JSONL directly — these fields are only here to satisfy
+  # ng_run's lifecycle plumbing.
+  dataset_name: multi_agent
+  dataset_jsonl_fpath: data/multi_agent_10k.jsonl
+
+# ---------- Load driver knobs ----------
+#
+# The generator emits `agent_names: [synthetic_simple_agent_0, ..., _{N-1}]` here
+# at generation time. The other knobs are defaults; the matrix runner
+# (run_multi_agent_sweep.sh) overrides `concurrency` and `total_requests` per cell.
+
+scale_sim:
+  concurrency: 4096
+  total_requests: 10000
+  semaphore_enabled: true
+  early_stop_failure_rate: 0.10
+  early_stop_retry_rate: 0.30
+  early_stop_wall_clock_s: 1800
+  early_stop_window_s: 30

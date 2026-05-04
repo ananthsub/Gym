@@ -11,7 +11,7 @@ Four axes against the unchanged gym architecture:
 1. **Concurrent requests** — how many in-flight `/run` requests one head node can sustain
 2. **HTTP payload size** — sequence-length-driven body sizes, `output_tokens` from 16K to 1M
 3. **HTTP hops** — number of model↔tool round-trips per `/run` (1, 4, 16, 64)
-4. **Number of co-located sub-servers** on one head node (Axis B — multi-agent extension still TBD)
+4. **Number of co-located sub-servers** on one head node (the multi-agent sweep — `run_multi_agent_sweep.sh`)
 
 For each cell, the harness records: failure rate, retry rate, per-rollout retry
 counts, latency p50/p99/p999/max, and per-process + kernel-level resource usage
@@ -147,7 +147,9 @@ tools/scale_sim/
 ├── configs/
 │   ├── smoke.yaml                             16 concurrent, ~5 KB body, ~30s sanity check
 │   ├── axis_a_8k.yaml                         8K concurrent, output=16K (~430 KB body)
-│   └── axis_c_8k_4mb.yaml                     8K concurrent, output=16K + 1 reasoning × 128K tokens (~4.5 MB body)
+│   ├── axis_c_8k_4mb.yaml                     8K concurrent, output=16K + 1 reasoning × 128K tokens (~4.5 MB body)
+│   ├── multi_agent_base.yaml                  multi-agent sweep base template (N agents + N resources + 1 model)
+│   └── _gen_multi_agent.py                    multi-agent cell-config generator
 │
 ├── data/
 │   ├── generate_data.py                       generates synthetic JSONL of N tasks
@@ -157,19 +159,37 @@ tools/scale_sim/
 ├── instrumentation.py                         RetryTracker + ProcessMetricsSampler + KernelWatcher
 ├── sweep_runner.py                            orchestrates one ng_run + load_driver per cell with teardown
 ├── run_sweep.py                               cross-product matrix generator → calls sweep_runner per cell
-├── run_all_m1_sweeps.sh                       runs the full M1 matrix end-to-end (5 sweeps)
-└── run_on_slurm.sh                            Slurm launcher (interactive / batch modes)
+├── run_single_agent_sweep.sh                  runs the full single-agent matrix end-to-end (5 sub-sweeps)
+├── run_multi_agent_sweep.sh                   runs the full multi-agent matrix end-to-end (3 sub-sweeps × 7 N values)
+├── run_multi_agent_delta_sweep.sh             4-cell multi-agent validation subset (~45-60 min)
+├── run_multi_agent_n256_check.sh              one-off N=256 spinup_only sanity check
+├── run_multi_agent_rerun_failed.sh            reruns the cells that failed in a prior multi-agent sweep
+├── analyze_multi_agent.py                     re-aggregates multi-agent cells into multi_agent_master_full.csv
+├── run_on_slurm.sh                            Slurm launcher (interactive / batch modes; pyxis container)
+└── run_on_slurm_baremetal.sh                  Slurm launcher (interactive / batch modes; bare-metal venv)
 ```
 
 ## Run
 
-The full M1 matrix end-to-end as a Slurm batch job:
+The full single-agent matrix end-to-end as a Slurm batch job:
 
 ```bash
-DRIVER_SCRIPT=tools/scale_sim/run_all_m1_sweeps.sh \
-JOB_NAME=scale-sim-m1 \
+DRIVER_SCRIPT=tools/scale_sim/run_single_agent_sweep.sh \
+JOB_NAME=scale-single-agent \
   bash tools/scale_sim/run_on_slurm.sh batch
 ```
+
+The full multi-agent (sub-server-count) matrix:
+
+```bash
+DRIVER_SCRIPT=tools/scale_sim/run_multi_agent_sweep.sh \
+JOB_NAME=scale-multi-agent \
+  bash tools/scale_sim/run_on_slurm.sh batch
+```
+
+On a cluster without pyxis containers, swap the launcher for the bare-metal one
+(`run_on_slurm_baremetal.sh`); the `DRIVER_SCRIPT=` and `JOB_NAME=` knobs are
+identical.
 
 Defaults: cpu partition, cpu-normal qos, 4h walltime. Override `PARTITION`,
 `SLURM_QOS`, `GPUS_PER_NODE`, `TIME` to switch to GPU node + batch partition.
@@ -212,8 +232,10 @@ configs/<cell>.yaml             generated per-cell config
 └── driver.log                  load driver stdout
 ```
 
-`run_all_m1_sweeps.sh` aggregates every per-experiment `sweep_results.csv` into
-one `results/<git_sha>/master_summary.csv` at the end.
+`run_single_agent_sweep.sh` aggregates every per-experiment `sweep_results.csv`
+into one `results/<git_sha>/single_agent_master.csv` at the end.
+`run_multi_agent_sweep.sh` writes `results/<git_sha>/multi_agent_master.csv` with
+one row per cell.
 
 ## Operational notes
 
@@ -226,7 +248,6 @@ one `results/<git_sha>/master_summary.csv` at the end.
 
 ## Known gaps
 
-- Axis B (sub-server count) needs a multi-agent extension to `load_driver.py` — round-robin across N agents from the same input JSONL. Not implemented.
 - Calibration step (matching synthetic harness against a real benchmark like `example_single_tool_call` to lock realistic knob values) not done.
 - Multimodal payload representation (base64 images / video features in input messages) not implemented.
 

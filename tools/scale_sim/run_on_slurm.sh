@@ -184,7 +184,7 @@ case "$MODE" in
 
     # Two ways to pick the driver:
     #   (a) DRIVER_SCRIPT=<path-relative-to-NRL_GYM_DIR> — use a pre-existing script.
-    #       e.g. DRIVER_SCRIPT=tools/scale_sim/run_all_m1_sweeps.sh
+    #       e.g. DRIVER_SCRIPT=tools/scale_sim/run_single_agent_sweep.sh
     #   (b) Default: auto-generate a single sweep_runner.py invocation from CONFIG/INPUT_JSONL.
     DRIVER_FILE="$LOG_DIR/driver.sh"
     if [[ -n "${DRIVER_SCRIPT:-}" ]]; then

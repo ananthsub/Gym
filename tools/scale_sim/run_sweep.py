@@ -382,7 +382,7 @@ def main() -> None:
         input_jsonl = args.input_jsonl
 
     # Resolve relative paths against the cwd where the user invoked the script.
-    # run_all_m1_sweeps.sh always cd's into tools/scale_sim/ before calling run_sweep.py,
+    # run_single_agent_sweep.sh always cd's into tools/scale_sim/ before calling run_sweep.py,
     # so `data/smoke.jsonl` from a yaml resolves to <scale_sim>/data/smoke.jsonl.
     if not input_jsonl.is_absolute():
         input_jsonl = (Path.cwd() / input_jsonl).resolve()

@@ -2,10 +2,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Runs the full M1 (scalability characterization) sweep matrix end-to-end inside
-# the container. Designed to be invoked by `run_on_slurm.sh batch` via the
+# Runs the full single-agent scalability characterization sweep matrix end-to-end
+# inside the container. Designed to be invoked by `run_on_slurm.sh batch` via the
 # DRIVER_SCRIPT env var, but also runnable manually inside an interactive
 # allocation.
+#
+# Topology: 1 head + 1 model + 1 resources + 1 simple_agent. For the multi-agent
+# (N agents + N resources + 1 shared model) sweep, see run_multi_agent_sweep.sh.
 #
 # Time budget: ~2.5 hours wall-clock for the full set. Set TIME=4:00:00 (or
 # higher) on the sbatch submission and use a qos without the 2h interactive cap.
@@ -24,19 +27,19 @@ source "${GYM_VENV}/bin/activate"
 cd "${CONTAINER_GYM_PATH}/tools/scale_sim"
 
 ulimit -Sn 1048576 2>/dev/null || ulimit -Sn 65535 2>/dev/null || true
-echo "[m1-sweeps] ulimit -n: $(ulimit -n)"
-echo "[m1-sweeps] hostname:  $(hostname)"
-echo "[m1-sweeps] gym path:  ${CONTAINER_GYM_PATH}"
-echo "[m1-sweeps] which ng_run: $(which ng_run || echo NOT FOUND)"
+echo "[single-agent] ulimit -n: $(ulimit -n)"
+echo "[single-agent] hostname:  $(hostname)"
+echo "[single-agent] gym path:  ${CONTAINER_GYM_PATH}"
+echo "[single-agent] which ng_run: $(which ng_run || echo NOT FOUND)"
 
 GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo local)
-echo "[m1-sweeps] git sha:   ${GIT_SHA}"
+echo "[single-agent] git sha:   ${GIT_SHA}"
 
 RESULTS_ROOT="${CONTAINER_GYM_PATH}/tools/scale_sim/results/${GIT_SHA}"
 mkdir -p "${RESULTS_ROOT}"
 
 # ---------- Generate input data ----------
-echo "[m1-sweeps] Generating input JSONLs..."
+echo "[single-agent] Generating input JSONLs..."
 python data/generate_data.py --n 256   --user-input-size-bytes 256  --output data/smoke.jsonl
 python data/generate_data.py --n 20000 --user-input-size-bytes 1024 --output data/sweep_20k.jsonl
 
@@ -44,14 +47,14 @@ python data/generate_data.py --n 20000 --user-input-size-bytes 1024 --output dat
 
 # 1.1 Smoke (validates the harness against new code state)
 echo
-echo "[m1-sweeps] === 00_smoke ==="
+echo "[single-agent] === 00_smoke ==="
 python run_sweep.py \
     --base configs/smoke.yaml \
     --input-jsonl data/smoke.jsonl \
     --concurrency 16 \
     --output-tokens 32 \
     --git-sha "${GIT_SHA}" \
-    --exp-name 00_smoke || echo "[m1-sweeps] WARN: 00_smoke failed (continuing)"
+    --exp-name 00_smoke || echo "[single-agent] WARN: 00_smoke failed (continuing)"
 
 # 1.2 Concurrency baseline at output=16K (today's typical Ultra V3 rollout body).
 # Was a num_workers ablation, but gym's `num_workers > 1` mode is currently unusable:
@@ -60,9 +63,10 @@ python run_sweep.py \
 #   - gym's `run_command` sets PYTHONPATH to the server's own dir, not the parent —
 #     so uvicorn can't import `<server_type>.<server_name>.app` either.
 # Sub-server CPU scaling instead requires multi-instance (spawning N sub-server
-# instances, each num_workers=1). That's the deferred Axis B work.
+# instances, each num_workers=1). That's the multi-agent sweep — see
+# run_multi_agent_sweep.sh.
 echo
-echo "[m1-sweeps] === 01_concurrency_baseline ==="
+echo "[single-agent] === 01_concurrency_baseline ==="
 python run_sweep.py \
     --base configs/axis_a_8k.yaml \
     --input-jsonl data/sweep_20k.jsonl \
@@ -70,12 +74,12 @@ python run_sweep.py \
     --output-tokens 16384 \
     --total-requests 20000 \
     --git-sha "${GIT_SHA}" \
-    --exp-name 01_concurrency_baseline || echo "[m1-sweeps] WARN: 01_concurrency_baseline failed (continuing)"
+    --exp-name 01_concurrency_baseline || echo "[single-agent] WARN: 01_concurrency_baseline failed (continuing)"
 
 # 1.3 output_tokens far-tail (16K → 1M, iso-memory zip) — the headline body-size cliff.
 # All cells run with num_workers=1 (yaml default) since gym's multi-worker mode is broken.
 echo
-echo "[m1-sweeps] === 02_output_tokens_far_tail ==="
+echo "[single-agent] === 02_output_tokens_far_tail ==="
 python run_sweep.py \
     --base configs/axis_a_8k.yaml \
     --input-jsonl data/sweep_20k.jsonl \
@@ -84,11 +88,11 @@ python run_sweep.py \
     --total-requests 20000,4000,2000,1000,500 \
     --mode zip \
     --git-sha "${GIT_SHA}" \
-    --exp-name 02_output_tokens_far_tail || echo "[m1-sweeps] WARN: 02_output_tokens_far_tail failed (continuing)"
+    --exp-name 02_output_tokens_far_tail || echo "[single-agent] WARN: 02_output_tokens_far_tail failed (continuing)"
 
-# 1.4 hop-depth curve (Axis: HTTP hops)
+# 1.4 hop-depth curve (HTTP hops per /run)
 echo
-echo "[m1-sweeps] === 03_n_hops_curve ==="
+echo "[single-agent] === 03_n_hops_curve ==="
 python run_sweep.py \
     --base configs/axis_a_8k.yaml \
     --input-jsonl data/sweep_20k.jsonl \
@@ -97,11 +101,11 @@ python run_sweep.py \
     --n-hops 1,4,16,64 \
     --total-requests 20000 \
     --git-sha "${GIT_SHA}" \
-    --exp-name 03_n_hops_curve || echo "[m1-sweeps] WARN: 03_n_hops_curve failed (continuing)"
+    --exp-name 03_n_hops_curve || echo "[single-agent] WARN: 03_n_hops_curve failed (continuing)"
 
 # 1.5 defect #5 ablation: RL-side dispatch semaphore on/off across two concurrencies
 echo
-echo "[m1-sweeps] === 04_defect_5_ablation ==="
+echo "[single-agent] === 04_defect_5_ablation ==="
 python run_sweep.py \
     --base configs/axis_a_8k.yaml \
     --input-jsonl data/sweep_20k.jsonl \
@@ -110,15 +114,14 @@ python run_sweep.py \
     --output-tokens 16384 \
     --total-requests 20000 \
     --git-sha "${GIT_SHA}" \
-    --exp-name 04_defect_5_ablation || echo "[m1-sweeps] WARN: 04_defect_5_ablation failed (continuing)"
+    --exp-name 04_defect_5_ablation || echo "[single-agent] WARN: 04_defect_5_ablation failed (continuing)"
 
-# (1.5 sub-server-count axis is not run here — it requires the multi-agent
-# extension to load_driver.py that's still on the to-do list. Add as 05_*
-# once that lands.)
+# (Sub-server-count axis is the multi-agent sweep, run separately via
+# run_multi_agent_sweep.sh.)
 
 # ---------- Aggregate ----------
 echo
-echo "[m1-sweeps] Aggregating results..."
+echo "[single-agent] Aggregating results..."
 python <<PYEOF
 import glob, json
 from pathlib import Path
@@ -134,16 +137,16 @@ for csv_path in sorted(results_root.glob("*/sweep_results.csv")):
 
 if dfs:
     master = pd.concat(dfs, ignore_index=True)
-    master_csv = results_root / "master_summary.csv"
+    master_csv = results_root / "single_agent_master.csv"
     master.to_csv(master_csv, index=False)
-    print(f"\\n[m1-sweeps] Master summary: {master_csv}")
+    print(f"\\n[single-agent] Master summary: {master_csv}")
     cols = [c for c in ["experiment","concurrency","num_workers","output_tokens","n_hops",
                         "semaphore_enabled","n_rollouts","failure_rate","retry_rate",
                         "p50_s","p99_s","max_s","stop_reason","rc"] if c in master.columns]
     print(master[cols].to_string())
 else:
-    print(f"[m1-sweeps] No sweep_results.csv files found under {results_root}")
+    print(f"[single-agent] No sweep_results.csv files found under {results_root}")
 PYEOF
 
 echo
-echo "[m1-sweeps] Done. Results under ${RESULTS_ROOT}"
+echo "[single-agent] Done. Results under ${RESULTS_ROOT}"

@@ -464,7 +464,7 @@ def main() -> None:
         "--driver-mode",
         choices=("loaded", "spinup_only"),
         default="loaded",
-        help="loaded (default): drive concurrent /run requests. spinup_only: idle sample only (Axis B pre-flight).",
+        help="loaded (default): drive concurrent /run requests. spinup_only: idle sample only (multi-agent pre-flight).",
     )
     parser.add_argument(
         "--idle-window-s",
@@ -476,7 +476,7 @@ def main() -> None:
         "--teardown-sleep-s",
         type=float,
         default=5.0,
-        help="Sleep between cells to let kernel TIME_WAIT drain. Bump to ~N//8 for high-N Axis-B cells.",
+        help="Sleep between cells to let kernel TIME_WAIT drain. Bump to ~N//8 for high-N multi-agent cells.",
     )
     args = parser.parse_args()
     if args.driver_mode == "loaded" and args.input_jsonl is None:
