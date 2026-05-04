@@ -652,11 +652,18 @@ Full body: {json.dumps(exc.body, indent=4)}
             port=server.config.port,
             # We add a very small graceful shutdown timeout so when we shutdown we cancel all inflight requests and there are no lingering requests (requests are cancelled)
             timeout_graceful_shutdown=0.5,
-            # Some workers may take a while for imports and setup_webserver.
-            timeout_worker_healthcheck=30,
             # Ensure server keepalive > client keepalive
             timeout_keep_alive=30.0,
         )
+        # `timeout_worker_healthcheck` was added in uvicorn 0.36. Older
+        # uvicorns raise TypeError if it's passed. Feature-detect to keep this
+        # working on environments where a sub-server falls through to a venv
+        # with an older pin (e.g. when concurrent `uv sync` resolves to the
+        # root project venv instead of the per-server one).
+        import inspect
+        if "timeout_worker_healthcheck" in inspect.signature(uvicorn.run).parameters:
+            # Some workers may take a while for imports and setup_webserver.
+            uvicorn_kwargs["timeout_worker_healthcheck"] = 30
 
         if server.config.num_workers and server.config.num_workers > 1:
             # TODO this is very dirty. We need a cleaner way to populate this information in the configs data structures.
