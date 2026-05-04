@@ -122,7 +122,7 @@ tools/scale_sim/
 │
 ├── configs/
 │   ├── smoke.yaml                              16-concurrent sanity check
-│   ├── axis_a_8k.yaml                          8K-concurrent, 16 KB bodies
+│   ├── single_agent_base.yaml                  single-agent template (1 model + 1 resources + 1 agent)
 │   ├── axis_c_8k_4mb.yaml                      8K-concurrent, ~4.5 MB bodies
 │   ├── multi_agent_base.yaml                   N-agent template
 │   └── _gen_multi_agent.py                     N-agent generator
@@ -278,7 +278,7 @@ Driven by `tools/scale_sim/run_single_agent_sweep.sh`. Single-agent topology (1 
 
 Driven by `tools/scale_sim/run_multi_agent_sweep.sh`. Topology locked: **N agents + N resources + 1 shared model**.
 
-All cells share: `simple_agent.max_steps=1`, `output_tokens=1024`, `tool.body_size_bytes=16384`, `verify.body_size_bytes=4096`, model `async_latency_ms=200`, tool `async_latency_ms=100`, verify `async_latency_ms=50` — same as `axis_a_8k.yaml` for direct cross-comparison.
+All cells share: `simple_agent.max_steps=1`, `output_tokens=1024`, `tool.body_size_bytes=16384`, `verify.body_size_bytes=4096`, model `async_latency_ms=200`, tool `async_latency_ms=100`, verify `async_latency_ms=50` — same as `single_agent_base.yaml` for direct cross-comparison.
 
 #### Sub-sweep A. Spinup-only (pre-flight resource cost)
 

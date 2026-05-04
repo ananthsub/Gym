@@ -22,7 +22,7 @@ The plan:
 4. **Sweep**: 19 cells total (7 spinup-only at `n_agents = {1,4,16,32,64,128,256}` + 6 loaded at fixed total concurrency + 6 loaded at fixed per-agent concurrency, both at `n_agents = {1,4,16,32,64,128}`). One `ng_run` invocation per cell, full teardown between cells. No batch wall-clock cap (CPU partition allows long jobs on this cluster).
 5. **Predictions** below in §8 — what we expect to see, so the experiment can falsify them.
 
-Everything else (instrumentation, retry tracking, kernel watcher, sweep-runner-per-cell isolation, the unchanged `simple_agent` and `synthetic_*` server implementations) is reused as-is. **No changes to existing checked-in cell configs (`smoke.yaml`, `axis_a_8k.yaml`, `axis_c_8k_4mb.yaml`)** — they keep working unchanged because `agent_names` falls back to the existing `agent_name` field when not provided.
+Everything else (instrumentation, retry tracking, kernel watcher, sweep-runner-per-cell isolation, the unchanged `simple_agent` and `synthetic_*` server implementations) is reused as-is. **No changes to existing checked-in cell configs (`smoke.yaml`, `single_agent_base.yaml`, `axis_c_8k_4mb.yaml`)** — they keep working unchanged because `agent_names` falls back to the existing `agent_name` field when not provided.
 
 ---
 
@@ -244,7 +244,7 @@ A single shared `data/multi_agent_10k.jsonl` (generated once via `data/generate_
    ```python
    self.agent_names = list(scale_sim_cfg.get("agent_names") or [scale_sim_cfg.agent_name])
    ```
-   so single-agent configs (smoke, axis_a_8k, …) keep working unchanged.
+   so single-agent configs (smoke, single_agent_base, …) keep working unchanged.
 2. Replace `row["agent_ref"] = {"name": self.agent_name}` in `_load_input_rows` with:
    ```python
    row["agent_ref"] = {"name": self.agent_names[i % len(self.agent_names)]}
@@ -253,7 +253,7 @@ A single shared `data/multi_agent_10k.jsonl` (generated once via `data/generate_
 4. Add `--mode {loaded,spinup_only}` CLI flag. When `spinup_only`, skip `_load_input_rows`, skip the dispatch loop, just sample for `idle_window_s` and dump the single-row spinup summary.
 5. Extend `RetryTracker` with `record_completion(rollout_idx, succeeded, agent_name)` and emit per-agent breakdown in `summary_all()`.
 
-That is the entire driver-side change. ~50 LOC, well-tested by the smoke + axis_a_8k cells continuing to pass after the refactor (single-element `agent_names` list is the regression check).
+That is the entire driver-side change. ~50 LOC, well-tested by the smoke + single_agent_base cells continuing to pass after the refactor (single-element `agent_names` list is the regression check).
 
 `sweep_runner.py`:
 
@@ -266,7 +266,7 @@ That is the entire driver-side change. ~50 LOC, well-tested by the smoke + axis_
 
 Time budget on this cluster's `cpu` partition is unbounded at submission, so the matrix is sized to give a clean characterization rather than to fit a wall-clock. Variants below run as one batch via `run_on_slurm_baremetal.sh batch` with `DRIVER_SCRIPT=tools/scale_sim/run_multi_agent_sweep.sh`.
 
-All cells share the body-size and per-hop knobs from `axis_a_8k.yaml` so results are directly comparable to the Axis-A baseline:
+All cells share the body-size and per-hop knobs from `single_agent_base.yaml` so results are directly comparable to the single-agent baseline:
 - `output_tokens` = 1024 (model body ~30 KB)
 - tool body 16 KB / verify body 4 KB
 - model `async_latency_ms=200`, tool `async_latency_ms=100`, verify `async_latency_ms=50`
@@ -406,7 +406,7 @@ A few specific cases the harness must handle gracefully. None require new infra;
 Linear, single contributor, ~half a day:
 
 1. **Read-only validation pass (10 min)**: confirm `nemo_gym/cli.py`'s server-spawn code reuses `<server_type>/<name>/.venv` regardless of how many top-level config keys reference it. Fall back to symlinks only if this assumption fails.
-2. **`load_driver.py` changes (~1 hour)**: agent_names list, round-robin in `_load_input_rows`, per-agent breakdown in `RetryTracker`, `--mode` flag with `spinup_only` branch. Smoke + axis_a_8k must keep passing as regression.
+2. **`load_driver.py` changes (~1 hour)**: agent_names list, round-robin in `_load_input_rows`, per-agent breakdown in `RetryTracker`, `--mode` flag with `spinup_only` branch. Smoke + single_agent_base must keep passing as regression.
 3. **`configs/multi_agent_base.yaml` + `configs/_gen_multi_agent.py` (~1 hour)**: deterministic generator. Unit-test by generating N={1,4,8} configs and running them through `ng_dump_config` to confirm the merged shape is identical to a hand-written N=4 reference.
 4. **`run_multi_agent_sweep.sh` (~30 min)**: a new driver script for `DRIVER_SCRIPT=`, modeled on `run_single_agent_sweep.sh`. Iterates the §7 matrix, calls `_gen_multi_agent.py` then `sweep_runner.py` per cell.
 5. **First spinup-only run (~30 min wall + analysis)**: validates everything below N=128 actually starts; surfaces any cluster-specific limits (FDs, ports, RAM) before committing to the loaded run.

@@ -32,7 +32,11 @@ echo "[multi-agent-rerun] ulimit -n: $(ulimit -n)"
 echo "[multi-agent-rerun] hostname:  $(hostname)"
 echo "[multi-agent-rerun] which ng_run: $(which ng_run || echo NOT FOUND)"
 
-GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo local)
+# GIT_SHA controls which results/<sha>/ dir the new cells land in. Defaults to
+# the current HEAD, but can be overridden via env so a rerun targets the same
+# dir as the original (failed) run — useful when you've committed a fix on top
+# of the run you're trying to recover.
+GIT_SHA="${GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo local)}"
 echo "[multi-agent-rerun] git sha:   ${GIT_SHA}"
 
 BASE_CFG="configs/multi_agent_base.yaml"
@@ -92,15 +96,48 @@ run_cell() {
     echo "[multi-agent-rerun] WARN: cell N=${n} mode=${mode} failed (continuing)"
 }
 
-# ---------- The 11 cells that failed in the previous sweep ----------
+# ---------- Pre-warm per-server-type venvs ----------
+# At N>=32 we hit a uv-venv concurrency race: all N instances of
+# synthetic_resources (and N of simple_agent) share dir_path and run
+# `uv venv --seed --allow-existing` against the SAME .venv simultaneously.
+# Concurrent installs corrupt `pip-*.dist-info/RECORD`, after which every
+# subsequent cell using that server type fails with
+# `Cannot uninstall package; RECORD file not found`.
+#
+# Fix: wipe per-server .venvs (in case a prior run left them corrupt), then
+# run a single low-N cell (N=1 spinup-only — 4 sub-servers, no race) so the
+# 3 venvs get created cleanly. Combined with multi_agent_base.yaml's new
+# `skip_venv_if_present: true`, every subsequent high-N cell reuses these
+# warmed venvs without re-running uv setup, eliminating the race entirely.
+SCALE_SIM_DIR="${CONTAINER_GYM_PATH}/tools/scale_sim"
+echo
+echo "[multi-agent-rerun] === pre-warming per-server-type venvs ==="
+for d in \
+    "${SCALE_SIM_DIR}/resources_servers/synthetic_resources" \
+    "${SCALE_SIM_DIR}/responses_api_models/synthetic_model" \
+    "${CONTAINER_GYM_PATH}/responses_api_agents/simple_agent"; do
+    if [[ -d "$d/.venv" ]]; then
+        echo "[multi-agent-rerun] wiping $d/.venv (may be corrupt from prior race)"
+        rm -rf "$d/.venv"
+    fi
+done
 
-# Sub-sweep A spinup_only: N=16, 32, 64, 128, 256
-for N in 16 32 64 128 256; do
+echo "[multi-agent-rerun] running N=1 spinup-only warmup cell to create venvs serially…"
+run_cell 1 1 1 spinup_only
+
+# ---------- The 9 cells that failed in the 19620805 sweep ----------
+# All failed with `TypeError: run() got an unexpected keyword argument
+# 'timeout_worker_healthcheck'` — caused by occasional venv-resolution races
+# that fell through to the older uvicorn in the root Gym .venv. Workaround
+# was to bump the root .venv's uvicorn to >=0.32.
+
+# Sub-sweep A spinup_only: N=32, 64, 128, 256
+for N in 32 64 128 256; do
   run_cell "${N}" 1 1 spinup_only
 done
 
-# Sub-sweep B loaded c=4096 r=10000: N=32, 64, 128, 256
-for N in 32 64 128 256; do
+# Sub-sweep B loaded c=4096 r=10000: N=64, 128, 256
+for N in 64 128 256; do
   run_cell "${N}" 4096 10000 loaded
 done
 
