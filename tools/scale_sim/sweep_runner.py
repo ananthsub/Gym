@@ -162,24 +162,46 @@ def _pre_cell_cleanup() -> None:
     is idempotent across whatever exit mode the previous cell took — graceful,
     SIGKILL'd, OOM'd, manual Ctrl-C — they all look the same to the next cell.
 
-    Both commands swallow non-zero exits because the "no matching processes"
-    case is normal on the first cell of a fresh allocation.
+    The pkill regex covers raylet/gcs/plasma binaries plus the ray python
+    helpers (monitor, log_monitor, dashboard, client server, in-actor `ray::`
+    namespace) so that the subsequent `ray stop --force` finds little left to
+    do. Even with that, `ray stop --force` can occasionally hang on cluster
+    state inspection at high N — we give it 60 s and treat a timeout as a
+    warning, not a fatal error, so a slow cleanup never wedges the whole sweep.
     """
-    subprocess.run(
-        "pkill -9 -f 'raylet|gcs_server|plasma_store|ng_run|nemo_gym|synthetic_resources|synthetic_model|simple_agent|ray::' || true",
-        shell=True, check=False, timeout=10,
-    )
+    _shell("pre-cell pkill",
+           "pkill -9 -f 'raylet|gcs_server|plasma_store|ng_run|nemo_gym"
+           "|synthetic_resources|synthetic_model|simple_agent"
+           "|ray::|ray/_private/log_monitor|ray/autoscaler/_private/monitor"
+           "|ray/dashboard/dashboard|ray.util.client.server' || true",
+           timeout=30)
     # Wait briefly for the kernel to actually reap the killed processes and
     # release their listening ports before we wipe the state dirs.
     time.sleep(0.5)
-    subprocess.run(
-        "ray stop --force 2>/dev/null || true",
-        shell=True, check=False, timeout=10,
-    )
-    subprocess.run(
-        "rm -rf /tmp/ray /tmp/ray_temp /tmp/ray-* 2>/dev/null || true",
-        shell=True, check=False, timeout=10,
-    )
+    _shell("ray stop --force",
+           "ray stop --force 2>/dev/null || true",
+           timeout=60)
+    _shell("rm /tmp/ray*",
+           "rm -rf /tmp/ray /tmp/ray_temp /tmp/ray-* 2>/dev/null || true",
+           timeout=30)
+
+
+def _shell(label: str, cmd: str, timeout: float) -> None:
+    """Run a shell command for cleanup with a timeout that we treat as a warning.
+
+    A hung cleanup step shouldn't take down the whole cell — pkill -9 may already
+    have done the useful work, and the next cell's pre-cleanup will try again
+    anyway. Print to stderr so the warning shows up alongside other sweep output.
+    """
+    try:
+        subprocess.run(cmd, shell=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(
+            f"[sweep] WARN: pre-cell cleanup step '{label}' timed out after "
+            f"{timeout}s — continuing.",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def _pre_start_ray() -> None:
