@@ -237,3 +237,9 @@ env.yaml
 
 # Backup files
 *.backup
+
+# scale-sim run outputs and logs — machine-specific, regenerable
+tools/scale_sim/results/
+tools/scale_sim/_yappi_in_progress/
+scale-sim-logs/
+.pr*_stat.txt
