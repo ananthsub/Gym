@@ -148,6 +148,7 @@ atexit.register(global_aiohttp_client_exit)
 # This is not intended to be changed. If you want to increase this, we should probably figure out how to improve server-side robustness.
 MAX_NUM_TRIES = 3
 
+<<<<<<< Updated upstream
 _NUM_SERVER_DISCONNECTED_ERROR: int = 0
 _NUM_CLIENT_OS_ERROR: int = 0
 DISCONNECTED_CLIENT_OS_PRINT_INTERVAL: int = 100
@@ -158,24 +159,46 @@ DISCONNECTED_CLIENT_OS_HELP_TEXT = """We've run into this issue in two different
     - Python example: https://github.com/NVIDIA-NeMo/Gym/blob/c74ffddb3d8190cd717508b0830916b19a26e6cd/nemo_gym/server_utils.py#L495
 2. Depending on the serving framework and config, the server may be overloaded and is dropping connections.
     - Increase adapter server replicas."""
+=======
+# ==== PROFILING INTEGRATION ====
+from nemo_gym.profiling import record_metric, is_profiling_enabled
+import time as _time
+>>>>>>> Stashed changes
 
 
 async def request(
     method: str, url: str, _internal: bool = False, **kwargs: Unpack[_RequestOptions]
 ) -> ClientResponse:  # pragma: no cover
+    _profiling = is_profiling_enabled()
+    
     # Faster JSON dumps than the default aiohttp json
     if kwargs.get("json"):
+        if _profiling:
+            _ser_start = _time.perf_counter()
         kwargs["data"] = orjson.dumps(kwargs.pop("json"))
         kwargs.setdefault("headers", dict())
         kwargs["headers"]["Content-Type"] = "application/json"
+        if _profiling:
+            record_metric("http/request_serialize", _time.perf_counter() - _ser_start)
+            record_metric("http/request_size_kb", len(kwargs["data"]) / 1024)
 
     client = get_global_aiohttp_client()
     num_tries = 1
+<<<<<<< Updated upstream
     retries = 0
     retry_start = time.monotonic()
+=======
+    
+    if _profiling:
+        _net_start = _time.perf_counter()
+    
+>>>>>>> Stashed changes
     while True:
         try:
-            return await client.request(method=method, url=url, **kwargs)
+            response = await client.request(method=method, url=url, **kwargs)
+            if _profiling:
+                record_metric("http/network_round_trip", _time.perf_counter() - _net_start)
+            return response
         except ServerDisconnectedError:
             global _NUM_SERVER_DISCONNECTED_ERROR
             _NUM_SERVER_DISCONNECTED_ERROR += 1
@@ -235,7 +258,16 @@ Response content: {content}""")
 
 
 async def get_response_json(response: ClientResponse) -> Any:
-    return orjson.loads(await response.read())
+    _profiling = is_profiling_enabled()
+    if _profiling:
+        _deser_start = _time.perf_counter()
+    data = await response.read()
+    if _profiling:
+        record_metric("http/response_size_kb", len(data) / 1024)
+    result = orjson.loads(data)
+    if _profiling:
+        record_metric("http/response_deserialize", _time.perf_counter() - _deser_start)
+    return result
 
 
 DEFAULT_HEAD_SERVER_PORT = 11000
@@ -642,6 +674,10 @@ Full body: {json.dumps(exc.body, indent=4)}
         profiling_config = ProfilingMiddlewareConfig.model_validate(global_config_dict)
         if profiling_config.profiling_enabled:
             server.setup_profiling(app, profiling_config)
+            # Also enable global HTTP/serialization profiling
+            from nemo_gym.profiling import enable_profiling as enable_global_profiling
+            output_dir = profiling_config.profiling_results_dirpath
+            enable_global_profiling(output_dir=PARENT_DIR / output_dir if output_dir else None)
 
         uvicorn_logging_cfg = UvicornLoggingConfig.model_validate(global_config_dict)
         if not uvicorn_logging_cfg.uvicorn_logging_show_200_ok:

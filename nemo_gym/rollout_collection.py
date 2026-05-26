@@ -576,10 +576,14 @@ Aggregate metrics: {aggregate_metrics_fpath}""")
         """
         We provide this function as a lower level interface for running rollout collection.
         """
+        import time as _time
+        from nemo_gym.profiling import record_metric, is_profiling_enabled
+        
         server_client = self.setup_server_client(head_server_config)
         semaphore = semaphore or nullcontext()
 
         async def _post_subroutine(row: Dict) -> Tuple[Dict, Dict]:
+<<<<<<< Updated upstream
             async with semaphore:
                 res = await server_client.post(server_name=row["agent_ref"]["name"], url_path="/run", json=row)
                 try:
@@ -594,6 +598,20 @@ Aggregate metrics: {aggregate_metrics_fpath}""")
                         )
                     raise
                 return row, await get_response_json(res)
+=======
+            _profiling = is_profiling_enabled()
+            if _profiling:
+                _total_start = _time.perf_counter()
+            
+            res = await server_client.post(server_name=row["agent_ref"]["name"], url_path="/run", json=row)
+            await raise_for_status(res)
+            result = await get_response_json(res)
+            
+            if _profiling:
+                record_metric("rollout/single_example_total", _time.perf_counter() - _total_start)
+            
+            return row, result
+>>>>>>> Stashed changes
 
         return tqdm.as_completed(
             map(_post_subroutine, examples),
