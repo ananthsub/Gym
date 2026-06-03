@@ -1,0 +1,22 @@
+# Standalone config for the synthetic_resources server.
+# The actual sweep configs in tools/scale_sim/configs/*.yaml override these defaults.
+synthetic_resources:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      description: Scale-sim synthetic resources server (controllable latency, body size, body shape, failure injection).
+      tool:
+        async_latency_ms: 0
+        cpu_burn_ms: 0
+        body_size_bytes: 1024
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 0
+        cpu_burn_ms: 0
+        body_size_bytes: 1024
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_close_rate: 0.0
+      inject_hang_rate: 0.0

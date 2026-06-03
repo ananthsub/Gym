@@ -1,0 +1,100 @@
+# Mock-trainer reproducer config (Ray-actor boundary).
+#
+# Topology: single-agent (1 head + 1 model + 1 resources + 1 agent), wrapped
+# inside one NemoGymActor. mock_trainer.py fires `thread_count` concurrent
+# blocking ray.get calls against the actor (one thread per prompt group, each
+# holding a Ray future until its batch returns through the object store).
+#
+# Production-shaped latency is baked in:
+#   - synthetic_model.async_latency_ms = 1500
+#   - synthetic_resources.tool.async_latency_ms = 200
+#   - synthetic_resources.verify.async_latency_ms = 50
+#
+# Pareto straggler injection is wired but off by default; turn it on by setting
+# latency_dist=pareto on the synthetic_model.
+#
+# Run from `tools/scale_sim/`:
+#   python data/generate_data.py --n 10000 --output data/actor_repro.jsonl
+#   python mock_trainer.py --config configs/actor_repro.yaml \
+#       --input-jsonl data/actor_repro.jsonl --output-dir results/actor_repro \
+#       --mode sync_blocking --thread-count 256 --prompts-per-call 1 --num-steps 5
+
+head_server:
+  host: 0.0.0.0
+  port: 5000
+
+# Generous global aiohttp pool so the actor can hold many in-flight connections.
+global_aiohttp_connector_limit: 102400
+global_aiohttp_connector_limit_per_host: 16384
+
+synthetic_resources_inst:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 200
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      port: 5002
+
+synthetic_model_inst:
+  responses_api_models:
+    synthetic_model:
+      entrypoint: app.py
+      # Production-shaped median latency. Long-tail injection is layered on via
+      # latency_dist=pareto + pareto_alpha.
+      async_latency_ms: 1500
+      cpu_burn_ms: 0
+      latency_dist: fixed
+      # Pareto knobs (no-op when latency_dist=fixed):
+      pareto_alpha: 1.5
+      pareto_min_ms: 0.0           # 0 = inherit async_latency_ms as the floor
+      pareto_max_ms: 120000.0      # hard cap at 2 min
+      # Payload sizing. Defaults sized so per-rollout body is roughly 1 MB.
+      prompt_tokens: 512
+      output_tokens: 32768
+      include_token_ids_and_log_probs: true
+      n_reasoning_items: 0
+      reasoning_tokens_per_item: 0
+      tool_name: synthetic_tool
+      port: 5001
+
+synthetic_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      # 2 hops per rollout (model + tool, twice).
+      max_steps: 2
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_inst
+      model_server:
+        type: responses_api_models
+        name: synthetic_model_inst
+      datasets:
+        - name: actor_repro
+          type: example
+          jsonl_fpath: data/actor_repro.jsonl
+          num_repeats: 1
+      port: 5003
+
+scale_sim:
+  # mock_trainer.py reads agent_name to populate agent_ref on each row.
+  agent_name: synthetic_simple_agent
+  # The remaining scale_sim.* fields are unused by mock_trainer.py (it takes
+  # thread_count / prompts_per_call / num_steps as CLI args) but kept for
+  # compatibility with the load_driver / sweep_runner config shape.
+  concurrency: 256
+  total_requests: 10000
+  early_stop_failure_rate: 0.50
+  early_stop_retry_rate: 0.50
+  early_stop_wall_clock_s: 1800
+  early_stop_window_s: 30
