@@ -25,10 +25,13 @@ if [ ! -f pyproject.toml ] || [ ! -d nemo_gym ]; then
 fi
 
 LABEL="${LABEL:-slurm-cpu}"
-TIME="${TIME:-03:59:00}"            # cpu_short QOS caps wall-clock at 4h.
+TIME="${TIME:-03:59:00}"            # cpu_short partition caps wall-clock at 4h.
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_nemofw}"
 PARTITION="${PARTITION:-cpu_short}"
-QOS="${QOS:-cpu_short}"
+# The cpu_short partition applies its own QoS (p_cpu_short) automatically; our
+# account is only associated with the 'normal' QoS, so do NOT pass --qos (it
+# would be rejected as an invalid qos specification). Override only if needed.
+QOS="${QOS:-}"
 
 ALL_EXPERIMENTS=(
   concurrency_scaling

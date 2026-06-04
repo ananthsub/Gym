@@ -38,7 +38,6 @@
 #SBATCH --job-name=scale-sim
 #SBATCH --account=coreai_dlalgo_nemofw
 #SBATCH --partition=cpu_short
-#SBATCH --qos=cpu_short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=40
@@ -46,9 +45,11 @@
 #SBATCH --mem=0
 #SBATCH --time=03:59:00
 #SBATCH --output=scale-sim-%j.out
-# NOTE: the cpu_short partition/QOS caps wall-clock at 4h. Keep --time<=03:59:00
-# and submit one job per experiment in parallel (see submit_slurm_suite.sh)
-# rather than running the whole suite in a single job.
+# NOTE: the cpu_short partition caps wall-clock at 4h (via its own p_cpu_short
+# QoS). Keep --time<=03:59:00 and submit one job per experiment in parallel (see
+# submit_slurm_suite.sh) rather than running the whole suite in a single job.
+# Do not pass --qos: our account only has the 'normal' QoS, and the partition
+# applies p_cpu_short automatically.
 
 set -euo pipefail
 
