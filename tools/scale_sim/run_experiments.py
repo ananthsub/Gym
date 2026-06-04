@@ -61,6 +61,13 @@ AGENT = "synthetic_simple_agent.responses_api_agents.simple_agent"
 # serialized to JSON (used only to annotate response-size cells).
 BYTES_PER_TOKEN = 26
 
+# De-facto training-representative response body. The synthetic model emits this
+# many output tokens (token ids + log probs + text) per response, ~1.7 MB on the
+# wire. Held constant in every experiment except response_size_scaling (which
+# sweeps it) and tool_call_depth_scaling (which uses a small body because the
+# request body accumulates conversation history across hops — see _depth_cells).
+TRAIN_RESPONSE_TOKENS = 65536
+
 
 # --------------------------------------------------------------------------- #
 # Cleanup
@@ -128,7 +135,13 @@ def host_info(label: str) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Experiment definitions
 # --------------------------------------------------------------------------- #
-def _fixed(output_tokens: int = 256, model_lat: int = 0, tool_lat: int = 0, verify_lat: int = 0, max_steps: int = 1):
+def _fixed(
+    output_tokens: int = TRAIN_RESPONSE_TOKENS,
+    model_lat: int = 0,
+    tool_lat: int = 0,
+    verify_lat: int = 0,
+    max_steps: int = 1,
+):
     """Per-cell overrides applied on top of configs/single_agent.yaml."""
     return {
         f"{MODEL}.output_tokens": output_tokens,
@@ -142,15 +155,22 @@ def _fixed(output_tokens: int = 256, model_lat: int = 0, tool_lat: int = 0, veri
 
 def _concurrency_cells() -> List[Dict[str, Any]]:
     cells = []
-    for c in [64, 256, 1024, 4096, 8192, 16384, 32768, 65536, 131072]:
+    # Powers of 2 from the unloaded floor (1, 4, 16) through deep saturation
+    # (131072), all at the 64k training body. No memory cap: the consumer
+    # throttles, so actual peak in-flight memory is bounded by throughput x
+    # latency (Little's law), not by offered concurrency (predicted vs actual
+    # diverge ~10x at high load). total_requests is sized small at the floor so
+    # those cells drain quickly for a clean L1, and capped at 20000 so saturated
+    # cells go wall-bound on the 300s budget.
+    for c in [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 131072]:
         cells.append(
             {
                 "cell": f"c{c}",
                 "value_col": "concurrency",
                 "value": c,
                 "concurrency": c,
-                "total_requests": max(2 * c, 20000),
-                "wall_clock_s": 240,
+                "total_requests": min(max(8 * c, 128), 20000),
+                "wall_clock_s": 300,
                 "overrides": _fixed(),
             }
         )
@@ -159,7 +179,12 @@ def _concurrency_cells() -> List[Dict[str, Any]]:
 
 def _response_size_cells() -> List[Dict[str, Any]]:
     cells = []
-    for tok in [16384, 65536, 262144, 1048576, 4194304, 10485760]:
+    # Power-of-2 sweep over response body size (token ids + log probs + text).
+    # 64k (65536) is the de-facto training response size; the grid brackets it
+    # symmetrically (16k..256k) and extends into the large-body cliff (512k..4M).
+    # Concurrency is held fixed (low) so this isolates body-serialization cost
+    # from the consumer event-loop ceiling that concurrency_scaling measures.
+    for tok in [16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304]:
         conc = 64 if tok <= 1048576 else 16
         cells.append(
             {
@@ -178,16 +203,21 @@ def _response_size_cells() -> List[Dict[str, Any]]:
 
 def _depth_cells() -> List[Dict[str, Any]]:
     cells = []
-    for steps in [1, 2, 4, 8]:
+    # Powers of 2 out to 512 hops. Runs at concurrency=1 with a small (1k) body:
+    # simple_agent accumulates prior outputs into each hop's request, so the
+    # request body grows linearly with hop count (at 512 hops a 1k-token body is
+    # already ~13 MB; a 64k body would be ~870 MB and OOM). c=1 isolates per-hop
+    # cost from queueing, matching the prior extreme-hop-depth experiment.
+    for steps in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]:
         cells.append(
             {
                 "cell": f"hops{steps}",
                 "value_col": "tool_calls_per_rollout",
                 "value": steps,
-                "concurrency": 64,
-                "total_requests": 20000,
-                "wall_clock_s": 240,
-                "overrides": _fixed(max_steps=steps),
+                "concurrency": 1,
+                "total_requests": 8,
+                "wall_clock_s": 900,
+                "overrides": _fixed(output_tokens=1024, max_steps=steps),
             }
         )
     return cells
@@ -195,7 +225,7 @@ def _depth_cells() -> List[Dict[str, Any]]:
 
 def _work_per_step_cells() -> List[Dict[str, Any]]:
     cells = []
-    for lat in [0, 50, 200, 1000]:
+    for lat in [0, 64, 256, 1024]:
         cells.append(
             {
                 "cell": f"work{lat}ms",
@@ -203,7 +233,7 @@ def _work_per_step_cells() -> List[Dict[str, Any]]:
                 "value": lat,
                 "concurrency": 64,
                 "total_requests": 20000,
-                "wall_clock_s": 240,
+                "wall_clock_s": 300,
                 "overrides": _fixed(model_lat=lat),
             }
         )
@@ -231,42 +261,58 @@ def _fan_out_cells() -> List[Dict[str, Any]]:
 
 
 def _return_shape_cells() -> List[Dict[str, Any]]:
-    # (mode, thread_count, prompts_per_call) — in-flight = thread_count * prompts_per_call.
-    return [
+    # Stress the Ray-actor boundary two ways:
+    #
+    #  - sync_blocking: N concurrent blocking ray.get RPCs hit the actor at once
+    #    (thread_count = N, one prompt each). Sweeping N in powers of 2 finds
+    #    where the actor's inbound RPC queue overloads. This is the shape that
+    #    overwhelmed the actor.
+    #  - lag_batched_stream: one call carrying all rows, results streamed back
+    #    via an ObjectRefGenerator. This is the production shape in place today.
+    #
+    # Same actor, same total rollouts per step, different request shape.
+    cells: List[Dict[str, Any]] = []
+    for n in [1, 4, 16, 64, 256, 1024]:
+        cells.append(
+            {
+                "cell": f"sync_rpc{n}",
+                "value_col": "trainer_shape",
+                "value": f"sync_rpc{n}",
+                "extra": {"concurrent_rpcs": n},
+                "mode": "sync_blocking",
+                "thread_count": n,
+                "prompts_per_call": 1,
+                "num_steps": 5,
+            }
+        )
+    cells.append(
         {
-            "cell": "whole_batch",
-            "value_col": "return_shape",
-            "value": "whole_batch",
-            "mode": "sync_blocking",
-            "thread_count": 256,
-            "prompts_per_call": 1,
-            "num_steps": 5,
-        },
-        {
-            "cell": "streaming",
-            "value_col": "return_shape",
-            "value": "streaming",
+            "cell": "stream_allrows",
+            "value_col": "trainer_shape",
+            "value": "stream_allrows",
+            "extra": {"concurrent_rpcs": 1},
             "mode": "lag_batched_stream",
-            "thread_count": 8,
+            "thread_count": 4,
             "prompts_per_call": 256,
             "num_steps": 5,
-        },
-    ]
+        }
+    )
+    return cells
 
 
 EXPERIMENTS: Dict[str, Dict[str, Any]] = {
     "concurrency_scaling": {
-        "blurb": "Throughput and latency as simultaneous rollouts grow (tiny responses, one tool call, no added work).",
+        "blurb": "Throughput and latency as simultaneous rollouts grow (1..131072) at the 64k training body, one tool call, no added work.",
         "kind": "single_agent",
         "cells": _concurrency_cells,
     },
     "response_size_scaling": {
-        "blurb": "Latency and throughput as the response body grows (token ids + log probs for 16K..10M context), fixed concurrency.",
+        "blurb": "Latency and throughput as the response body grows in powers of 2 (16k..4M tokens), fixed concurrency.",
         "kind": "single_agent",
         "cells": _response_size_cells,
     },
     "tool_call_depth_scaling": {
-        "blurb": "Cost as each rollout makes more sequential tool/model calls, fixed concurrency.",
+        "blurb": "Per-hop cost as each rollout chains more tool/model calls (1..512 hops, small body, concurrency=1).",
         "kind": "single_agent",
         "cells": _depth_cells,
     },
@@ -281,7 +327,7 @@ EXPERIMENTS: Dict[str, Dict[str, Any]] = {
         "cells": _fan_out_cells,
     },
     "trainer_return_shape": {
-        "blurb": "Whole-batch vs streaming returns through the Ray actor.",
+        "blurb": "Ray-actor stress: N concurrent blocking RPCs (1..1024) that overload the actor vs the 1-call streaming production shape.",
         "kind": "return_shape",
         "cells": _return_shape_cells,
     },
@@ -382,6 +428,15 @@ def _materialize_single_agent(exp: str, cell: Dict[str, Any], label: str) -> Pat
 def _materialize_fan_out(exp: str, cell: Dict[str, Any], label: str) -> Path:
     cfg_dict = gen_multi_agent.generate(CONFIGS / "multi_agent.yaml", cell["n_agents"])
     cfg = OmegaConf.create(cfg_dict)
+    # Hold the shared model at the 64k training body, same as the single-agent
+    # experiments, so fan-out is measured at a training-representative payload.
+    model_key = gen_multi_agent._model_instance_name()
+    OmegaConf.update(
+        cfg,
+        f"{model_key}.responses_api_models.synthetic_model.output_tokens",
+        TRAIN_RESPONSE_TOKENS,
+        force_add=True,
+    )
     OmegaConf.update(cfg, "scale_sim.concurrency", cell["concurrency"])
     OmegaConf.update(cfg, "scale_sim.total_requests", cell["total_requests"])
     OmegaConf.update(cfg, "scale_sim.early_stop_wall_clock_s", cell["wall_clock_s"])

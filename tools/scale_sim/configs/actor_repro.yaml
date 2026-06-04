@@ -60,7 +60,7 @@ synthetic_model_inst:
       pareto_max_ms: 120000.0      # hard cap at 2 min
       # Payload sizing. Defaults sized so per-rollout body is roughly 1 MB.
       prompt_tokens: 512
-      output_tokens: 32768
+      output_tokens: 65536
       include_token_ids_and_log_probs: true
       n_reasoning_items: 0
       reasoning_tokens_per_item: 0
