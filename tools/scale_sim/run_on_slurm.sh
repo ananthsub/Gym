@@ -23,7 +23,7 @@
 #
 # Override any default on the command line (sbatch flags beat #SBATCH lines):
 #
-#   LABEL=slurm-cpu sbatch -A <acct> -p <part> -t 08:00:00 tools/scale_sim/run_on_slurm.sh
+#   LABEL=slurm-cpu sbatch -A <acct> -p <part> -q <qos> -t 03:59:00 tools/scale_sim/run_on_slurm.sh
 #
 # Run a subset by setting EXPERIMENTS (default: --all):
 #
@@ -37,17 +37,18 @@
 # ---- Cluster defaults (CLI sbatch flags override these) ----
 #SBATCH --job-name=scale-sim
 #SBATCH --account=coreai_dlalgo_nemofw
-#SBATCH --partition=cpu
+#SBATCH --partition=cpu_short
+#SBATCH --qos=cpu_short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=40
 #SBATCH --exclusive
 #SBATCH --mem=0
-#SBATCH --time=02:00:00
+#SBATCH --time=03:59:00
 #SBATCH --output=scale-sim-%j.out
-# NOTE: this cluster's CPU QOS caps wall-clock at 2h. Keep --time<=02:00:00 and
-# submit one job per experiment in parallel (see submit_slurm_suite.sh) rather
-# than running the whole suite in a single job.
+# NOTE: the cpu_short partition/QOS caps wall-clock at 4h. Keep --time<=03:59:00
+# and submit one job per experiment in parallel (see submit_slurm_suite.sh)
+# rather than running the whole suite in a single job.
 
 set -euo pipefail
 

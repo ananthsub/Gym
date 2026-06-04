@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Submit the scale-sim experiment suite as one Slurm job PER experiment, in
-# parallel. This cluster's CPU QOS caps wall-clock at 2h, so the full suite
-# cannot run in a single job — splitting it one-per-experiment keeps every job
-# under the cap and makes end-to-end wall-clock max(job) instead of sum(job).
+# parallel. The cpu_short partition/QOS caps wall-clock at 4h, so the full suite
+# is split one-per-experiment: every job stays under the cap and end-to-end
+# wall-clock becomes max(job) instead of sum(job).
 # Each job runs on its own --exclusive node, so there are no port/Ray collisions
 # between jobs. All jobs share LABEL=slurm-cpu, so their per-experiment CSVs land
 # together in tools/scale_sim/findings/slurm-cpu/ for the report.
@@ -25,10 +25,10 @@ if [ ! -f pyproject.toml ] || [ ! -d nemo_gym ]; then
 fi
 
 LABEL="${LABEL:-slurm-cpu}"
-TIME="${TIME:-02:00:00}"          # CPU QOS cap is 2h; do not exceed.
+TIME="${TIME:-03:59:00}"            # cpu_short QOS caps wall-clock at 4h.
 ACCOUNT="${ACCOUNT:-coreai_dlalgo_nemofw}"
-PARTITION="${PARTITION:-cpu}"
-QOS="${QOS:-}"                    # leave empty unless your QOS needs naming
+PARTITION="${PARTITION:-cpu_short}"
+QOS="${QOS:-cpu_short}"
 
 ALL_EXPERIMENTS=(
   concurrency_scaling

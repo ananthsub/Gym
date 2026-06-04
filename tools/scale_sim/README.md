@@ -101,17 +101,18 @@ uv venv --python 3.12 && uv sync --extra dev
 exit
 ```
 
-**Recommended: submit one job per experiment in parallel.** This cluster's CPU
-QOS caps wall-clock at **2 hours**, so the full suite cannot run in a single job.
-`submit_slurm_suite.sh` submits one `--exclusive` job per experiment (each under
-the 2h cap), all sharing `LABEL=slurm-cpu` so their per-experiment CSVs land
-together. End-to-end wall-clock becomes the slowest single experiment, not the
-sum. Run from the repo root:
+**Recommended: submit one job per experiment in parallel.** The `cpu_short`
+partition/QOS caps wall-clock at **4 hours**, so the full suite is split one job
+per experiment. `submit_slurm_suite.sh` submits one `--exclusive` job per
+experiment (each under the 4h cap), all sharing `LABEL=slurm-cpu` so their
+per-experiment CSVs land together. End-to-end wall-clock becomes the slowest
+single experiment, not the sum. Run from the repo root:
 
 ```bash
 bash tools/scale_sim/submit_slurm_suite.sh                      # all experiments
 bash tools/scale_sim/submit_slurm_suite.sh concurrency_scaling agent_fan_out  # subset
-# overrides: LABEL=slurm-cpu TIME=01:30:00 QOS=<name> bash tools/scale_sim/submit_slurm_suite.sh
+# overrides: LABEL=slurm-cpu TIME=03:59:00 PARTITION=cpu_short QOS=cpu_short \
+#     bash tools/scale_sim/submit_slurm_suite.sh
 ```
 
 The submitter pre-generates the shared driver data (`data/bench.jsonl` and the
@@ -120,8 +121,8 @@ to create the same files on the shared filesystem.
 
 **Single job (one experiment, or the workstation baseline).** `run_on_slurm.sh`
 runs one job. Its `#SBATCH` defaults target this cluster (`coreai_dlalgo_nemofw`
-/ `cpu` / `--exclusive` / `--mem=0` / `--cpus-per-task=40` / `-t 02:00:00`); CLI
-flags override them:
+/ `cpu_short` / `--qos=cpu_short` / `--exclusive` / `--mem=0` /
+`--cpus-per-task=40` / `-t 03:59:00`); CLI flags override them:
 
 ```bash
 LABEL=slurm-cpu EXPERIMENTS="--experiment concurrency_scaling" \
