@@ -1,2 +1,11 @@
+# Run artifacts are scratch by default — ignore everything.
 *
 !.gitignore
+
+# Exception: keep the committed slurm-cpu analysis artifacts so results can be
+# re-analyzed offline (analyze_throughput.py reads per_rollout_retries.jsonl
+# from here). Verbose server/driver logs stay ignored — they are large and not
+# analysis data.
+!slurm-cpu/
+!slurm-cpu/**
+slurm-cpu/**/*.log

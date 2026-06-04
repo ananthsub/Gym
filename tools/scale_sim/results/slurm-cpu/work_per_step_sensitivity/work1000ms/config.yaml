@@ -1,0 +1,60 @@
+head_server:
+  host: 0.0.0.0
+  port: 5000
+global_aiohttp_connector_limit: 102400
+global_aiohttp_connector_limit_per_host: 16384
+synthetic_resources_inst:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 0
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 0
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      port: 5001
+synthetic_model_inst:
+  responses_api_models:
+    synthetic_model:
+      entrypoint: app.py
+      async_latency_ms: 1000
+      cpu_burn_ms: 0
+      prompt_tokens: 512
+      output_tokens: 256
+      include_token_ids_and_log_probs: true
+      n_reasoning_items: 0
+      reasoning_tokens_per_item: 0
+      tool_name: synthetic_tool
+      port: 5002
+synthetic_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_inst
+      model_server:
+        type: responses_api_models
+        name: synthetic_model_inst
+      datasets:
+      - name: single_agent
+        type: example
+        jsonl_fpath: data/single_agent_10k.jsonl
+        num_repeats: 1
+      port: 5003
+scale_sim:
+  agent_name: synthetic_simple_agent
+  concurrency: 64
+  total_requests: 20000
+  early_stop_failure_rate: 1.0
+  early_stop_retry_rate: 1.0
+  early_stop_wall_clock_s: 240
+  early_stop_window_s: 30

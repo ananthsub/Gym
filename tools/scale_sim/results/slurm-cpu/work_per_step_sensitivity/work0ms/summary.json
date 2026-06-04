@@ -1,0 +1,55 @@
+{
+  "config_path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemofw/users/ansubramania/dev/Gym/tools/scale_sim/results/_generated/slurm-cpu/work_per_step_sensitivity_work0ms.yaml",
+  "input_jsonl_path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemofw/users/ansubramania/dev/Gym/tools/scale_sim/data/bench.jsonl",
+  "agent_name": "synthetic_simple_agent",
+  "agent_names": [
+    "synthetic_simple_agent"
+  ],
+  "n_agents": 1,
+  "concurrency": 64,
+  "total_requests": 20000,
+  "semaphore_enabled": true,
+  "stop_reason": "wall_clock>300.0s",
+  "wall_clock_s": 300.328004215844,
+  "throughput_rollouts_per_s": 13.588476408170745,
+  "completion_rate": 0.20405,
+  "saturated": true,
+  "retry_summary": {
+    "n_rollouts": 4081,
+    "failure_rate": 0.000490075961774075,
+    "retry_rate": 0.0,
+    "p_at_least_1_retry": 0.0,
+    "p_at_least_2_retries": 0.0,
+    "p_at_least_5_retries": 0.0,
+    "p_at_least_10_retries": 0.0,
+    "n_attempts_mean": 1.0,
+    "n_attempts_p50": 1,
+    "n_attempts_p99": 1,
+    "n_attempts_max": 1,
+    "error_class_counts": {}
+  },
+  "latency_summary": {
+    "n_completed_with_latency": 4079,
+    "p50_s": 4.583541505038738,
+    "p90_s": 5.784720889758319,
+    "p99_s": 6.403244108892977,
+    "p999_s": 6.716252110898495,
+    "max_s": 6.933635923080146
+  },
+  "per_agent": {
+    "synthetic_simple_agent": {
+      "n_rollouts": 4081,
+      "failure_rate": 0.000490075961774075,
+      "retry_rate": 0.0,
+      "p_at_least_1_retry": 0.0,
+      "p_at_least_2_retries": 0.0,
+      "p_at_least_5_retries": 0.0,
+      "p_at_least_10_retries": 0.0,
+      "n_attempts_mean": 1.0,
+      "n_attempts_p50": 1,
+      "n_attempts_p99": 1,
+      "n_attempts_max": 1,
+      "error_class_counts": {}
+    }
+  }
+}

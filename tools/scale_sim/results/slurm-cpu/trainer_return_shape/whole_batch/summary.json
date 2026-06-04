@@ -1,0 +1,49 @@
+{
+  "mode": "sync_blocking",
+  "config_path": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemofw/users/ansubramania/dev/Gym/tools/scale_sim/configs/actor_repro.yaml",
+  "input_jsonl": "/lustre/fs1/portfolios/coreai/projects/coreai_dlalgo_nemofw/users/ansubramania/dev/Gym/tools/scale_sim/data/bench.jsonl",
+  "thread_count": 256,
+  "prompts_per_call": 1,
+  "num_steps": 5,
+  "in_actor_retry_payload_error": false,
+  "in_actor_retry_sleep_s": 0.5,
+  "worker_max_retries": 0,
+  "worker_retry_base_s": 1.0,
+  "rollouts_per_step_target": 256,
+  "n_steps_completed": 5,
+  "run_wall_clock_s": 156.85869908332825,
+  "rows": {
+    "n_attempted": 1280,
+    "n_succeeded": 1280,
+    "n_failed": 0,
+    "failure_rate": 0.0
+  },
+  "error_class_counts": {},
+  "per_row_latency_s": {
+    "n": 1280,
+    "p50": 23.40286781900795,
+    "p99": 31.48459699888248,
+    "max": 31.65559994796058,
+    "mean": 22.64830911991812
+  },
+  "per_call_latency_s": {
+    "n": 1280,
+    "p50": 23.589315825491212,
+    "p99": 31.564480668029866,
+    "max": 31.69224371103337
+  },
+  "step_wall_clock_s": {
+    "n": 5,
+    "p50": 28.340877524984535,
+    "p99": 31.640278731547298,
+    "max": 31.698268718027975,
+    "all": [
+      31.698268718027975,
+      24.44391429598909,
+      30.24851905601099,
+      28.340877524984535,
+      27.10762647597585
+    ]
+  },
+  "straggler_blocking_factor": 1.211000196393277
+}

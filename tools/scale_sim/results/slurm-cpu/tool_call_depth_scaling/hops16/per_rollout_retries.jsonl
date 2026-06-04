@@ -1,0 +1,8 @@
+{"rollout_idx":0,"n_attempts":1,"n_retries":0,"error_classes":[],"succeeded":true,"completed_at":1780610601.928214,"agent_name":"synthetic_simple_agent"}
+{"rollout_idx":1,"n_attempts":1,"n_retries":0,"error_classes":[],"succeeded":true,"completed_at":1780610602.0956938,"agent_name":"synthetic_simple_agent"}
+{"rollout_idx":2,"n_attempts":1,"n_retries":0,"error_classes":[],"succeeded":true,"completed_at":1780610602.2614202,"agent_name":"synthetic_simple_agent"}
+{"rollout_idx":3,"n_attempts":1,"n_retries":0,"error_classes":[],"succeeded":true,"completed_at":1780610602.4283266,"agent_name":"synthetic_simple_agent"}
+{"rollout_idx":4,"n_attempts":1,"n_retries":0,"error_classes":[],"succeeded":true,"completed_at":1780610602.5944176,"agent_name":"synthetic_simple_agent"}
+{"rollout_idx":5,"n_attempts":1,"n_retries":0,"error_classes":[],"succeeded":true,"completed_at":1780610602.7610235,"agent_name":"synthetic_simple_agent"}
+{"rollout_idx":6,"n_attempts":1,"n_retries":0,"error_classes":[],"succeeded":true,"completed_at":1780610602.928086,"agent_name":"synthetic_simple_agent"}
+{"rollout_idx":7,"n_attempts":1,"n_retries":0,"error_classes":[],"succeeded":true,"completed_at":1780610603.0943341,"agent_name":"synthetic_simple_agent"}

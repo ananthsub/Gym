@@ -1,0 +1,1245 @@
+head_server:
+  host: 0.0.0.0
+  port: 5000
+global_aiohttp_connector_limit: 102400
+global_aiohttp_connector_limit_per_host: 16384
+skip_venv_if_present: true
+scale_sim:
+  concurrency: 8192
+  total_requests: 20000
+  semaphore_enabled: true
+  early_stop_failure_rate: 1.0
+  early_stop_retry_rate: 1.0
+  early_stop_wall_clock_s: 240
+  early_stop_window_s: 30
+  agent_names:
+  - synthetic_simple_agent_0
+  - synthetic_simple_agent_1
+  - synthetic_simple_agent_2
+  - synthetic_simple_agent_3
+  - synthetic_simple_agent_4
+  - synthetic_simple_agent_5
+  - synthetic_simple_agent_6
+  - synthetic_simple_agent_7
+  - synthetic_simple_agent_8
+  - synthetic_simple_agent_9
+  - synthetic_simple_agent_10
+  - synthetic_simple_agent_11
+  - synthetic_simple_agent_12
+  - synthetic_simple_agent_13
+  - synthetic_simple_agent_14
+  - synthetic_simple_agent_15
+  - synthetic_simple_agent_16
+  - synthetic_simple_agent_17
+  - synthetic_simple_agent_18
+  - synthetic_simple_agent_19
+  - synthetic_simple_agent_20
+  - synthetic_simple_agent_21
+  - synthetic_simple_agent_22
+  - synthetic_simple_agent_23
+  - synthetic_simple_agent_24
+  - synthetic_simple_agent_25
+  - synthetic_simple_agent_26
+  - synthetic_simple_agent_27
+  - synthetic_simple_agent_28
+  - synthetic_simple_agent_29
+  - synthetic_simple_agent_30
+  - synthetic_simple_agent_31
+shared_synthetic_model:
+  responses_api_models:
+    synthetic_model:
+      entrypoint: app.py
+      async_latency_ms: 200
+      cpu_burn_ms: 0
+      prompt_tokens: 512
+      output_tokens: 65536
+      chars_per_token: 4
+      include_token_ids_and_log_probs: true
+      n_reasoning_items: 0
+      reasoning_tokens_per_item: 0
+      tool_name: synthetic_tool
+      port: 5001
+synthetic_resources_0:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5002
+synthetic_resources_1:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5003
+synthetic_resources_2:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5004
+synthetic_resources_3:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5005
+synthetic_resources_4:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5006
+synthetic_resources_5:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5007
+synthetic_resources_6:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5008
+synthetic_resources_7:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5009
+synthetic_resources_8:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5010
+synthetic_resources_9:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5011
+synthetic_resources_10:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5012
+synthetic_resources_11:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5013
+synthetic_resources_12:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5014
+synthetic_resources_13:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5015
+synthetic_resources_14:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5016
+synthetic_resources_15:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5017
+synthetic_resources_16:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5018
+synthetic_resources_17:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5019
+synthetic_resources_18:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5020
+synthetic_resources_19:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5021
+synthetic_resources_20:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5022
+synthetic_resources_21:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5023
+synthetic_resources_22:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5024
+synthetic_resources_23:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5025
+synthetic_resources_24:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5026
+synthetic_resources_25:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5027
+synthetic_resources_26:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5028
+synthetic_resources_27:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5029
+synthetic_resources_28:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5030
+synthetic_resources_29:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5031
+synthetic_resources_30:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5032
+synthetic_resources_31:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 100
+        cpu_burn_ms: 0
+        body_size_bytes: 16384
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 50
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      inject_500_rate: 0.0
+      inject_hang_rate: 0.0
+      port: 5033
+synthetic_simple_agent_0:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_0
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5034
+synthetic_simple_agent_1:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_1
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5035
+synthetic_simple_agent_2:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_2
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5036
+synthetic_simple_agent_3:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_3
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5037
+synthetic_simple_agent_4:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_4
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5038
+synthetic_simple_agent_5:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_5
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5039
+synthetic_simple_agent_6:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_6
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5040
+synthetic_simple_agent_7:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_7
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5041
+synthetic_simple_agent_8:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_8
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5042
+synthetic_simple_agent_9:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_9
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5043
+synthetic_simple_agent_10:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_10
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5044
+synthetic_simple_agent_11:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_11
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5045
+synthetic_simple_agent_12:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_12
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5046
+synthetic_simple_agent_13:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_13
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5047
+synthetic_simple_agent_14:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_14
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5048
+synthetic_simple_agent_15:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_15
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5049
+synthetic_simple_agent_16:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_16
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5050
+synthetic_simple_agent_17:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_17
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5051
+synthetic_simple_agent_18:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_18
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5052
+synthetic_simple_agent_19:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_19
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5053
+synthetic_simple_agent_20:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_20
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5054
+synthetic_simple_agent_21:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_21
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5055
+synthetic_simple_agent_22:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_22
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5056
+synthetic_simple_agent_23:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_23
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5057
+synthetic_simple_agent_24:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_24
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5058
+synthetic_simple_agent_25:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_25
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5059
+synthetic_simple_agent_26:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_26
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5060
+synthetic_simple_agent_27:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_27
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5061
+synthetic_simple_agent_28:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_28
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5062
+synthetic_simple_agent_29:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_29
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5063
+synthetic_simple_agent_30:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_30
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5064
+synthetic_simple_agent_31:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      max_steps: 1
+      domain: other
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_31
+      model_server:
+        type: responses_api_models
+        name: shared_synthetic_model
+      datasets:
+      - name: multi_agent
+        type: example
+        jsonl_fpath: data/multi_agent_10k.jsonl
+        num_repeats: 1
+      port: 5065
