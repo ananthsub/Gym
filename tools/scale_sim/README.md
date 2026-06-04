@@ -56,6 +56,51 @@ ulimit -Sn $(ulimit -Hn)        # raise the soft FD limit to the hard limit
 The synthetic servers get their own per-server venvs the first time `ng_run`
 launches them, so the first run is slow.
 
+## Experiment suite
+
+`run_experiments.py` runs the defined experiments end to end, captures the host
+specs, and writes comparable summaries. Each experiment varies one thing and
+holds the rest fixed:
+
+| Name | Varies | Tells us |
+| --- | --- | --- |
+| `concurrency_scaling` | simultaneous rollouts (64 → 131072) | most rollouts/sec the node sustains, and where latency climbs |
+| `response_size_scaling` | response body (token ids + log probs for 16K → 10M context) | cost of serializing/transferring/parsing big bodies; where memory bites |
+| `tool_call_depth_scaling` | tool/model calls per rollout (1 → 8) | the fixed overhead repeated on each HTTP round trip |
+| `work_per_step_sensitivity` | simulated work per call (0 → 1000 ms) | how much framework overhead matters once each step does real work |
+| `agent_fan_out` | number of agent servers (1 → 32) at fixed per-agent load | how spreading load across agents changes throughput and latency |
+| `trainer_return_shape` | whole-batch vs streaming returns through the Ray actor | whether the Ray-actor boundary adds failures |
+
+Run it interactively (a menu) or with flags:
+
+```bash
+cd tools/scale_sim
+python run_experiments.py --list
+python run_experiments.py --experiment concurrency_scaling --label workstation
+python run_experiments.py --all --label workstation
+```
+
+Outputs:
+
+- Raw per-cell artifacts under `results/<label>/...` (gitignored).
+- One compact summary CSV per experiment under `findings/<label>/`, plus
+  `findings/<label>/host.json` with CPU/RAM/FD-limit/OS/git-SHA. These are
+  committed, so results from different machines (e.g. `workstation`, `slurm-cpu`)
+  sit side by side for comparison.
+
+### Running on a Slurm cluster
+
+From the repo root, submit the wrapper with your account and partition (it sets
+up the venv, runs the suite, and writes `findings/<LABEL>/`):
+
+```bash
+LABEL=slurm-cpu sbatch -A <account> -p <cpu-partition> -t 04:00:00 \
+    tools/scale_sim/run_on_slurm.sh
+```
+
+Use a distinct `LABEL` per hardware so the cluster results land in their own
+`findings/` directory and do not collide with the workstation results.
+
 ## Smoke test
 
 ```bash

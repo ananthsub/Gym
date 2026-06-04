@@ -126,6 +126,7 @@ class LoadDriver:
         self._latencies: List[float] = []
         self._stop_requested = False
         self._stop_reason: Optional[str] = None
+        self._run_wall_s: Optional[float] = None
 
     def _load_input_rows(self) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
@@ -223,6 +224,7 @@ class LoadDriver:
             async with semaphore:  # type: ignore[union-attr]
                 await _post_subroutine(row)
 
+        run_start_s = time.perf_counter()
         try:
             futures = [asyncio.create_task(_wrapper(row)) for row in rows]
             for fut in tqdm(asyncio.as_completed(futures), total=len(futures), desc="rollouts"):
@@ -233,6 +235,7 @@ class LoadDriver:
                         f.cancel()
                     break
         finally:
+            self._run_wall_s = time.perf_counter() - run_start_s
             summary_task.cancel()
             try:
                 await summary_task
@@ -346,6 +349,12 @@ class LoadDriver:
 
     def _dump_final_summary(self) -> None:
         all_summary = self.tracker.summary_all()
+        # Throughput: completed rollouts per second of wall clock. This is the
+        # capacity number — latency percentiles describe one rollout's wait,
+        # throughput describes how many the node clears per second.
+        n_completed = all_summary.get("n_rollouts", 0)
+        wall_s = self._run_wall_s
+        throughput = (n_completed / wall_s) if (wall_s and wall_s > 0) else None
         # Latency percentiles
         latency_summary: Dict[str, Any]
         if self._latencies:
@@ -376,6 +385,8 @@ class LoadDriver:
             "total_requests": self.total_requests,
             "semaphore_enabled": self.semaphore_enabled,
             "stop_reason": self._stop_reason,
+            "wall_clock_s": wall_s,
+            "throughput_rollouts_per_s": throughput,
             "retry_summary": all_summary,
             "latency_summary": latency_summary,
         }
