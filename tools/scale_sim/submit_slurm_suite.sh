@@ -52,6 +52,20 @@ if [ ! -d .venv ]; then
   exit 1
 fi
 
+# Pre-generate the shared driver data BEFORE submitting. run_experiments.py's
+# _ensure_data() lazily creates these on first use; with N parallel jobs sharing
+# one repo on a network filesystem, that becomes a write race on the same files.
+# Generating them here (idempotent — skipped if present) removes the race.
+DATA_DIR="tools/scale_sim/data"
+if [ ! -f "${DATA_DIR}/bench.jsonl" ]; then
+  echo "[suite] pre-generating ${DATA_DIR}/bench.jsonl"
+  .venv/bin/python "${DATA_DIR}/generate_data.py" \
+    --n 2000 --user-input-size-bytes 512 --output "${DATA_DIR}/bench.jsonl"
+fi
+for declared in single_agent_10k.jsonl multi_agent_10k.jsonl; do
+  [ -f "${DATA_DIR}/${declared}" ] || cp -f "${DATA_DIR}/bench.jsonl" "${DATA_DIR}/${declared}"
+done
+
 echo "[suite] label=${LABEL} time=${TIME} account=${ACCOUNT} partition=${PARTITION} qos=${QOS:-<none>}"
 echo "[suite] submitting ${#EXPERIMENTS[@]} experiment job(s): ${EXPERIMENTS[*]}"
 

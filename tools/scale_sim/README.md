@@ -101,24 +101,56 @@ uv venv --python 3.12 && uv sync --extra dev
 exit
 ```
 
-Then submit the wrapper from the repo root. The `#SBATCH` defaults already
-target this cluster (`coreai_dlalgo_nemofw` / `cpu` / `--exclusive` / `--mem=0` /
-`--cpus-per-task=40` / `-t 08:00:00`); CLI flags override them:
+**Recommended: submit one job per experiment in parallel.** This cluster's CPU
+QOS caps wall-clock at **2 hours**, so the full suite cannot run in a single job.
+`submit_slurm_suite.sh` submits one `--exclusive` job per experiment (each under
+the 2h cap), all sharing `LABEL=slurm-cpu` so their per-experiment CSVs land
+together. End-to-end wall-clock becomes the slowest single experiment, not the
+sum. Run from the repo root:
 
 ```bash
-LABEL=slurm-cpu sbatch tools/scale_sim/run_on_slurm.sh
-# subset:
+bash tools/scale_sim/submit_slurm_suite.sh                      # all experiments
+bash tools/scale_sim/submit_slurm_suite.sh concurrency_scaling agent_fan_out  # subset
+# overrides: LABEL=slurm-cpu TIME=01:30:00 QOS=<name> bash tools/scale_sim/submit_slurm_suite.sh
+```
+
+The submitter pre-generates the shared driver data (`data/bench.jsonl` and the
+declared dataset copies) **before** submitting, so the parallel jobs don't race
+to create the same files on the shared filesystem.
+
+**Single job (one experiment, or the workstation baseline).** `run_on_slurm.sh`
+runs one job. Its `#SBATCH` defaults target this cluster (`coreai_dlalgo_nemofw`
+/ `cpu` / `--exclusive` / `--mem=0` / `--cpus-per-task=40` / `-t 02:00:00`); CLI
+flags override them:
+
+```bash
 LABEL=slurm-cpu EXPERIMENTS="--experiment concurrency_scaling" \
     sbatch tools/scale_sim/run_on_slurm.sh
+# fast end-to-end sanity check before the long runs:
+SMOKE=1 LABEL=smoke sbatch --export=ALL,SMOKE=1 -t 00:30:00 tools/scale_sim/run_on_slurm.sh
+# workstation baseline (no Slurm, builds .venv if missing):
+LABEL=workstation bash tools/scale_sim/run_on_slurm.sh
 ```
 
 The wrapper sets `RAY_TMPDIR=/tmp`, raises the FD soft limit to the hard limit
 (handling an `unlimited` hard limit), and sources `_ray_burst_env.sh` so ng_run
 reaches "All N/N servers ready" at high sub-server fan-out. Use a distinct
 `LABEL` per hardware so cluster results land in their own `findings/` directory
-and sit beside the workstation results rather than colliding with them. The same
-script collects the workstation baseline directly:
-`LABEL=workstation bash tools/scale_sim/run_on_slurm.sh`.
+and sit beside the workstation results rather than colliding with them.
+
+### Reproducing / collecting results
+
+- Per-experiment summaries: `tools/scale_sim/findings/<LABEL>/<experiment>.csv`
+  (committed). Host specs: `findings/<LABEL>/host.json`. Raw per-cell artifacts:
+  `results/<LABEL>/...` (gitignored).
+- Monitor: `squeue -u $USER`; live stdout per job: `tail -f scale-sim-<jobid>.out`
+  (written to the submit dir / repo root).
+- Parallel jobs do **not** clobber each other: each writes a distinct
+  `<experiment>.csv` and `results/<LABEL>/<experiment>/` subtree. `host.json` is
+  shared (last writer wins); since all CPU nodes are identical this is fine.
+- Don't edit `run_experiments.py` / `sweep_runner.py` / `load_driver.py` while
+  jobs are queued or running — they're read from the working tree at runtime, so
+  in-flight edits would change behavior mid-run.
 
 ## Smoke test
 
