@@ -189,6 +189,7 @@ def _pre_cell_cleanup() -> None:
         "pre-cell pkill",
         "pkill -9 -f 'raylet|gcs_server|plasma_store|ng_run|nemo_gym"
         "|synthetic_resources|synthetic_model|simple_agent"
+        "|load_driver|mock_trainer"
         "|ray::|ray/_private/log_monitor|ray/autoscaler/_private/monitor"
         "|ray/dashboard/dashboard|ray.util.client.server"
         "|app\\.py|app\\.so' || true",

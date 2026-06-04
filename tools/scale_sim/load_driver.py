@@ -387,6 +387,14 @@ class LoadDriver:
             "stop_reason": self._stop_reason,
             "wall_clock_s": wall_s,
             "throughput_rollouts_per_s": throughput,
+            # completion_rate = fraction of attempted rollouts that finished within
+            # the window. At saturation this drops far below 1 while failure_rate
+            # stays near 0 — i.e. the cell is throughput-limited, not failing.
+            "completion_rate": (n_completed / self.total_requests) if self.total_requests else None,
+            # saturated = the cell hit the wall-clock cap rather than draining all
+            # requests. Latency percentiles below are over completed rollouts only,
+            # so they understate latency when saturated is true.
+            "saturated": bool(self._stop_reason and "wall_clock" in str(self._stop_reason)),
             "retry_summary": all_summary,
             "latency_summary": latency_summary,
         }

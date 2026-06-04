@@ -328,6 +328,8 @@ def _read_load_summary(d: Path) -> Dict[str, Any]:
         "p50_s": lat.get("p50_s"),
         "p99_s": lat.get("p99_s"),
         "failure_rate": retry.get("failure_rate"),
+        "completion_rate": s.get("completion_rate"),
+        "saturated": s.get("saturated"),
         "completed": retry.get("n_rollouts"),
         "wall_s": s.get("wall_clock_s"),
         "stop_reason": s.get("stop_reason"),
@@ -340,11 +342,14 @@ def _read_trainer_summary(d: Path) -> Dict[str, Any]:
     lat = s.get("per_row_latency_s", {})
     wall = s.get("run_wall_clock_s")
     done = rows.get("n_succeeded") or 0
+    attempted = rows.get("n_attempted") or 0
     return {
         "throughput_rps": (done / wall) if wall else None,
         "p50_s": lat.get("p50"),
         "p99_s": lat.get("p99"),
         "failure_rate": rows.get("failure_rate"),
+        "completion_rate": (done / attempted) if attempted else None,
+        "saturated": False,
         "completed": done,
         "wall_s": wall,
         "stop_reason": None,
