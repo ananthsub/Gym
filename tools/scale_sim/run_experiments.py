@@ -425,6 +425,14 @@ def run_experiment(exp: str, label: str, input_jsonl: Path) -> List[Dict[str, An
 
 def _run_return_shape_cell(cell: Dict[str, Any], out_dir: Path, input_jsonl: Path) -> Dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
+    # mock_trainer.py connects with ray.init(address="auto"), so it needs a
+    # running cluster. The single_agent/fan_out cells get this from
+    # sweep_runner._run_one_cell; this cell calls mock_trainer directly, so we
+    # must clear stale Ray state and pre-start the pinned-port cluster ourselves.
+    # Without this the experiment only works as the last cell of --all (inheriting
+    # a leftover cluster) and fails when run standalone on a fresh Slurm node.
+    sweep_runner._pre_cell_cleanup()
+    sweep_runner._pre_start_ray()
     cmd = [
         sys.executable,
         "-u",

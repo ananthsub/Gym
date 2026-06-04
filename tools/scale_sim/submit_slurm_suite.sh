@@ -1,0 +1,76 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Submit the scale-sim experiment suite as one Slurm job PER experiment, in
+# parallel. This cluster's CPU QOS caps wall-clock at 2h, so the full suite
+# cannot run in a single job — splitting it one-per-experiment keeps every job
+# under the cap and makes end-to-end wall-clock max(job) instead of sum(job).
+# Each job runs on its own --exclusive node, so there are no port/Ray collisions
+# between jobs. All jobs share LABEL=slurm-cpu, so their per-experiment CSVs land
+# together in tools/scale_sim/findings/slurm-cpu/ for the report.
+#
+# Prereq: build .venv once (see run_on_slurm.sh header), then from the repo root:
+#
+#     bash tools/scale_sim/submit_slurm_suite.sh                 # all experiments
+#     bash tools/scale_sim/submit_slurm_suite.sh concurrency_scaling agent_fan_out
+#
+# Override defaults via env: LABEL, TIME, ACCOUNT, PARTITION, QOS.
+
+set -euo pipefail
+
+if [ ! -f pyproject.toml ] || [ ! -d nemo_gym ]; then
+  echo "Run from the NeMo Gym repo root." >&2
+  exit 1
+fi
+
+LABEL="${LABEL:-slurm-cpu}"
+TIME="${TIME:-02:00:00}"          # CPU QOS cap is 2h; do not exceed.
+ACCOUNT="${ACCOUNT:-coreai_dlalgo_nemofw}"
+PARTITION="${PARTITION:-cpu}"
+QOS="${QOS:-}"                    # leave empty unless your QOS needs naming
+
+ALL_EXPERIMENTS=(
+  concurrency_scaling
+  response_size_scaling
+  tool_call_depth_scaling
+  work_per_step_sensitivity
+  agent_fan_out
+  trainer_return_shape
+)
+
+if [ "$#" -gt 0 ]; then
+  EXPERIMENTS=("$@")
+else
+  EXPERIMENTS=("${ALL_EXPERIMENTS[@]}")
+fi
+
+if [ ! -d .venv ]; then
+  echo "ERROR: .venv not found. Build it once in an interactive allocation:" >&2
+  echo "  salloc -A ${ACCOUNT} -p ${PARTITION} --nodes=1 --time=1:00:00 --exclusive --mem=0" >&2
+  echo "  cd $(pwd) && export UV_LINK_MODE=copy RAY_TMPDIR=/tmp && uv venv --python 3.12 && uv sync --extra dev" >&2
+  exit 1
+fi
+
+echo "[suite] label=${LABEL} time=${TIME} account=${ACCOUNT} partition=${PARTITION} qos=${QOS:-<none>}"
+echo "[suite] submitting ${#EXPERIMENTS[@]} experiment job(s): ${EXPERIMENTS[*]}"
+
+qos_opt=()
+[ -n "${QOS}" ] && qos_opt=(--qos="${QOS}")
+
+for exp in "${EXPERIMENTS[@]}"; do
+  echo "[suite] === sbatch ${exp} (TIME=${TIME}) ==="
+  LABEL="${LABEL}" EXPERIMENTS="--experiment ${exp}" \
+    sbatch \
+      --account="${ACCOUNT}" \
+      --partition="${PARTITION}" \
+      --time="${TIME}" \
+      --job-name="scale-${exp}" \
+      "${qos_opt[@]}" \
+      tools/scale_sim/run_on_slurm.sh
+done
+
+echo
+echo "[suite] all submitted. Watch:   squeue -u \$USER"
+echo "[suite] results land in:        tools/scale_sim/findings/${LABEL}/<experiment>.csv"
+echo "[suite] per-job stdout:         scale-sim-<jobid>.out (repo root)"

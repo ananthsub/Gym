@@ -90,16 +90,35 @@ Outputs:
 
 ### Running on a Slurm cluster
 
-From the repo root, submit the wrapper with your account and partition (it sets
-up the venv, runs the suite, and writes `findings/<LABEL>/`):
+Build the venv once in an interactive allocation (the compute partition may lack
+internet, and a cold `uv sync` over Lustre would eat job wall-clock):
 
 ```bash
-LABEL=slurm-cpu sbatch -A <account> -p <cpu-partition> -t 04:00:00 \
-    tools/scale_sim/run_on_slurm.sh
+salloc -A coreai_dlalgo_nemofw -p cpu --nodes=1 --time=1:00:00 --exclusive --mem=0
+cd <repo-root>
+export UV_LINK_MODE=copy RAY_TMPDIR=/tmp
+uv venv --python 3.12 && uv sync --extra dev
+exit
 ```
 
-Use a distinct `LABEL` per hardware so the cluster results land in their own
-`findings/` directory and do not collide with the workstation results.
+Then submit the wrapper from the repo root. The `#SBATCH` defaults already
+target this cluster (`coreai_dlalgo_nemofw` / `cpu` / `--exclusive` / `--mem=0` /
+`--cpus-per-task=40` / `-t 08:00:00`); CLI flags override them:
+
+```bash
+LABEL=slurm-cpu sbatch tools/scale_sim/run_on_slurm.sh
+# subset:
+LABEL=slurm-cpu EXPERIMENTS="--experiment concurrency_scaling" \
+    sbatch tools/scale_sim/run_on_slurm.sh
+```
+
+The wrapper sets `RAY_TMPDIR=/tmp`, raises the FD soft limit to the hard limit
+(handling an `unlimited` hard limit), and sources `_ray_burst_env.sh` so ng_run
+reaches "All N/N servers ready" at high sub-server fan-out. Use a distinct
+`LABEL` per hardware so cluster results land in their own `findings/` directory
+and sit beside the workstation results rather than colliding with them. The same
+script collects the workstation baseline directly:
+`LABEL=workstation bash tools/scale_sim/run_on_slurm.sh`.
 
 ## Smoke test
 
