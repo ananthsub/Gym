@@ -22,11 +22,13 @@ Run interactively (a menu) or with flags for batch / cluster use:
 from __future__ import annotations
 
 import argparse
+import atexit
 import csv
 import json
 import os
 import platform
 import resource
+import signal
 import socket
 import subprocess
 import sys
@@ -57,6 +59,29 @@ AGENT = "synthetic_simple_agent.responses_api_agents.simple_agent"
 # Approximate wire bytes per token once token ids + log probs + text are
 # serialized to JSON (used only to annotate response-size cells).
 BYTES_PER_TOKEN = 26
+
+
+# --------------------------------------------------------------------------- #
+# Cleanup
+# --------------------------------------------------------------------------- #
+def cleanup_processes() -> None:
+    """Kill leftover ng_run / Ray / synthetic-server processes and clear Ray state.
+
+    sweep_runner cleans up before each cell, but the last cell's pre-started Ray
+    cluster survives the run, and a kill mid-run strands the active ng_run. We
+    run this at startup (clean slate), at normal exit, and on SIGINT/SIGTERM so
+    an interrupted run never leaves processes holding ports.
+    """
+    try:
+        sweep_runner._pre_cell_cleanup()
+    except Exception as e:  # never let cleanup raise
+        print(f"[cleanup] warning: {e}", file=sys.stderr, flush=True)
+
+
+def _on_signal(signum, _frame) -> None:
+    print(f"\n[run_experiments] signal {signum} received — cleaning up leftover processes...", flush=True)
+    cleanup_processes()
+    sys.exit(130)
 
 
 # --------------------------------------------------------------------------- #
@@ -464,11 +489,17 @@ def main() -> None:
     p.add_argument("--all", action="store_true", help="Run all experiments.")
     p.add_argument("--label", default=None, help="Hardware label for the results dir (e.g. workstation, slurm-cpu).")
     p.add_argument("--list", action="store_true", help="List experiments and exit.")
+    p.add_argument("--cleanup", action="store_true", help="Kill leftover ng_run/Ray/server processes and exit.")
     args = p.parse_args()
 
     if args.list:
         for n, s in EXPERIMENTS.items():
             print(f"{n}\n    {s['blurb']}")
+        return
+
+    if args.cleanup:
+        cleanup_processes()
+        print("Cleanup complete.")
         return
 
     if args.all:
@@ -485,6 +516,13 @@ def main() -> None:
     info = host_info(label)
     (FINDINGS / label / "host.json").write_text(json.dumps(info, indent=2))
     print(f"host: {info['hostname']} | {info['cpu_count']} cores | {info['mem_gb']} GB | label={label}")
+
+    # Clean any leftovers from a previous run, and make sure we clean up on exit
+    # or interrupt so we never strand ng_run / Ray / server processes.
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+    atexit.register(cleanup_processes)
+    cleanup_processes()
 
     input_jsonl = _ensure_data()
     for exp in to_run:
