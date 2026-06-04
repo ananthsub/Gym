@@ -1,0 +1,13 @@
+{
+  "label": "slurm-cpu",
+  "hostname": "cpu1-00091",
+  "cpu_model": "Intel(R) Xeon(R) Gold 6442Y",
+  "cpu_count": 96,
+  "mem_gb": 251.6,
+  "fd_limit_soft": 131072,
+  "fd_limit_hard": 131072,
+  "platform": "Linux-5.19.0-45-generic-x86_64-with-glibc2.35",
+  "python": "3.12.12",
+  "git_sha": "74056f89",
+  "timestamp": "2026-06-04T15:00:09-0700"
+}
