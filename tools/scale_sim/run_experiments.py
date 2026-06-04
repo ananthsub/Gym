@@ -418,7 +418,8 @@ def run_experiment(exp: str, label: str, input_jsonl: Path) -> List[Dict[str, An
         row = {cell["value_col"]: cell["value"], **cell.get("extra", {}), **metrics}
         rows.append(row)
         print(f"    -> {metrics}", flush=True)
-    _write_findings(exp, label, rows)
+        # Write findings after every cell so an interrupted run keeps partial results.
+        _write_findings(exp, label, rows)
     return rows
 
 
