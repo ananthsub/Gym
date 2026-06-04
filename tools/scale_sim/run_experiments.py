@@ -42,6 +42,7 @@ from omegaconf import OmegaConf
 SCALE_SIM_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCALE_SIM_DIR))
 import sweep_runner  # noqa: E402
+from analyze_throughput import analyze as analyze_throughput  # noqa: E402
 from configs import gen_multi_agent  # noqa: E402
 
 
@@ -323,8 +324,13 @@ def _read_load_summary(d: Path) -> Dict[str, Any]:
     s = json.loads((d / "summary.json").read_text())
     lat = s.get("latency_summary", {})
     retry = s.get("retry_summary", {})
+    # Warm-up-excluded steady-state throughput from per-rollout timestamps. The
+    # naive throughput includes the ramp; steady_rps is the plateau rate.
+    prr = d / "per_rollout_retries.jsonl"
+    steady = analyze_throughput(prr).get("steady_rps") if prr.exists() else None
     return {
         "throughput_rps": s.get("throughput_rollouts_per_s"),
+        "steady_throughput_rps": steady,
         "p50_s": lat.get("p50_s"),
         "p99_s": lat.get("p99_s"),
         "failure_rate": retry.get("failure_rate"),
@@ -363,6 +369,10 @@ def _materialize_single_agent(exp: str, cell: Dict[str, Any], label: str) -> Pat
     OmegaConf.update(cfg, "scale_sim.concurrency", cell["concurrency"])
     OmegaConf.update(cfg, "scale_sim.total_requests", cell["total_requests"])
     OmegaConf.update(cfg, "scale_sim.early_stop_wall_clock_s", cell["wall_clock_s"])
+    # Disable the collapse early-stop so a saturated cell runs the full window and
+    # yields a real (low) throughput, instead of stopping the moment retries spike.
+    OmegaConf.update(cfg, "scale_sim.early_stop_failure_rate", 1.0)
+    OmegaConf.update(cfg, "scale_sim.early_stop_retry_rate", 1.0)
     out = GENERATED / label / f"{exp}_{cell['cell']}.yaml"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(OmegaConf.to_yaml(cfg))
@@ -375,6 +385,8 @@ def _materialize_fan_out(exp: str, cell: Dict[str, Any], label: str) -> Path:
     OmegaConf.update(cfg, "scale_sim.concurrency", cell["concurrency"])
     OmegaConf.update(cfg, "scale_sim.total_requests", cell["total_requests"])
     OmegaConf.update(cfg, "scale_sim.early_stop_wall_clock_s", cell["wall_clock_s"])
+    OmegaConf.update(cfg, "scale_sim.early_stop_failure_rate", 1.0)
+    OmegaConf.update(cfg, "scale_sim.early_stop_retry_rate", 1.0)
     out = GENERATED / label / f"{exp}_{cell['cell']}.yaml"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(OmegaConf.to_yaml(cfg))
