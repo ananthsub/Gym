@@ -300,6 +300,32 @@ def _return_shape_cells() -> List[Dict[str, Any]]:
     return cells
 
 
+def _actor_rpc_stress_cells() -> List[Dict[str, Any]]:
+    # Push the actor's in-flight HTTP well past the trainer_return_shape sweep to
+    # reach the regime where earlier runs showed connection resets. In-flight =
+    # concurrent RPCs (thread_count) x prompts_per_call; here prompts_per_call=16
+    # so a feasible thread count reaches tens of thousands in-flight. Uses the
+    # fast actor_stress.yaml so the connection storm completes in minutes.
+    pp = 16
+    cells: List[Dict[str, Any]] = []
+    for threads in [256, 512, 1024, 2048, 4096]:
+        in_flight = threads * pp
+        cells.append(
+            {
+                "cell": f"if{in_flight}",
+                "value_col": "in_flight",
+                "value": in_flight,
+                "extra": {"concurrent_rpcs": threads, "prompts_per_call": pp},
+                "config": "actor_stress.yaml",
+                "mode": "sync_blocking",
+                "thread_count": threads,
+                "prompts_per_call": pp,
+                "num_steps": 1,
+            }
+        )
+    return cells
+
+
 EXPERIMENTS: Dict[str, Dict[str, Any]] = {
     "concurrency_scaling": {
         "blurb": "Throughput and latency as simultaneous rollouts grow (1..131072) at the 64k training body, one tool call, no added work.",
@@ -330,6 +356,11 @@ EXPERIMENTS: Dict[str, Dict[str, Any]] = {
         "blurb": "Ray-actor stress: N concurrent blocking RPCs (1..1024) that overload the actor vs the 1-call streaming production shape.",
         "kind": "return_shape",
         "cells": _return_shape_cells,
+    },
+    "actor_rpc_stress": {
+        "blurb": "Drive the Ray actor at high in-flight (4k-64k) to test the connection-reset regime.",
+        "kind": "return_shape",
+        "cells": _actor_rpc_stress_cells,
     },
 }
 
@@ -510,7 +541,7 @@ def _run_return_shape_cell(cell: Dict[str, Any], out_dir: Path, input_jsonl: Pat
         "-u",
         str(SCALE_SIM_DIR / "mock_trainer.py"),
         "--config",
-        str(CONFIGS / "actor_repro.yaml"),
+        str(CONFIGS / cell.get("config", "actor_repro.yaml")),
         "--input-jsonl",
         str(input_jsonl),
         "--output-dir",

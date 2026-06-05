@@ -1,0 +1,79 @@
+# Actor RPC connection-stress config (Ray-actor boundary).
+#
+# Same single-agent-in-a-Ray-actor topology as actor_repro.yaml, but tuned to
+# push the *connection count* high: low per-call latency and a modest body, so a
+# step that fires thousands of concurrent RPCs (each fanning out prompts_per_call
+# HTTP requests) opens a large simultaneous connection storm that completes in
+# minutes rather than hours. The connect storm happens at dispatch regardless of
+# latency, so this isolates connection-setup behavior (the ClientOSError /
+# ClientConnectorError family seen at high fan-out) from per-rollout latency.
+#
+# In-flight HTTP = concurrent_rpcs (thread_count) x prompts_per_call.
+
+head_server:
+  host: 0.0.0.0
+  port: 5000
+
+global_aiohttp_connector_limit: 262144
+global_aiohttp_connector_limit_per_host: 131072
+
+synthetic_resources_inst:
+  resources_servers:
+    synthetic_resources:
+      entrypoint: app.py
+      domain: other
+      verified: false
+      tool:
+        async_latency_ms: 20
+        cpu_burn_ms: 0
+        body_size_bytes: 4096
+        body_shape: flat_padding
+      verify:
+        async_latency_ms: 10
+        cpu_burn_ms: 0
+        body_size_bytes: 1024
+        body_shape: flat_padding
+      port: 5002
+
+synthetic_model_inst:
+  responses_api_models:
+    synthetic_model:
+      entrypoint: app.py
+      async_latency_ms: 50
+      cpu_burn_ms: 0
+      latency_dist: fixed
+      prompt_tokens: 256
+      # ~110 KB body — small enough to push connection count high without the
+      # body-serialization CPU/memory cost dominating.
+      output_tokens: 4096
+      include_token_ids_and_log_probs: true
+      tool_name: synthetic_tool
+      port: 5001
+
+synthetic_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      # 1 hop keeps each rollout to a single model+tool round-trip.
+      max_steps: 1
+      resources_server:
+        type: resources_servers
+        name: synthetic_resources_inst
+      model_server:
+        type: responses_api_models
+        name: synthetic_model_inst
+      datasets:
+        - name: actor_stress
+          type: example
+          jsonl_fpath: data/bench.jsonl
+          num_repeats: 1
+      port: 5003
+
+scale_sim:
+  agent_name: synthetic_simple_agent
+  concurrency: 256
+  total_requests: 10000
+  early_stop_failure_rate: 1.0
+  early_stop_retry_rate: 1.0
+  early_stop_wall_clock_s: 600
+  early_stop_window_s: 30
