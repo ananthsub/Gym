@@ -39,7 +39,7 @@ ALL_EXPERIMENTS=(
   tool_call_depth_scaling
   work_per_step_sensitivity
   agent_fan_out
-  trainer_return_shape
+  trainer_shape
 )
 
 if [ "$#" -gt 0 ]; then

@@ -260,66 +260,54 @@ def _fan_out_cells() -> List[Dict[str, Any]]:
     return cells
 
 
-def _return_shape_cells() -> List[Dict[str, Any]]:
-    # Stress the Ray-actor boundary two ways:
+def _trainer_shape_cells() -> List[Dict[str, Any]]:
+    # Compare the two trainer->gym request shapes at MATCHED in-flight rollout
+    # count (the gym/model sees the same N concurrent /run either way — only the
+    # trainer<->actor return boundary differs). Both run on the fast
+    # actor_stress.yaml so the storm completes in minutes, and both surface
+    # error_class_counts so we can see whether production connection errors
+    # appear with one shape but not the other.
     #
-    #  - sync_blocking: N concurrent blocking ray.get RPCs hit the actor at once
-    #    (thread_count = N, one prompt each). Sweeping N in powers of 2 finds
-    #    where the actor's inbound RPC queue overloads. This is the shape that
-    #    overwhelmed the actor.
-    #  - lag_batched_stream: one call carrying all rows, results streamed back
-    #    via an ObjectRefGenerator. This is the production shape in place today.
+    #   threaded  (sync_blocking): the trainer spawns many threads, each blocking
+    #     on one whole-batch RPC whose result crosses the Ray object store as a
+    #     single object. This is the shape that produced production
+    #     ClientPayloadError at high thread counts. To reach N in-flight we use
+    #     N/16 threads each returning a 16-row batch (<=4096 OS threads at N=65536).
     #
-    # Same actor, same total rollouts per step, different request shape.
+    #   streaming (lag_batched_stream): ONE streaming RPC fans out all N rows and
+    #     yields per-row refs back (ObjectRefGenerator) — many small transfers
+    #     instead of one big one. This is the production shape today; scaling the
+    #     batch size scales the single call's concurrency.
+    #
+    # Questions: does threaded surface connection errors as N grows while
+    # streaming stays clean, and how high can the streaming shape scale?
     cells: List[Dict[str, Any]] = []
-    for n in [1, 4, 16, 64, 256, 1024]:
+    threaded_batch = 16
+    for in_flight in [256, 1024, 4096, 16384, 65536]:
+        threads = in_flight // threaded_batch
         cells.append(
             {
-                "cell": f"sync_rpc{n}",
-                "value_col": "trainer_shape",
-                "value": f"sync_rpc{n}",
-                "extra": {"concurrent_rpcs": n},
-                "mode": "sync_blocking",
-                "thread_count": n,
-                "prompts_per_call": 1,
-                "num_steps": 5,
-            }
-        )
-    cells.append(
-        {
-            "cell": "stream_allrows",
-            "value_col": "trainer_shape",
-            "value": "stream_allrows",
-            "extra": {"concurrent_rpcs": 1},
-            "mode": "lag_batched_stream",
-            "thread_count": 4,
-            "prompts_per_call": 256,
-            "num_steps": 5,
-        }
-    )
-    return cells
-
-
-def _actor_rpc_stress_cells() -> List[Dict[str, Any]]:
-    # Push the actor's in-flight HTTP well past the trainer_return_shape sweep to
-    # reach the regime where earlier runs showed connection resets. In-flight =
-    # concurrent RPCs (thread_count) x prompts_per_call; here prompts_per_call=16
-    # so a feasible thread count reaches tens of thousands in-flight. Uses the
-    # fast actor_stress.yaml so the connection storm completes in minutes.
-    pp = 16
-    cells: List[Dict[str, Any]] = []
-    for threads in [256, 512, 1024, 2048, 4096]:
-        in_flight = threads * pp
-        cells.append(
-            {
-                "cell": f"if{in_flight}",
+                "cell": f"threaded_if{in_flight}",
                 "value_col": "in_flight",
                 "value": in_flight,
-                "extra": {"concurrent_rpcs": threads, "prompts_per_call": pp},
+                "extra": {"shape": "threaded", "threads": threads, "batch_per_call": threaded_batch},
                 "config": "actor_stress.yaml",
                 "mode": "sync_blocking",
                 "thread_count": threads,
-                "prompts_per_call": pp,
+                "prompts_per_call": threaded_batch,
+                "num_steps": 1,
+            }
+        )
+        cells.append(
+            {
+                "cell": f"stream_if{in_flight}",
+                "value_col": "in_flight",
+                "value": in_flight,
+                "extra": {"shape": "streaming", "threads": 1, "batch_per_call": in_flight},
+                "config": "actor_stress.yaml",
+                "mode": "lag_batched_stream",
+                "thread_count": 1,
+                "prompts_per_call": in_flight,
                 "num_steps": 1,
             }
         )
@@ -352,15 +340,10 @@ EXPERIMENTS: Dict[str, Dict[str, Any]] = {
         "kind": "fan_out",
         "cells": _fan_out_cells,
     },
-    "trainer_return_shape": {
-        "blurb": "Ray-actor stress: N concurrent blocking RPCs (1..1024) that overload the actor vs the 1-call streaming production shape.",
+    "trainer_shape": {
+        "blurb": "Threaded whole-batch RPCs vs one streaming RPC at matched in-flight (256..65536): do production connection errors appear with threaded but not streaming, and how high can streaming scale?",
         "kind": "return_shape",
-        "cells": _return_shape_cells,
-    },
-    "actor_rpc_stress": {
-        "blurb": "Drive the Ray actor at high in-flight (4k-64k) to test the connection-reset regime.",
-        "kind": "return_shape",
-        "cells": _actor_rpc_stress_cells,
+        "cells": _trainer_shape_cells,
     },
 }
 
@@ -431,6 +414,7 @@ def _read_trainer_summary(d: Path) -> Dict[str, Any]:
         "p50_s": lat.get("p50"),
         "p99_s": lat.get("p99"),
         "failure_rate": rows.get("failure_rate"),
+        "error_class_counts": s.get("error_class_counts", {}),
         "completion_rate": (done / attempted) if attempted else None,
         "saturated": False,
         "completed": done,
