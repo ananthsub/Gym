@@ -314,6 +314,45 @@ def _trainer_shape_cells() -> List[Dict[str, Any]]:
     return cells
 
 
+def _burst_repro_cells() -> List[Dict[str, Any]]:
+    # Reproduce the production connection-reset failure (ClientPayloadError) via
+    # the burst + train-floor + refit-pause + overlapping-cycles pattern. A/B the
+    # two candidate mitigations against a baseline:
+    #   - baseline: fire the whole burst in milliseconds, keep-alive reuse on
+    #   - jitter30: smear the burst over 30s (the --spawn-jitter-s mitigation)
+    #   - force_close: disable keep-alive reuse (new connection per request)
+    common = dict(num_agents=16, num_prompts=512, per_prompt_calls=16, num_cycles=4, train_floor_s=30.0, refit_s=5.0)
+    return [
+        {
+            "cell": "baseline",
+            "value_col": "variant",
+            "value": "baseline",
+            "extra": {"spawn_jitter_s": 0.0, "force_close": False},
+            "spawn_jitter_s": 0.0,
+            "force_close": False,
+            **common,
+        },
+        {
+            "cell": "jitter30",
+            "value_col": "variant",
+            "value": "jitter30",
+            "extra": {"spawn_jitter_s": 30.0, "force_close": False},
+            "spawn_jitter_s": 30.0,
+            "force_close": False,
+            **common,
+        },
+        {
+            "cell": "force_close",
+            "value_col": "variant",
+            "value": "force_close",
+            "extra": {"spawn_jitter_s": 0.0, "force_close": True},
+            "spawn_jitter_s": 0.0,
+            "force_close": True,
+            **common,
+        },
+    ]
+
+
 EXPERIMENTS: Dict[str, Dict[str, Any]] = {
     "concurrency_scaling": {
         "blurb": "Throughput and latency as simultaneous rollouts grow (1..131072) at the 64k training body, one tool call, no added work.",
@@ -339,6 +378,11 @@ EXPERIMENTS: Dict[str, Dict[str, Any]] = {
         "blurb": "Spreading load across more agent servers at a fixed per-agent load (1..32 agents).",
         "kind": "fan_out",
         "cells": _fan_out_cells,
+    },
+    "burst_repro": {
+        "blurb": "Reproduce the production ClientPayloadError via burst dispatch + train-floor + refit-pause + overlapping cycles; A/B spawn-jitter and keep-alive (16 agents, 8192 in-flight).",
+        "kind": "burst",
+        "cells": _burst_repro_cells,
     },
     "trainer_shape": {
         "blurb": "Threaded whole-batch RPCs vs one streaming RPC at matched in-flight (256..65536): do production connection errors appear with threaded but not streaming, and how high can streaming scale?",
@@ -498,6 +542,8 @@ def run_experiment(exp: str, label: str, input_jsonl: Path) -> List[Dict[str, An
                     teardown_sleep_s=10.0,
                 )
                 metrics = _read_load_summary(out_dir) if rc == 0 else {"error": f"cell rc={rc}"}
+            elif spec["kind"] == "burst":
+                metrics = _run_burst_cell(cell, out_dir, label)
             else:  # return_shape
                 metrics = _run_return_shape_cell(cell, out_dir, input_jsonl)
         except Exception as e:  # keep the sweep going; record the failure
@@ -508,6 +554,101 @@ def run_experiment(exp: str, label: str, input_jsonl: Path) -> List[Dict[str, An
         # Write findings after every cell so an interrupted run keeps partial results.
         _write_findings(exp, label, rows)
     return rows
+
+
+def _materialize_burst(exp: str, cell: Dict[str, Any], label: str) -> tuple:
+    """Generate an N-agent config for the burst test; return (config_path, agent_ports)."""
+    cfg_dict = gen_multi_agent.generate(CONFIGS / "multi_agent.yaml", cell["num_agents"])
+    cfg = OmegaConf.create(cfg_dict)
+    ports: List[int] = []
+    for key, val in cfg_dict.items():
+        agent = (val or {}).get("responses_api_agents", {}).get("simple_agent") if isinstance(val, dict) else None
+        if agent and "port" in agent:
+            ports.append(int(agent["port"]))
+    ports.sort()
+    out = GENERATED / label / f"{exp}_{cell['cell']}.yaml"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(OmegaConf.to_yaml(cfg))
+    return out, ports
+
+
+def _run_burst_cell(cell: Dict[str, Any], out_dir: Path, label: str) -> Dict[str, Any]:
+    """Stand up N synthetic agents via ng_run, drive burst_driver.py, tear down."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cfg_path, agent_ports = _materialize_burst("burst_repro", cell, label)
+    if not agent_ports:
+        return {"error": "no agent ports resolved from generated config"}
+
+    sweep_runner._pre_cell_cleanup()
+    sweep_runner._pre_start_ray()
+
+    ng_log_path = out_dir / "ng_run.log"
+    ng_log = ng_log_path.open("w")
+    ng_env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    ng_cmd = f'ng_run "+config_paths=[{cfg_path.as_posix()}]"'
+    ng_proc = subprocess.Popen(
+        ng_cmd,
+        shell=True,
+        cwd=SCALE_SIM_DIR,
+        stdout=ng_log,
+        stderr=subprocess.STDOUT,
+        preexec_fn=os.setsid,
+        env=ng_env,
+    )
+    try:
+        ok, reason = sweep_runner._wait_for_port(
+            "0.0.0.0", 5000, timeout_s=900.0, ng_proc=ng_proc, log_path=ng_log_path, phase_label="head:5000"
+        )
+        if not ok or not sweep_runner._wait_for_servers_ready(ng_log_path, timeout_s=900.0, ng_proc=ng_proc):
+            return {"error": f"spinup failed ({reason if not ok else 'servers not ready'})"}
+
+        burst_cmd = [
+            sys.executable,
+            "-u",
+            str(SCALE_SIM_DIR / "burst_driver.py"),
+            "--agent-ports",
+            ",".join(str(p) for p in agent_ports),
+            "--output-dir",
+            str(out_dir),
+            "--num-prompts-per-step",
+            str(cell["num_prompts"]),
+            "--per-prompt-calls",
+            str(cell["per_prompt_calls"]),
+            "--num-cycles",
+            str(cell["num_cycles"]),
+            "--train-floor-s",
+            str(cell["train_floor_s"]),
+            "--refit-s",
+            str(cell["refit_s"]),
+            "--spawn-jitter-s",
+            str(cell["spawn_jitter_s"]),
+        ]
+        if cell.get("force_close"):
+            burst_cmd.append("--force-close")
+        subprocess.run(burst_cmd, cwd=SCALE_SIM_DIR)
+    finally:
+        try:
+            os.killpg(os.getpgid(ng_proc.pid), signal.SIGINT)
+            ng_proc.wait(timeout=15)
+        except (subprocess.TimeoutExpired, ProcessLookupError):
+            try:
+                os.killpg(os.getpgid(ng_proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        ng_log.close()
+
+    summ = out_dir / "summary.json"
+    if not summ.exists():
+        return {"error": "burst_driver wrote no summary"}
+    s = json.loads(summ.read_text())
+    errs = s.get("error_types", {})
+    return {
+        "failure_rate": s.get("failure_rate"),
+        "successes": s.get("successes"),
+        "failures": s.get("failures"),
+        "client_payload_errors": errs.get("ClientPayloadError", 0),
+        "error_types": json.dumps(errs),
+    }
 
 
 def _run_return_shape_cell(cell: Dict[str, Any], out_dir: Path, input_jsonl: Path) -> Dict[str, Any]:
