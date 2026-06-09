@@ -604,6 +604,20 @@ def _materialize_burst(exp: str, cell: Dict[str, Any], label: str) -> tuple:
     """Generate an N-agent config for the burst test; return (config_path, agent_ports)."""
     cfg_dict = gen_multi_agent.generate(CONFIGS / "multi_agent.yaml", cell["num_agents"])
     cfg = OmegaConf.create(cfg_dict)
+    # Non-blocking high-latency proxy: hold each agent->model call for ~Pareto(1.5s
+    # median, heavy tail) via await asyncio.sleep (concurrent, does NOT block the
+    # loop) and return a reference-sized ~430 KB body. This is the async
+    # counterpart to the reference's blocking single-worker agent: connections to
+    # the agents stay open across the train/refit gap because of genuine latency,
+    # not loop serialization. Lets us test whether the connection-reset reproduces
+    # from hold-time alone, without event-loop blocking.
+    _mbase = f"{gen_multi_agent._model_instance_name()}.responses_api_models.synthetic_model"
+    OmegaConf.update(cfg, f"{_mbase}.output_tokens", int(cell.get("model_output_tokens", 16384)), force_add=True)
+    OmegaConf.update(cfg, f"{_mbase}.async_latency_ms", REAL_LATENCY_MS, force_add=True)
+    OmegaConf.update(cfg, f"{_mbase}.latency_dist", "pareto", force_add=True)
+    OmegaConf.update(cfg, f"{_mbase}.pareto_alpha", REAL_LATENCY_PARETO_ALPHA, force_add=True)
+    OmegaConf.update(cfg, f"{_mbase}.pareto_min_ms", 0.0, force_add=True)
+    OmegaConf.update(cfg, f"{_mbase}.pareto_max_ms", REAL_LATENCY_PARETO_MAX_MS, force_add=True)
     ports: List[int] = []
     for key, val in cfg_dict.items():
         agent = (val or {}).get("responses_api_agents", {}).get("simple_agent") if isinstance(val, dict) else None
