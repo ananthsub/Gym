@@ -39,7 +39,9 @@ ALL_EXPERIMENTS=(
   tool_call_depth_scaling
   work_per_step_sensitivity
   agent_fan_out
+  burst_repro
   trainer_shape
+  realistic_latency
 )
 
 if [ "$#" -gt 0 ]; then

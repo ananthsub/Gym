@@ -68,6 +68,16 @@ BYTES_PER_TOKEN = 26
 # request body accumulates conversation history across hops — see _depth_cells).
 TRAIN_RESPONSE_TOKENS = 65536
 
+# Realistic model-latency proxy for the realistic_latency experiment (TESTPLAN
+# #9 / Q5). The synthetic model can draw per-call latency from a Pareto
+# distribution; these defaults mirror actor_repro.yaml's production-shaped
+# values (median ~1.5 s, heavy tail capped at 2 min). RETUNE async_latency_ms /
+# pareto_alpha from a real-vLLM calibration (TESTPLAN #10) when one is available;
+# they are intentionally a single, obvious knob.
+REAL_LATENCY_MS = 1500
+REAL_LATENCY_PARETO_ALPHA = 1.5
+REAL_LATENCY_PARETO_MAX_MS = 120000.0
+
 
 # --------------------------------------------------------------------------- #
 # Cleanup
@@ -172,6 +182,35 @@ def _concurrency_cells() -> List[Dict[str, Any]]:
                 "total_requests": min(max(8 * c, 128), 20000),
                 "wall_clock_s": 300,
                 "overrides": _fixed(),
+            }
+        )
+    return cells
+
+
+def _realistic_latency_cells() -> List[Dict[str, Any]]:
+    # TESTPLAN #9 / Q5: the concurrency sweep (#1) re-run with a realistic model
+    # latency distribution instead of the near-zero synthetic proxy. Same 64k
+    # body and grid as concurrency_scaling so the two are directly comparable;
+    # the only change is the model draws per-call latency from a Pareto
+    # distribution (median ~1.5 s, heavy tail). This shows whether the throughput
+    # ceiling and the saturation knee shift once per-rollout latency dominates.
+    cells = []
+    for c in [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 131072]:
+        overrides = _fixed()
+        overrides[f"{MODEL}.async_latency_ms"] = REAL_LATENCY_MS
+        overrides[f"{MODEL}.latency_dist"] = "pareto"
+        overrides[f"{MODEL}.pareto_alpha"] = REAL_LATENCY_PARETO_ALPHA
+        overrides[f"{MODEL}.pareto_min_ms"] = 0.0
+        overrides[f"{MODEL}.pareto_max_ms"] = REAL_LATENCY_PARETO_MAX_MS
+        cells.append(
+            {
+                "cell": f"c{c}",
+                "value_col": "concurrency",
+                "value": c,
+                "concurrency": c,
+                "total_requests": min(max(8 * c, 128), 20000),
+                "wall_clock_s": 300,
+                "overrides": overrides,
             }
         )
     return cells
@@ -388,6 +427,11 @@ EXPERIMENTS: Dict[str, Dict[str, Any]] = {
         "blurb": "Threaded whole-batch RPCs vs one streaming RPC at matched in-flight (256..65536): do production connection errors appear with threaded but not streaming, and how high can streaming scale?",
         "kind": "return_shape",
         "cells": _trainer_shape_cells,
+    },
+    "realistic_latency": {
+        "blurb": "Concurrency sweep (1..131072, 64k body) re-run with a Pareto model-latency distribution (~1.5s median, heavy tail) — does the ceiling/knee shift under realistic per-rollout latency?",
+        "kind": "single_agent",
+        "cells": _realistic_latency_cells,
     },
 }
 
