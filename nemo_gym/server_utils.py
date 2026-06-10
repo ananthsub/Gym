@@ -110,6 +110,7 @@ def set_global_aiohttp_client(cfg: GlobalAIOHTTPAsyncClientConfig) -> ClientSess
         connector=TCPConnector(
             limit=cfg.global_aiohttp_connector_limit // num_workers,
             limit_per_host=cfg.global_aiohttp_connector_limit_per_host // num_workers,
+            keepalive_timeout=15.0,
         ),
         timeout=ClientTimeout(),
         cookie_jar=DummyCookieJar(),
@@ -670,6 +671,12 @@ Full body: {json.dumps(exc.body, indent=4)}
             port=server.config.port,
             # We add a very small graceful shutdown timeout so when we shutdown we cancel all inflight requests and there are no lingering requests (requests are cancelled)
             timeout_graceful_shutdown=0.5,
+            # Ensure server keepalive > client keepalive (15s) so the server never
+            # closes an idle keep-alive connection the client still intends to
+            # reuse — the production ClientPayloadError / ConnectionReset fix
+            # (bxyu/nemo-gym MR 322). uvicorn's default is 5s, which is < the
+            # client's 15s and causes resets across the train/refit idle gap.
+            timeout_keep_alive=30.0,
             # Some workers may take a while for imports and setup_webserver.
             timeout_worker_healthcheck=30,
         )

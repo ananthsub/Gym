@@ -1,0 +1,4 @@
+variant,spawn_jitter_s,force_close,failure_rate,successes,failures,client_payload_errors,error_types
+baseline,0.0,False,0.000488,32752,16,0,"{""ServerDisconnectedError"": 16}"
+jitter30,30.0,False,6.1e-05,32766,2,0,"{""ClientOSError"": 2}"
+force_close,0.0,True,0.0,32768,0,0,{}
