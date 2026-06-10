@@ -354,42 +354,41 @@ def _trainer_shape_cells() -> List[Dict[str, Any]]:
 
 
 def _burst_repro_cells() -> List[Dict[str, Any]]:
-    # Reproduce the production connection-reset failure (ClientPayloadError) via
-    # the burst + train-floor + refit-pause + overlapping-cycles pattern. A/B the
-    # two candidate mitigations against a baseline:
-    #   - baseline: fire the whole burst in milliseconds, keep-alive reuse on
-    #   - jitter30: smear the burst over 30s (the --spawn-jitter-s mitigation)
-    #   - force_close: disable keep-alive reuse (new connection per request)
-    common = dict(num_agents=16, num_prompts=512, per_prompt_calls=16, num_cycles=4, train_floor_s=30.0, refit_s=5.0)
-    return [
+    # Burst + train-floor + refit-pause + overlapping-cycles, swept over response
+    # body size, WITH the keepalive fix in place (server 30s > client 15s). The
+    # question: does the connection-reset (ideally ClientPayloadError) reproduce
+    # at larger bodies once the keepalive asymmetry is fixed? On loopback the body
+    # must exceed the socket buffers (~16MB max here) for the server write to
+    # block and create an in-flight window; smaller bodies are delivered to the
+    # client receive buffer instantly. force_close at the top size is the control.
+    common = dict(num_agents=16, num_prompts=256, per_prompt_calls=16, num_cycles=4, train_floor_s=30.0, refit_s=5.0)
+    cells: List[Dict[str, Any]] = []
+    for body in [65536, 131072, 262144, 524288]:
+        cells.append(
+            {
+                "cell": f"baseline_{body // 1024}k",
+                "value_col": "variant",
+                "value": f"baseline_{body // 1024}k",
+                "extra": {"body_tokens": body, "approx_body_mb": round(body * BYTES_PER_TOKEN / 1e6, 1), "force_close": False},
+                "model_output_tokens": body,
+                "spawn_jitter_s": 0.0,
+                "force_close": False,
+                **common,
+            }
+        )
+    cells.append(
         {
-            "cell": "baseline",
+            "cell": "forceclose_512k",
             "value_col": "variant",
-            "value": "baseline",
-            "extra": {"spawn_jitter_s": 0.0, "force_close": False},
-            "spawn_jitter_s": 0.0,
-            "force_close": False,
-            **common,
-        },
-        {
-            "cell": "jitter30",
-            "value_col": "variant",
-            "value": "jitter30",
-            "extra": {"spawn_jitter_s": 30.0, "force_close": False},
-            "spawn_jitter_s": 30.0,
-            "force_close": False,
-            **common,
-        },
-        {
-            "cell": "force_close",
-            "value_col": "variant",
-            "value": "force_close",
-            "extra": {"spawn_jitter_s": 0.0, "force_close": True},
+            "value": "forceclose_512k",
+            "extra": {"body_tokens": 524288, "approx_body_mb": round(524288 * BYTES_PER_TOKEN / 1e6, 1), "force_close": True},
+            "model_output_tokens": 524288,
             "spawn_jitter_s": 0.0,
             "force_close": True,
             **common,
-        },
-    ]
+        }
+    )
+    return cells
 
 
 EXPERIMENTS: Dict[str, Dict[str, Any]] = {
