@@ -244,7 +244,7 @@ ng_prepare_data "+config_paths=[resources_servers/example_multi_step/configs/exa
 </Info>
 
 <Warning>
-`example.jsonl` must already be in materialized Responses format (each row containing `responses_create_params`). Example-type datasets are not templated via `prompt_config`, so raw rows won't validate.
+`example.jsonl` must already be in Responses API format (each row containing `responses_create_params`), because example datasets are not templated through `prompt_config`. Raw, untemplated rows will not validate. This file is distinct from the `*_materialized_inputs.jsonl` files generated during rollout collection.
 </Warning>
 
 ### Training Preparation
@@ -388,7 +388,7 @@ datasets:
 
 ### License values
 
-`license` is required for `train` and `validation` datasets. It is validated against an allowed set defined in code — see the `license` enum in [`nemo_gym/config_types.py`](https://github.com/NVIDIA-NeMo/Gym/blob/main/nemo_gym/config_types.py).
+`license` is required for `train` and `validation` datasets. It is validated against an allowed set defined in code — refer to the `license` enum in [`nemo_gym/config_types.py`](https://github.com/NVIDIA-NeMo/Gym/blob/main/nemo_gym/config_types.py).
 
 ---
 
