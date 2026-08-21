@@ -85,6 +85,7 @@ class TokenCaptureStore:
         if not path.exists():
             return {
                 "frozen": False,
+                "retired": False,
                 "incomplete": False,
                 "snapshot_id": "",
                 "version": 0,
@@ -175,6 +176,8 @@ class TokenCaptureStore:
     def _mark_incomplete(self, rollout_id: str, model_call_id: str = "") -> None:
         with self._locked(rollout_id):
             state = self._read_state(rollout_id)
+            if state.get("retired", False):
+                raise RuntimeError(f"Token capture for rollout {rollout_id} is retired")
             state["incomplete"] = True
             state["version"] = int(state.get("version", 0)) + 1
             self._write_state(rollout_id, state)
@@ -200,6 +203,8 @@ class TokenCaptureStore:
         rollout_id = entry.rollout_id
         with self._locked(rollout_id):
             state = self._read_state(rollout_id)
+            if state.get("retired", False):
+                raise RuntimeError(f"Token capture for rollout {rollout_id} is retired")
             if state.get("frozen", False):
                 raise RuntimeError(f"Token capture for rollout {rollout_id} is already frozen")
             index_changed = self._sync_entry_index(rollout_id, state)
@@ -245,6 +250,8 @@ class TokenCaptureStore:
         """Synchronously freeze one rollout and return its stable snapshot."""
         with self._locked(rollout_id):
             state = self._read_state(rollout_id)
+            if state.get("retired", False):
+                raise RuntimeError(f"Token capture for rollout {rollout_id} is retired")
             index_changed = self._sync_entry_index(rollout_id, state)
             if not state.get("frozen", False):
                 state["frozen"] = True
@@ -284,7 +291,6 @@ class TokenCaptureStore:
                 return False
             self.path_for(rollout_id).unlink(missing_ok=True)
             self.incomplete_path_for(rollout_id).unlink(missing_ok=True)
-            (self.root / f"{rollout_id}.lineage.jsonl").unlink(missing_ok=True)
             # Keep a frozen tombstone until explicit pre-dispatch cleanup.
             # A late writer from this attempt must still observe the freeze.
             state["indexed_size"] = 0
@@ -308,8 +314,6 @@ class TokenCaptureStore:
             self.path_for(rollout_id).unlink(missing_ok=True)
             self.incomplete_path_for(rollout_id).unlink(missing_ok=True)
             self.state_path_for(rollout_id).unlink(missing_ok=True)
-            (self.root / f"{rollout_id}.lineage.jsonl").unlink(missing_ok=True)
-            (self.root / f"{rollout_id}.lineage.lock").unlink(missing_ok=True)
             self._fsync_root()
 
     def read_entries(self, rollout_id: str) -> list[TokenEntry]:
