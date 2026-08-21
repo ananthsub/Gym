@@ -41,7 +41,8 @@ TOKEN_FIELDS = ("prompt_token_ids", "generation_token_ids", "generation_log_prob
 # ``extra="allow"`` otherwise hides unknown fields.
 #
 #   1  rollout and call identity, the token arrays, the output items and their carrier index
-TOKEN_ENTRY_RECORD_SCHEMA_VERSION = 1
+#   2  response_id, the served envelope id observed on the payload the client received
+TOKEN_ENTRY_RECORD_SCHEMA_VERSION = 2
 
 
 class TokenEntry(BaseModel):
@@ -71,6 +72,11 @@ class TokenEntry(BaseModel):
     # This index identifies the item that carried token arrays.
     # ``None`` means no item carried them.
     token_item_index: int | None = None
+    # The served payload's top-level id, observed at the dialect boundary the client called.
+    # Capture never mints this value.
+    # Possession of the id proves which served response a client kept.
+    # Terminal attribution joins a ``/run`` result's response id against it.
+    response_id: str | None = None
     # This non-semantic timestamp helps diagnose retries and sibling branches.
     created_at: float = 0.0
 
