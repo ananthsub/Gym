@@ -1,0 +1,264 @@
+{
+  "bench_append": {
+    "prompt_1000": {
+      "p50_ms": 0.8423,
+      "p99_ms": 1.1064,
+      "mean_ms": 0.848,
+      "reps": 60
+    },
+    "prompt_8000": {
+      "p50_ms": 0.866,
+      "p99_ms": 1.178,
+      "mean_ms": 0.8859,
+      "reps": 40
+    },
+    "prompt_64000": {
+      "p50_ms": 2.7532,
+      "p99_ms": 3.4653,
+      "mean_ms": 2.867,
+      "reps": 15
+    }
+  },
+  "bench_append_growth": {
+    "append_ms_call_1": 0.8012,
+    "append_ms_call_50": 1.168,
+    "append_ms_call_100": 2.1442,
+    "append_ms_call_200": 2.6688,
+    "total_ms_all_200": 354.05,
+    "final_dir_bytes": 35327575,
+    "final_jsonl_bytes": 35310450,
+    "cumulative_bytes_written": 37043694
+  },
+  "bench_hashes": {
+    "fingerprint_10turns": {
+      "p50_ms": 0.0064,
+      "p99_ms": 0.022,
+      "mean_ms": 0.0067,
+      "reps": 200,
+      "conv_bytes": 5385,
+      "mb_per_s": 803.7
+    },
+    "conversation_digest_10turns": {
+      "p50_ms": 0.0175,
+      "p99_ms": 0.0325,
+      "mean_ms": 0.0179,
+      "reps": 200,
+      "conv_bytes": 5385,
+      "mb_per_s": 300.8
+    },
+    "fingerprint_50turns": {
+      "p50_ms": 0.0619,
+      "p99_ms": 0.1681,
+      "mean_ms": 0.0668,
+      "reps": 60,
+      "conv_bytes": 30413,
+      "mb_per_s": 455.3
+    },
+    "conversation_digest_50turns": {
+      "p50_ms": 0.1231,
+      "p99_ms": 0.1447,
+      "mean_ms": 0.1246,
+      "reps": 60,
+      "conv_bytes": 30413,
+      "mb_per_s": 244.1
+    },
+    "fingerprint_200turns": {
+      "p50_ms": 0.2131,
+      "p99_ms": 0.231,
+      "mean_ms": 0.2151,
+      "reps": 20,
+      "conv_bytes": 116743,
+      "mb_per_s": 542.7
+    },
+    "conversation_digest_200turns": {
+      "p50_ms": 0.4446,
+      "p99_ms": 0.4662,
+      "mean_ms": 0.4487,
+      "reps": 20,
+      "conv_bytes": 116743,
+      "mb_per_s": 260.2
+    }
+  },
+  "bench_stamp_o_l2": {
+    "cumulative_s_100_calls": 0.0391,
+    "first_call_ms": 0.0097,
+    "last_call_ms": 0.756,
+    "final_conversation_bytes": 135579
+  },
+  "bench_digest_tokens": {
+    "tokens_8000": {
+      "compute_digest": {
+        "p50_ms": 0.9467,
+        "p99_ms": 1.1602,
+        "mean_ms": 0.9646,
+        "reps": 100
+      },
+      "vectorized_digest": {
+        "p50_ms": 0.4484,
+        "p99_ms": 0.6229,
+        "mean_ms": 0.4574,
+        "reps": 100
+      },
+      "encode_current": {
+        "p50_ms": 0.8918,
+        "p99_ms": 1.1099,
+        "mean_ms": 0.9093,
+        "reps": 100
+      },
+      "encode_vectorized": {
+        "p50_ms": 0.396,
+        "p99_ms": 0.5487,
+        "mean_ms": 0.4035,
+        "reps": 100
+      },
+      "bytes_identical": true,
+      "digest_identical": true,
+      "digest_speedup_x": 2.11,
+      "encode_speedup_x": 2.25
+    },
+    "tokens_65000": {
+      "compute_digest": {
+        "p50_ms": 7.6209,
+        "p99_ms": 7.8686,
+        "mean_ms": 7.6745,
+        "reps": 30
+      },
+      "vectorized_digest": {
+        "p50_ms": 3.7663,
+        "p99_ms": 3.966,
+        "mean_ms": 3.7944,
+        "reps": 30
+      },
+      "encode_current": {
+        "p50_ms": 7.2299,
+        "p99_ms": 7.5025,
+        "mean_ms": 7.2657,
+        "reps": 30
+      },
+      "encode_vectorized": {
+        "p50_ms": 3.3863,
+        "p99_ms": 3.6505,
+        "mean_ms": 3.4224,
+        "reps": 30
+      },
+      "bytes_identical": true,
+      "digest_identical": true,
+      "digest_speedup_x": 2.02,
+      "encode_speedup_x": 2.12
+    }
+  },
+  "bench_resolve": {
+    "cold": {
+      "p50_ms": 32.4093,
+      "p99_ms": 34.9151,
+      "mean_ms": 33.007,
+      "reps": 5
+    },
+    "warm": {
+      "p50_ms": 0.4654,
+      "p99_ms": 0.6857,
+      "mean_ms": 0.4952,
+      "reps": 20
+    },
+    "n_entries": 50,
+    "jsonl_bytes": 3578585
+  },
+  "bench_eol": {
+    "wall_ms": 926.15,
+    "phase_freeze_read_ms": 88.8,
+    "phase_run_builder_ms": 836.1,
+    "phase_projection_ms": 22.3,
+    "peak_rss_delta_mb": 120.3,
+    "note": "ru_maxrss is a process peak; delta can under-report if an earlier bench peaked higher",
+    "final_context_tokens": 63400,
+    "n_calls": 50,
+    "jsonl_bytes": 10031600
+  },
+  "bench_row_size": {
+    "calls_10": {
+      "raw_entries_bytes": 327843,
+      "rebuilt_response_bytes": 321712,
+      "ratio_rebuilt_over_raw": 0.98,
+      "final_context_tokens": 7800
+    },
+    "calls_25": {
+      "raw_entries_bytes": 1469706,
+      "rebuilt_response_bytes": 1454142,
+      "ratio_rebuilt_over_raw": 0.99,
+      "final_context_tokens": 16800
+    },
+    "calls_50": {
+      "raw_entries_bytes": 5107398,
+      "rebuilt_response_bytes": 5076109,
+      "ratio_rebuilt_over_raw": 0.99,
+      "final_context_tokens": 31800
+    }
+  },
+  "bench_serving_overhead": {
+    "captured": {
+      "p50_ms": 5.7243,
+      "p99_ms": 8.3781,
+      "mean_ms": 5.8419,
+      "reps": 120
+    },
+    "plain": {
+      "p50_ms": 3.4916,
+      "p99_ms": 5.6462,
+      "mean_ms": 3.5806,
+      "reps": 120
+    },
+    "p50_delta_ms_per_call": 2.233,
+    "mean_delta_ms_per_call": 2.261,
+    "n_turns": 10,
+    "n_rollouts": 12,
+    "resolved_parent_calls_rollout0": 9
+  },
+  "red_flags": {
+    "append_p99_over_5ms": {
+      "value_ms": 3.4653,
+      "flag": false,
+      "status": "PASS"
+    },
+    "hashes_under_100MBps": {
+      "min_mb_per_s": 244.1,
+      "flag": false,
+      "status": "PASS"
+    },
+    "digest_65k_over_5ms": {
+      "value_ms": 7.6209,
+      "flag": true,
+      "status": "FLAG"
+    },
+    "resolve_warm_over_1ms": {
+      "value_ms": 0.4654,
+      "flag": false,
+      "status": "PASS"
+    },
+    "resolve_cold_over_100ms": {
+      "value_ms": 32.4093,
+      "flag": false,
+      "status": "PASS"
+    },
+    "eol_over_500ms": {
+      "value_ms": 926.15,
+      "flag": true,
+      "status": "FLAG"
+    },
+    "eol_rss_over_500MB": {
+      "value_mb": 120.3,
+      "flag": false,
+      "status": "PASS"
+    },
+    "serving_p50_delta_over_10ms": {
+      "value_ms": 2.233,
+      "flag": false,
+      "status": "PASS"
+    }
+  },
+  "env": {
+    "machine": "arm64 macOS-26.5.2-arm64-arm-64bit-Mach-O (Apple Silicon Mac, local NVMe)",
+    "python": "3.13.14",
+    "branch": "pr-2181",
+    "suite_wall_s": 10.1
+  }
+}

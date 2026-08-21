@@ -65,6 +65,10 @@ class TokenCaptureStore:
         """Sentinel marking that at least one call of this rollout failed to capture."""
         return self._root / f"{validate_rollout_id(rollout_id)}.tokens.incomplete"
 
+    def intents_path_for(self, rollout_id: str) -> Path:
+        """Durable per-call intents: a call id here without an entry is a lost call."""
+        return self._root / f"{validate_rollout_id(rollout_id)}.tokens.intents"
+
     def state_path_for(self, rollout_id: str) -> Path:
         return self._root / f"{validate_rollout_id(rollout_id)}.tokens.state.json"
 
@@ -243,6 +247,36 @@ class TokenCaptureStore:
         """
         await asyncio.to_thread(self.append, entry)
 
+    def _begin_call(self, rollout_id: str, model_call_id: str) -> None:
+        """Durably record that a captured call is about to be dispatched.
+
+        The intent closes the lost-final-call window: a lost entry leaves a
+        dangling intent, and ``freeze_now`` masks the rollout instead of
+        trusting N-1 complete-looking entries. Failure here happens BEFORE
+        generation, so the caller may fail the model call at zero compute cost.
+        """
+        with self._locked(rollout_id):
+            state = self._read_state(rollout_id)
+            if state.get("retired", False):
+                raise RuntimeError(f"Token capture for rollout {rollout_id} is retired")
+            if state.get("frozen", False):
+                raise RuntimeError(f"Token capture for rollout {rollout_id} is already frozen")
+            with self.intents_path_for(rollout_id).open("ab") as handle:
+                handle.write(model_call_id.encode("utf-8") + b"\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+
+    async def begin_call(self, rollout_id: str, model_call_id: str) -> None:
+        await asyncio.to_thread(self._begin_call, rollout_id, model_call_id)
+
+    def _dangling_intents(self, rollout_id: str, entries: tuple[TokenEntry, ...]) -> list[str]:
+        path = self.intents_path_for(rollout_id)
+        if not path.exists():
+            return []
+        recorded = {entry.model_call_id for entry in entries}
+        intents = [line.strip().decode("utf-8") for line in path.read_bytes().splitlines() if line.strip()]
+        return [call_id for call_id in intents if call_id not in recorded]
+
     async def freeze(self, rollout_id: str) -> TokenCaptureSnapshot:
         return await asyncio.to_thread(self.freeze_now, rollout_id)
 
@@ -261,10 +295,12 @@ class TokenCaptureStore:
             elif index_changed:
                 self._write_state(rollout_id, state)
             entries = tuple(self._read_entries_unlocked(rollout_id))
+            # A dispatched call with no entry was lost; the rollout must mask.
+            incomplete = bool(state.get("incomplete", False)) or bool(self._dangling_intents(rollout_id, entries))
             return TokenCaptureSnapshot(
                 rollout_id=rollout_id,
                 entries=entries,
-                incomplete=bool(state.get("incomplete", False)),
+                incomplete=incomplete,
                 snapshot_id=str(state["snapshot_id"]),
                 version=int(state["version"]),
             )
@@ -291,6 +327,7 @@ class TokenCaptureStore:
                 return False
             self.path_for(rollout_id).unlink(missing_ok=True)
             self.incomplete_path_for(rollout_id).unlink(missing_ok=True)
+            self.intents_path_for(rollout_id).unlink(missing_ok=True)
             # Keep a frozen tombstone until explicit pre-dispatch cleanup.
             # A late writer from this attempt must still observe the freeze.
             state["indexed_size"] = 0
@@ -313,6 +350,7 @@ class TokenCaptureStore:
         with self._locked(rollout_id):
             self.path_for(rollout_id).unlink(missing_ok=True)
             self.incomplete_path_for(rollout_id).unlink(missing_ok=True)
+            self.intents_path_for(rollout_id).unlink(missing_ok=True)
             self.state_path_for(rollout_id).unlink(missing_ok=True)
             self._fsync_root()
 

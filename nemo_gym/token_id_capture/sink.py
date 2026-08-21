@@ -134,6 +134,24 @@ async def resolve_parent(request_messages: list | None) -> None:
         )
 
 
+async def register_call_intent() -> None:
+    """Durably record, before dispatch, that this captured call is about to happen.
+
+    A sink that supports intents ("begin_call") lets the consumer detect a call
+    whose entry was lost: the intent dangles and the rollout masks. Failure here
+    is BEFORE generation, so it propagates and fails the model call at zero
+    compute cost — the harness retries against a recovered backend.
+    Sinks without ``begin_call`` keep the previous behavior.
+    """
+    context = _CAPTURE_CONTEXT.get()
+    if context is None or context.token_sink is None:
+        return
+    begin = getattr(context.token_sink, "begin_call", None)
+    if begin is None:
+        return
+    await begin(context.rollout_id, context.model_call_id)
+
+
 async def capture_tokens(
     response: Any,
     parent_call_id: str | None = None,

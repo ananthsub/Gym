@@ -308,12 +308,21 @@ class RolloutLineage:
         fingerprint = assistant_fingerprint(messages)
         if not fingerprint:
             return LineageResolution(ParentResolutionStatus.ROOT)
-        call_ids = self.by_fingerprint.get(fingerprint) or []
+        # dict.fromkeys: a call id indexed twice (e.g. by racing refreshes) is one candidate.
+        call_ids = list(dict.fromkeys(self.by_fingerprint.get(fingerprint) or []))
         candidates = [
             node
             for call_id in call_ids
             if (node := self.by_call_id.get(call_id)) is not None and self._continues(node, messages)
         ]
+        if len(candidates) > 1:
+            # Distinct calls with IDENTICAL cumulative tokens are interchangeable parents:
+            # an identical retry's copies carry the same tokens, so continuing either is the
+            # same continuation. Collapse them instead of declaring ambiguity; keep true
+            # ambiguity (same fingerprint, different tokens) unresolved.
+            digests = {(node.digest, node.cum_len) for node in candidates}
+            if len(digests) == 1 and candidates[0].digest:
+                candidates = [min(candidates, key=lambda node: node.call_id)]
         if len(candidates) != 1:
             reason = "no_match" if not candidates else "ambiguous"
             return LineageResolution(ParentResolutionStatus.UNRESOLVED, reason=reason)
@@ -468,10 +477,25 @@ class FileLineageStore:
     """Resolve lineage from the token JSONL committed by ``TokenCaptureStore``."""
 
     def __init__(self, root: str | Path) -> None:
+        import threading
+
         from nemo_gym.token_id_capture.store import TokenCaptureStore
 
         self._store = TokenCaptureStore(root)
         self._cache: dict[str, tuple[int, int, RolloutLineage]] = {}
+        # The flock is shared-mode for readers, so concurrent resolves of one rollout
+        # would otherwise mutate the same cached RolloutLineage from two threads.
+        self._cache_guard = threading.Lock()
+        self._rollout_locks: dict[str, threading.Lock] = {}
+
+    def _rollout_lock(self, rollout_id: str):
+        import threading
+
+        with self._cache_guard:
+            lock = self._rollout_locks.get(rollout_id)
+            if lock is None:
+                lock = self._rollout_locks[rollout_id] = threading.Lock()
+            return lock
 
     def _refresh(self, rollout_id: str) -> RolloutLineage:
         path = self._store.path_for(rollout_id)
@@ -501,7 +525,7 @@ class FileLineageStore:
     def _resolve(self, rollout_id: str, request_items: list[dict]) -> LineageResolution:
         # The resolver shares the token store's lock and durable log.
         # A successful ``TokenSink.put`` is therefore immediately visible.
-        with self._store._locked(rollout_id, shared=True):
+        with self._rollout_lock(rollout_id), self._store._locked(rollout_id, shared=True):
             lineage = self._refresh(rollout_id)
             return lineage.resolve(request_items)
 

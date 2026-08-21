@@ -1,0 +1,498 @@
+[
+ {
+  "scenario": "faithful_linear",
+  "verdict": "OK",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "baseline: faithful harness, prefix supply on"
+ },
+ {
+  "scenario": "tool_args_reserialized",
+  "verdict": "OK",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true
+  ],
+  "delivered_calls": 2,
+  "engine_calls": 2,
+  "fabrication_check": "delivered 2 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200
+  ],
+  "note": "harness reorders tool-call JSON keys; canonicalization must still match"
+ },
+ {
+  "scenario": "drift_no_supply",
+  "verdict": "SAFE_MASKED",
+  "masked": true,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   false,
+   false
+  ],
+  "delivered_calls": 1,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 1 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "engine re-tokenizes history differently; lineage resolves but token chain breaks; must mask"
+ },
+ {
+  "scenario": "drift_with_supply",
+  "verdict": "OK",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "same drift, but exact-prefix supply preserves the chain \u2014 the flagship value demo"
+ },
+ {
+  "scenario": "think_stripped",
+  "verdict": "SAFE_MASKED",
+  "masked": true,
+  "statuses": [
+   "root",
+   "unresolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   false,
+   true
+  ],
+  "delivered_calls": 1,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 1 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "inline <think> stripped by harness: fingerprint miss, no supply, masked (documented 2181 gap)"
+ },
+ {
+  "scenario": "reminder_inserted",
+  "verdict": "OK",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "adjacency hole: system item inserted between context and echo still RESOLVES; with supply the item has no token effect"
+ },
+ {
+  "scenario": "history_edited",
+  "verdict": "SAFE_MASKED",
+  "masked": true,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved",
+   "unresolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true,
+   false
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 4,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200,
+   200
+  ],
+  "note": "context edited (compaction-like): digest verification must refuse the parent"
+ },
+ {
+  "scenario": "fork_subagents",
+  "verdict": "SAFE_MASKED",
+  "masked": true,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true
+  ],
+  "delivered_calls": 2,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 2 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "two children of one parent: two chains, masked (F11 yield policy)"
+ },
+ {
+  "scenario": "aux_title_call",
+  "verdict": "BUG_REPRODUCED",
+  "masked": true,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved",
+   "root"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true,
+   false
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 4,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200,
+   200
+  ],
+  "note": "auxiliary call becomes a second root and masks the whole rollout (F11)"
+ },
+ {
+  "scenario": "retry_nonfinal_identical",
+  "verdict": "SURPRISE",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true,
+   true
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 4,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200,
+   200
+  ],
+  "note": "identical mid-rollout retry: BOTH copies match the continuation, ambiguity masks the rest (yield regression vs legacy builder)"
+ },
+ {
+  "scenario": "retry_nonfinal_divergent",
+  "verdict": "OK",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true,
+   true
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 4,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200,
+   200
+  ],
+  "note": "retry with a DIFFERENT sampled answer: the echo identifies the kept copy, chain stays trainable (abandoned attempt excluded)"
+ },
+ {
+  "scenario": "retry_final_identical",
+  "verdict": "NOT_REPRODUCED_SAFE",
+  "masked": true,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true
+  ],
+  "delivered_calls": 2,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 2 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "final call retried with identical tokens: hunting F15's unmasked-empty delivery"
+ },
+ {
+  "scenario": "retry_only_call_identical",
+  "verdict": "NOT_REPRODUCED_SAFE",
+  "masked": true,
+  "statuses": [
+   "root",
+   "root"
+  ],
+  "prefix_supplied": [
+   false,
+   false
+  ],
+  "delivered_calls": 1,
+  "engine_calls": 2,
+  "fabrication_check": "delivered 1 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200
+  ],
+  "note": "single-call rollout retried identically: hunting F15's unmasked-empty delivery"
+ },
+ {
+  "scenario": "empty_generation_parent",
+  "verdict": "BUG_REPRODUCED",
+  "masked": true,
+  "statuses": [
+   "root",
+   "resolved",
+   "unresolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   false
+  ],
+  "delivered_calls": 1,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 1 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "call 2 generates nothing; call 3's parent terrain (F13): expect masked, record exact path"
+ },
+ {
+  "scenario": "engine_ignores_prefix_stable",
+  "verdict": "OK",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "backend ignores the field but re-renders prefix-stably: proof passes (contiguity proof, not extension proof)"
+ },
+ {
+  "scenario": "proof_bundle_shape",
+  "verdict": "BUG_REPRODUCED",
+  "masked": true,
+  "statuses": [],
+  "prefix_supplied": [],
+  "delivered_calls": 0,
+  "engine_calls": 3,
+  "fabrication_check": "nothing delivered",
+  "http_statuses": [
+   500,
+   500,
+   500
+  ],
+  "note": "engine returns prompt ids in the message bundle: F7 predicts a spurious hard failure (500)"
+ },
+ {
+  "scenario": "sink_outage_final_call",
+  "verdict": "NOT_REPRODUCED_SAFE",
+  "masked": true,
+  "statuses": [
+   "root",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true
+  ],
+  "delivered_calls": 2,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 2 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "put+mark_incomplete both fail on the FINAL call: F1 predicts unmasked truncated delivery"
+ },
+ {
+  "scenario": "sink_outage_pre_dispatch",
+  "verdict": "OK",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true
+  ],
+  "delivered_calls": 2,
+  "engine_calls": 2,
+  "fabrication_check": "delivered 2 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   500
+  ],
+  "note": "backend already down when call 3 arrives: intent fails PRE-generation, call fails at zero cost, delivered 2/2 is the complete story"
+ },
+ {
+  "scenario": "sink_outage_mid_rollout",
+  "verdict": "SAFE_MASKED",
+  "masked": true,
+  "statuses": [
+   "root",
+   "unresolved"
+  ],
+  "prefix_supplied": [
+   false,
+   false
+  ],
+  "delivered_calls": 1,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 1 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "same outage mid-rollout: the next call cannot resolve its parent, sample masks (2180 repairs F1 here)"
+ },
+ {
+  "scenario": "custom_sink_no_lineage",
+  "verdict": "BUG_REPRODUCED",
+  "masked": true,
+  "statuses": [
+   "root",
+   "unresolved",
+   "unresolved"
+  ],
+  "prefix_supplied": [
+   false,
+   false,
+   false
+  ],
+  "delivered_calls": 1,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 1 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "custom sink, no lineage store, one worker: F3 predicts all-UNRESOLVED with no visibility"
+ },
+ {
+  "scenario": "duplicate_snapshot_entry",
+  "verdict": "BUG_REPRODUCED",
+  "masked": true,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "at-least-once transport duplicates one snapshot entry: F10 predicts a healthy rollout masks"
+ }
+]
