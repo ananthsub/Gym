@@ -47,7 +47,9 @@ TOKEN_FIELDS = ("prompt_token_ids", "generation_token_ids", "generation_log_prob
 #   2  parent_call_id, cum_len and digest, added when calls began being linked to their parent
 #   3  parent resolution and compact continuation lookup metadata
 #   4  prefix_supplied, added when generation-time evidence could prove prefix application
-TOKEN_ENTRY_RECORD_SCHEMA_VERSION = 4
+#   5  prompt_is_delta: prompt_token_ids may hold only the suffix beyond the verified
+#      parent's cumulative tokens; full arrays reconstruct by walking parent links
+TOKEN_ENTRY_RECORD_SCHEMA_VERSION = 5
 
 # Increment this version when the digest encoding changes.
 # A stale digest must fail verification.
@@ -152,6 +154,13 @@ class TokenEntry(BaseModel):
     # A resolver must not match records stamped by a different algorithm.
     fingerprint_version: int | None = None
 
+    # Delta storage was added in schema version 5.
+    # When true, ``prompt_token_ids`` holds only the suffix beyond the RESOLVED
+    # parent's cumulative tokens; the full prompt reconstructs from the chain.
+    # A delta can only attach to a verified parent, so ROOT and UNRESOLVED
+    # records always store the full prompt — fail-closed by construction.
+    prompt_is_delta: bool = False
+
     # Prefix supply fields were added in schema version 4.
     # Request intent is distinct from generation-time proof.
     prefix_requested: bool = False
@@ -186,11 +195,23 @@ class TokenEntry(BaseModel):
         if self.parent_resolution in {ParentResolutionStatus.ROOT, ParentResolutionStatus.UNRESOLVED}:
             if self.parent_call_id is not None:
                 raise ValueError(f"{self.parent_resolution.value} parent metadata cannot carry parent_call_id")
+        if self.prompt_is_delta and (
+            self.parent_call_id is None or self.parent_resolution != ParentResolutionStatus.RESOLVED
+        ):
+            raise ValueError("a delta prompt requires a RESOLVED parent_call_id to reconstruct from")
         return self
 
 
 def cumulative_tokens(entry: TokenEntry) -> list[int]:
-    """The full sequence a child of this call must start with."""
+    """The full sequence a child of this call must start with.
+
+    A delta record cannot answer this alone; silently returning suffix+generation
+    would corrupt every downstream consumer, so it refuses.
+    """
+    if entry.prompt_is_delta:
+        raise ValueError(
+            f"model call {entry.model_call_id} stores a delta prompt; reconstruct through its parent chain"
+        )
     return list(entry.prompt_token_ids) + list(entry.generation_token_ids)
 
 
@@ -199,13 +220,18 @@ def stamp_lineage(
     parent_call_id: str | None,
     *,
     parent_resolution: ParentResolutionStatus | None = None,
+    cumulative: list[int] | None = None,
 ) -> TokenEntry:
     """Fill token lineage and the request-time parent decision.
 
-    ``cum_len`` and ``digest`` always describe this call.
+    ``cum_len`` and ``digest`` always describe this call's FULL sequence.
+    A delta entry must pass ``cumulative`` explicitly — its own arrays are a suffix.
     ``parent_resolution=None`` preserves records built by compatibility callers.
     """
-    cumulative = cumulative_tokens(entry)
+    if cumulative is None:
+        cumulative = cumulative_tokens(entry)
+    elif entry.prompt_is_delta is False and cumulative != cumulative_tokens(entry):
+        raise ValueError("provided cumulative tokens disagree with the entry's own arrays")
     entry.cum_len = len(cumulative)
     entry.digest = compute_digest(cumulative)
     entry.parent_call_id = parent_call_id

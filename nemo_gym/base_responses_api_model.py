@@ -1146,6 +1146,7 @@ class _CaptureMiddleware:
         token_store: Any = None,
         configured_sink: Any = None,
         lineage_store: Any = None,
+        delta_records: bool = False,
         token_capture_enabled: bool = False,
     ) -> None:
         self._app = app
@@ -1156,6 +1157,7 @@ class _CaptureMiddleware:
         # Built from token_id_capture.sink, once, in this process.
         self._configured_sink = configured_sink
         self._lineage_store = lineage_store
+        self._delta_records = delta_records
         # Capture may have no destination in this process.
         # A framework may stage records from its inference worker.
         # This process still resolves the capture identity.
@@ -1222,6 +1224,7 @@ class _CaptureMiddleware:
                     model_call_id=model_call_id,
                     token_sink=token_sink,
                     lineage_store=self._lineage_store,
+                    delta_records=self._delta_records,
                 )
             )
 
@@ -1452,6 +1455,9 @@ def install_model_call_capture(
         token_store=token_store,
         configured_sink=configured_sink,
         lineage_store=lineage_store,
+        delta_records=(
+            capture_settings.token_id_capture.delta_records if capture_settings is not None else False
+        ),
         token_capture_enabled=capture_settings.enabled if capture_settings is not None else False,
     )
 

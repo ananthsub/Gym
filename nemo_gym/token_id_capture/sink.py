@@ -66,6 +66,8 @@ class CaptureContext:
     model: str = ""
     # ``commit_entry`` sets this after another capture path records the call.
     committed: bool = False
+    # Store RESOLVED continuations as parent-relative suffixes (config: delta_records).
+    delta_records: bool = False
     # This records the model server's intent to request prefix supply.
     prefix_requested: bool = False
     # This records proven application based on generation-time prompt_token_ids.
@@ -300,12 +302,29 @@ async def commit_entry(
                 ParentResolutionStatus.UNRESOLVED,
                 reason="not_attempted",
             )
-        # The cumulative length and digest always describe this call.
+        # The cumulative length and digest always describe this call's FULL sequence.
         # The parent decision is persisted with the same sink write.
+        cumulative = None
+        if (
+            context.delta_records
+            and not entry.prompt_is_delta
+            and resolution.status == ParentResolutionStatus.RESOLVED
+            and resolution.match is not None
+            and resolution.match.cumulative_token_ids
+        ):
+            parent_cum = list(resolution.match.cumulative_token_ids)
+            prompt = list(entry.prompt_token_ids)
+            # Only a prompt that PROVABLY extends the parent may be stored as a suffix.
+            # Anything else keeps its full prompt — fail-closed, never a wrong chain.
+            if len(prompt) >= len(parent_cum) and prompt[: len(parent_cum)] == parent_cum:
+                cumulative = prompt + list(entry.generation_token_ids)
+                entry.prompt_token_ids = prompt[len(parent_cum) :]
+                entry.prompt_is_delta = True
         stamp_lineage(
             entry,
             resolution.match.model_call_id if resolution.match is not None else None,
             parent_resolution=resolution.status,
+            cumulative=cumulative,
         )
         entry.parent_resolution_reason = resolution.reason or ""
         await context.token_sink.put(entry)

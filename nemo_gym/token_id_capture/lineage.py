@@ -282,9 +282,12 @@ def assistant_fingerprint(messages: list[dict]) -> str:
 @dataclass
 class LineageNode:
     call_id: str
-    cum_tokens: list[int]
+    # ``None`` means the index is metadata-only; tokens are materialized on demand
+    # from the durable log at ``entry_offset``. Only a RESOLVED match pays that read.
+    cum_tokens: list[int] | None
     cum_len: int
     digest: str
+    entry_offset: int = -1
     # These fields describe the request context sent for this call.
     # They exclude the model's response.
     # The item count is stable while the harness stays in one dialect.
@@ -311,16 +314,15 @@ class RolloutLineage:
     # Cache the cumulative token count for memory bounds.
     total_tokens: int = 0
 
-    def resolve(self, messages: list[dict]) -> LineageResolution:
-        """Return the immutable parent decision for this request.
+    def resolve_node(self, messages: list[dict]) -> tuple[ParentResolutionStatus, "LineageNode | None", str]:
+        """Return the parent decision without touching token arrays.
 
-        A request without model-authored history is a root.
-        A request with unverified history is unresolved.
-        Never guess among calls with identical output.
+        Matching needs only fingerprints, digests, and lengths, so a metadata-only
+        index can serve it; the caller materializes tokens for the single winner.
         """
         fingerprint = assistant_fingerprint(messages)
         if not fingerprint:
-            return LineageResolution(ParentResolutionStatus.ROOT)
+            return ParentResolutionStatus.ROOT, None, ""
         # dict.fromkeys: a call id indexed twice (e.g. by racing refreshes) is one candidate.
         call_ids = list(dict.fromkeys(self.by_fingerprint.get(fingerprint) or []))
         candidates = [
@@ -337,9 +339,21 @@ class RolloutLineage:
             if len(digests) == 1 and candidates[0].digest:
                 candidates = [min(candidates, key=lambda node: node.call_id)]
         if len(candidates) != 1:
-            reason = "no_match" if not candidates else "ambiguous"
-            return LineageResolution(ParentResolutionStatus.UNRESOLVED, reason=reason)
-        node = candidates[0]
+            return ParentResolutionStatus.UNRESOLVED, None, "no_match" if not candidates else "ambiguous"
+        return ParentResolutionStatus.RESOLVED, candidates[0], ""
+
+    def resolve(self, messages: list[dict]) -> LineageResolution:
+        """Return the immutable parent decision for this request.
+
+        A request without model-authored history is a root.
+        A request with unverified history is unresolved.
+        Never guess among calls with identical output.
+        """
+        status, node, reason = self.resolve_node(messages)
+        if status != ParentResolutionStatus.RESOLVED:
+            return LineageResolution(status, reason=reason)
+        if node.cum_tokens is None:
+            raise ValueError("metadata-only lineage node requires caller-side materialization")
         return LineageResolution(
             ParentResolutionStatus.RESOLVED,
             match=LineageMatch(
@@ -364,18 +378,27 @@ class RolloutLineage:
             return False
         return conversation_digest(messages[: node.context_len]) == node.context_digest
 
-    def add_entry(self, entry: TokenEntry) -> None:
-        """Index lookup metadata carried by one committed token entry."""
+    def add_entry(self, entry: TokenEntry, *, store_tokens: bool = True, entry_offset: int = -1) -> None:
+        """Index lookup metadata carried by one committed token entry.
+
+        ``store_tokens=False`` keeps the index a few hundred bytes per call; the
+        caller materializes tokens from the durable log only on a RESOLVED match.
+        """
         if not entry.continuation_fingerprint:
             return
         if entry.fingerprint_version is not None and entry.fingerprint_version != FINGERPRINT_VERSION:
             # A different algorithm produced this fingerprint; matching it would be luck.
             return
+        if entry.prompt_is_delta and store_tokens:
+            # A memory-only index cannot reconstruct a delta chain; refusing loudly
+            # beats indexing a suffix as if it were the full sequence.
+            raise ValueError("delta records require a durable-log-backed lineage store")
         node = LineageNode(
             call_id=entry.model_call_id,
-            cum_tokens=cumulative_tokens(entry),
+            cum_tokens=cumulative_tokens(entry) if store_tokens else None,
             cum_len=entry.cum_len if entry.cum_len is not None else len(cumulative_tokens(entry)),
             digest=entry.digest or "",
+            entry_offset=entry_offset,
             context_len=entry.continuation_context_len,
             context_digest=entry.continuation_context_digest,
         )
@@ -466,10 +489,16 @@ class LineageIndex:
 
 
 class InMemoryLineageStore:
-    """Resolve entries committed to one worker-local index.
+    """Reference resolver for in-process framework backends and tests.
 
-    Call ``put`` at the same publication boundary as the token sink.
-    Multi-worker deployments require a shared backend.
+    Production wiring never selects this class: whenever a token store exists,
+    ``FileLineageStore`` is the default — its index is metadata-only (cheap), its
+    durable log survives eviction and restarts, and it is process-shared. This
+    class remains for two purposes: as the building block an in-process framework
+    backend wraps (call ``put`` at the same publication boundary as its sink),
+    and as the matcher fixture in tests. Its index is memory-only: an evicted or
+    restarted rollout resolves UNRESOLVED for the rest of its life, which is safe
+    but silently lossy — never serve real training traffic through it.
     """
 
     def __init__(self, max_rollouts: int = 512, max_tokens: int = 8_000_000) -> None:
@@ -492,14 +521,18 @@ class InMemoryLineageStore:
 class FileLineageStore:
     """Resolve lineage from the token JSONL committed by ``TokenCaptureStore``."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, max_cached_rollouts: int = 65536) -> None:
         import threading
 
         from nemo_gym.token_id_capture.store import TokenCaptureStore
 
         self._store = TokenCaptureStore(root)
         self._cache: dict[str, tuple[int, int, RolloutLineage]] = {}
-        self._max_cached_rollouts = 512
+        # Metadata-only nodes cost a few hundred bytes per call, so the bound can be
+        # generous: ~65k rollouts of 20 calls is on the order of 300 MB. Workers that
+        # can receive any live rollout's next call (no session affinity) need a bound
+        # at total-live-rollout scale, not per-worker-share scale.
+        self._max_cached_rollouts = max_cached_rollouts
         # The flock is shared-mode for readers, so concurrent resolves of one rollout
         # would otherwise mutate the same cached RolloutLineage from two threads.
         self._cache_guard = threading.Lock()
@@ -514,36 +547,100 @@ class FileLineageStore:
                 lock = self._rollout_locks[rollout_id] = threading.Lock()
             return lock
 
-    def _refresh(self, rollout_id: str) -> RolloutLineage:
-        path = self._store.path_for(rollout_id)
-        if not path.exists():
-            self._cache.pop(rollout_id, None)
-            return RolloutLineage()
-        file_stat = path.stat()
-        inode, offset, lineage = self._cache.get(rollout_id, (file_stat.st_ino, 0, RolloutLineage()))
-        if inode != file_stat.st_ino or offset < 0 or offset > file_stat.st_size:
-            inode, offset, lineage = file_stat.st_ino, 0, RolloutLineage()
-        if offset == file_stat.st_size:
-            return lineage
-        with path.open("rb") as handle:
-            handle.seek(offset)
-            for line in handle:
-                payload = line.strip()
-                if not payload:
-                    continue
-                lineage.add_entry(TokenEntry.model_validate(orjson.loads(payload)))
-            offset = handle.tell()
+    def _cache_put(self, rollout_id: str, value: tuple[int, int, RolloutLineage]) -> None:
+        """Insert or touch a cache row with LRU semantics.
+
+        Plain dict reassignment keeps insertion order, which would evict the
+        longest-LIVED rollout first — the one lineage matters most for. Pop and
+        reinsert so recency, not birth order, decides eviction.
+        """
         with self._cache_guard:
-            self._cache[rollout_id] = (inode, offset, lineage)
-            # Bound worker memory: each cached rollout holds full token arrays.
-            # Eviction only costs the evicted rollout a re-tail on its next resolve.
+            self._cache.pop(rollout_id, None)
+            self._cache[rollout_id] = value
+            # Eviction only costs the evicted rollout a re-tail on its next resolve;
+            # the durable log is the source of truth, never the cache.
             while len(self._cache) > self._max_cached_rollouts:
                 oldest = next(iter(self._cache))
                 if oldest == rollout_id:
                     break
                 self._cache.pop(oldest)
                 self._rollout_locks.pop(oldest, None)
+
+    def _refresh(self, rollout_id: str) -> RolloutLineage:
+        path = self._store.path_for(rollout_id)
+        if not path.exists():
+            with self._cache_guard:
+                self._cache.pop(rollout_id, None)
+            return RolloutLineage()
+        file_stat = path.stat()
+        with self._cache_guard:
+            cached = self._cache.get(rollout_id)
+        inode, offset, lineage = cached if cached is not None else (file_stat.st_ino, 0, RolloutLineage())
+        if inode != file_stat.st_ino or offset < 0 or offset > file_stat.st_size:
+            inode, offset, lineage = file_stat.st_ino, 0, RolloutLineage()
+        if offset == file_stat.st_size:
+            self._cache_put(rollout_id, (inode, offset, lineage))
+            return lineage
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            while True:
+                line_offset = handle.tell()
+                line = handle.readline()
+                if not line:
+                    break
+                payload = line.strip()
+                if not payload:
+                    continue
+                # Metadata-only: the entry's tokens stay on disk at ``line_offset``.
+                lineage.add_entry(
+                    TokenEntry.model_validate(orjson.loads(payload)),
+                    store_tokens=False,
+                    entry_offset=line_offset,
+                )
+            offset = handle.tell()
+        self._cache_put(rollout_id, (inode, offset, lineage))
         return lineage
+
+    def _materialize(self, rollout_id: str, node: LineageNode, lineage: "RolloutLineage") -> list[int]:
+        """Load one RESOLVED parent's cumulative tokens from the durable log.
+
+        The digest recomputation is the safety interlock for the lazy index: a
+        wrong offset or a mutated file fails closed instead of supplying tokens
+        from the wrong call.
+        """
+        from nemo_gym.token_id_capture.records import compute_digest
+
+        path = self._store.path_for(rollout_id)
+
+        def read_at(target: LineageNode) -> TokenEntry:
+            if target.entry_offset < 0:
+                raise ValueError(f"lineage node for {target.call_id} has no durable offset")
+            with path.open("rb") as handle:
+                handle.seek(target.entry_offset)
+                entry = TokenEntry.model_validate(orjson.loads(handle.readline()))
+            if entry.model_call_id != target.call_id:
+                raise ValueError(f"offset for {target.call_id} points at {entry.model_call_id}")
+            return entry
+
+        # Walk delta suffixes back to a full-prompt anchor, then replay forward.
+        suffixes: list[tuple[list[int], list[int]]] = []
+        current = read_at(node)
+        depth = 0
+        while current.prompt_is_delta:
+            depth += 1
+            if depth > 10_000:
+                raise ValueError(f"delta chain for {node.call_id} exceeds sane depth")
+            suffixes.append((list(current.prompt_token_ids), list(current.generation_token_ids)))
+            parent = lineage.by_call_id.get(current.parent_call_id or "")
+            if parent is None:
+                raise ValueError(f"delta record {current.model_call_id} has no indexed parent")
+            current = read_at(parent)
+        tokens = cumulative_tokens(current)
+        for suffix, generation in reversed(suffixes):
+            tokens = tokens + suffix + generation
+        if node.digest and compute_digest(tokens) != node.digest:
+            raise ValueError(f"materialized tokens for {node.call_id} fail their digest")
+        return tokens
 
     async def resolve(self, rollout_id: str, request_items: list[dict]) -> LineageResolution:
         return await asyncio.to_thread(self._resolve, rollout_id, request_items)
@@ -553,7 +650,20 @@ class FileLineageStore:
         # A successful ``TokenSink.put`` is therefore immediately visible.
         with self._rollout_lock(rollout_id), self._store._locked(rollout_id, shared=True):
             lineage = self._refresh(rollout_id)
-            return lineage.resolve(request_items)
+            status, node, reason = lineage.resolve_node(request_items)
+            if status != ParentResolutionStatus.RESOLVED:
+                return LineageResolution(status, reason=reason)
+            tokens = (
+                node.cum_tokens if node.cum_tokens is not None else self._materialize(rollout_id, node, lineage)
+            )
+            return LineageResolution(
+                ParentResolutionStatus.RESOLVED,
+                match=LineageMatch(
+                    model_call_id=node.call_id,
+                    cumulative_token_ids=tuple(tokens),
+                    digest=node.digest,
+                ),
+            )
 
     def is_process_shared(self) -> bool:
         return True

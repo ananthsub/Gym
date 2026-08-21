@@ -114,6 +114,11 @@ class TokenIdCaptureSettings(BaseModel):
     # which masks every multi-call rollout. That is almost always a misconfiguration,
     # so startup refuses it unless this is set deliberately.
     allow_unresolved_continuations: bool = False
+    # Store each RESOLVED continuation's prompt as a suffix of its parent's tokens.
+    # Turns per-rollout storage from O(T^2) to O(T); ROOT and UNRESOLVED records
+    # keep full prompts, so reconstruction is always anchored. Requires consumers
+    # on this stack version (schema 5 readers).
+    delta_records: bool = False
     # Abort the run when the masked fraction of finalized rollouts exceeds this,
     # once at least ``mask_fraction_min_samples`` rollouts finalized.
     # ``None`` disables the kill switch.
