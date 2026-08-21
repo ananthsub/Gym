@@ -133,3 +133,13 @@ simulation coverage for the previously deferred limits: a delta-mode baseline sc
 ratio grows with rollout length — `directional_results.json`), a kill-switch signal check
 (total sink outage → mask fraction 1.0, trips the 0.5 guard), and an explicit test that the
 in-memory reference resolver refuses delta records. 2,943 tests; 22 scenarios, 0 surprises.
+
+A simplification pass (`716fab0e6`) then removed what the fixes made obsolete: the `per_request`
+builder (zero consumers; superseded-in-principle by future segment/terminal-ancestry delivery),
+the caller-less `parent_call_id` compat params on `capture_tokens`/`commit_entry` (a second,
+verification-bypassing way to declare a parent — one way remains: the pre-dispatch
+`LineageResolution`), and the per-rollout resolver-unavailable bookkeeping (the state now requires
+an explicit startup opt-in, so one process-level note + counters suffice). Deliberately kept:
+`stamp_lineage`'s checks (the only stamp-time enforcement — pydantic doesn't re-validate on
+mutation), the legacy prefix-matching path (gating/removal is a destination-PR decision), and
+`LineageIndex` (consolidation into the demoted in-memory reference recommended for #2180).

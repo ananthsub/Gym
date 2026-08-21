@@ -96,7 +96,7 @@ _CAPTURE_CONTEXT: ContextVar[CaptureContext | None] = ContextVar("nemo_gym_captu
 _STATS_LOCK = threading.Lock()
 _RESOLUTION_COUNTS = {"root": 0, "resolved": 0, "unresolved": 0}
 _CAPTURE_FAILURES = [0]
-_RESOLVER_UNAVAILABLE_WARNED: set[str] = set()
+_RESOLVER_UNAVAILABLE_NOTED = [False]
 
 
 def _count_resolution(status_value: str) -> None:
@@ -151,18 +151,16 @@ async def resolve_parent(request_messages: list | None) -> None:
                 ParentResolutionStatus.UNRESOLVED,
                 reason="resolver_unavailable",
             )
-            # Without a resolver every continuation masks; that must not be silent.
+            # Reaching here requires the explicit allow_unresolved_continuations opt-in
+            # (startup refuses the configuration otherwise), so one process-level note
+            # suffices; the aggregate resolution counters carry the ongoing signal.
             with _STATS_LOCK:
-                first_for_rollout = context.rollout_id not in _RESOLVER_UNAVAILABLE_WARNED
-                if first_for_rollout:
-                    if len(_RESOLVER_UNAVAILABLE_WARNED) > 4096:
-                        _RESOLVER_UNAVAILABLE_WARNED.clear()
-                    _RESOLVER_UNAVAILABLE_WARNED.add(context.rollout_id)
-            if first_for_rollout:
+                first = not _RESOLVER_UNAVAILABLE_NOTED[0]
+                _RESOLVER_UNAVAILABLE_NOTED[0] = True
+            if first:
                 logger.warning(
-                    "No lineage resolver is available: continuations of rollout %s resolve UNRESOLVED "
-                    "and the rollout will be masked. Configure token_id_capture.lineage_store.",
-                    context.rollout_id,
+                    "No lineage resolver is available: every continuation resolves UNRESOLVED "
+                    "and multi-call rollouts will be masked (allow_unresolved_continuations is set)."
                 )
         else:
             context.parent_resolution = await context.lineage_store.resolve(context.rollout_id, request_messages)
@@ -195,7 +193,6 @@ async def register_call_intent() -> None:
 
 async def capture_tokens(
     response: Any,
-    parent_call_id: str | None = None,
     request_messages: list | None = None,
 ) -> None:
     """Record a ``TokenEntry`` from a complete model response.
@@ -231,11 +228,6 @@ async def capture_tokens(
         if context.parent_resolution is None and request_messages is not None:
             await resolve_parent(request_messages)
         resolution = context.parent_resolution
-        if parent_call_id is not None:
-            resolution = LineageResolution(
-                ParentResolutionStatus.RESOLVED,
-                match=LineageMatch(parent_call_id, (), ""),
-            )
         if resolution is None:
             resolution = LineageResolution(
                 ParentResolutionStatus.UNRESOLVED,
@@ -266,7 +258,6 @@ async def capture_tokens(
 
 async def commit_entry(
     entry: TokenEntry,
-    parent_call_id: str | None = None,
     *,
     parent_resolution: LineageResolution | None = None,
 ) -> None:
@@ -294,12 +285,9 @@ async def commit_entry(
         context.committed = True
         return
     try:
+        # One way to declare a parent: the resolution decided before dispatch
+        # (or passed explicitly by an engine-side caller that resolved it itself).
         resolution = parent_resolution or context.parent_resolution
-        if parent_call_id is not None:
-            resolution = LineageResolution(
-                ParentResolutionStatus.RESOLVED,
-                match=LineageMatch(parent_call_id, (), ""),
-            )
         if resolution is None:
             resolution = LineageResolution(
                 ParentResolutionStatus.UNRESOLVED,

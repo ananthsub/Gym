@@ -18,7 +18,6 @@
 The builder consumes ``TokenEntry`` records from a ``TokenCaptureSnapshot``.
 The snapshot is frozen before the consumer passes its entries to the builder.
 
-``per_request`` creates one training sequence per call.
 It does not infer relationships between calls.
 It can return multiple trajectories.
 
@@ -108,15 +107,6 @@ class BuildOutput:
     chains: list[Chain]
     quarantined: list[str] = field(default_factory=list)  # Model call IDs.
     notes: BuildNotes = field(default_factory=lambda: BuildNotes(builder=""))
-
-
-def per_request(entries: list[TokenEntry]) -> BuildOutput:
-    ordered = sorted(entries, key=lambda e: (len(e.prompt_token_ids), e.model_call_id))
-    chains = [
-        Chain(chain_id=f"req-{i}", root_prompt=list(e.prompt_token_ids), links=[ChainLink(entry=e, interstitial=[])])
-        for i, e in enumerate(ordered)
-    ]
-    return BuildOutput(chains=chains, notes=BuildNotes(builder="per_request", chains=len(chains)))
 
 
 @dataclass(eq=False)  # Identity-based equality keeps nodes hashable.
@@ -483,7 +473,6 @@ def prefix_merging(entries: list[TokenEntry]) -> BuildOutput:
 
 
 _BUILDERS: dict[str, Callable[[list[TokenEntry]], BuildOutput]] = {
-    "per_request": per_request,
     "prefix_merging": prefix_merging,
 }
 
@@ -555,8 +544,6 @@ def project_main_chain_response(rollout_id: str, out: BuildOutput, model: str = 
     """
     if not out.chains:
         raise ValueError("capture produced no safe trainable chain")
-    if out.notes.builder == "per_request" and len(out.chains) != 1:
-        raise ValueError("per_request produced multiple trajectories for a single-response delivery")
     mains = [c for c in out.chains if c.chain_id == "main"] or out.chains[:1]
     output = project_chain_to_output_items(mains[0])
     if not any(item.get("generation_token_ids") for item in output):

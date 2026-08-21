@@ -24,7 +24,6 @@ from nemo_gym.token_id_capture import (
     TokenCaptureSnapshot,
     assert_prefix_contiguity,
     compute_digest,
-    per_request,
     prefix_merging,
     project_chain_to_output_items,
     project_main_chain_response,
@@ -113,22 +112,6 @@ def test_order_independent():
     b = project_main_chain_response("t0-r0", prefix_merging(shuffled), model="m")
     assert a["output"] == b["output"]
 
-
-def test_per_request_marks_the_same_generated_tokens():
-    # Both builders identify the same sampled tokens.
-    merged = prefix_merging(APPEND_ONLY)
-    per_req = per_request(APPEND_ONLY)
-    assert len(per_req.chains) == 3
-
-    merged_tokens = _generated_tokens(project_main_chain_response("t0-r0", merged, model="m"))
-    per_req_tokens = sorted(
-        tok
-        for chain in per_req.chains
-        for item in project_chain_to_output_items(chain)
-        for tok in (item.get("generation_token_ids") or [])
-    )
-    assert merged_tokens == sorted([10, 11, 12, 13, 14])
-    assert per_req_tokens == sorted([10, 11, 12, 13, 14])
 
 
 def test_projection_is_prefix_contiguous():
@@ -415,29 +398,6 @@ def test_consumer_masks_an_external_source_failure():
     assert built["mask_sample"] is True
     assert "transport unavailable" in built["error"]
 
-
-def test_single_response_consumer_rejects_per_request_builder():
-    class Source:
-        async def freeze(self, rollout_id):
-            return TokenCaptureSnapshot(
-                rollout_id=rollout_id,
-                entries=(APPEND_ONLY[0],),
-                incomplete=False,
-                snapshot_id="snapshot-3",
-                version=1,
-            )
-
-        async def drop(self, rollout_id, *, snapshot_id, version):
-            return True
-
-        async def close(self):
-            return None
-
-    built = asyncio.run(trajectories_from_source("t0-r0", Source(), builder="per_request"))
-
-    assert built["mask_sample"] is True
-    assert built["rebuilt_response"] is None
-    assert "not supported by single-response delivery" in built["error"]
 
 
 def test_consumer_noop_when_disabled_or_absent(tmp_path):
