@@ -17,7 +17,9 @@
 
 Each rollout uses one ``<rollout_id>.tokens.jsonl`` file.
 Evaluation records use a separate file.
-Each write uses ``fsync``.
+Every entry line is ``fsync``ed before ``put`` returns — that is the durability
+guarantee. The state index is written atomically but fsynced only on lifecycle
+transitions (freeze, mark, drop); it is reconstructible from the JSONL tail.
 A per-rollout file lock serializes writers to the same rollout.
 Different rollouts can write concurrently.
 """
@@ -335,13 +337,6 @@ class TokenCaptureStore:
                 snapshot_id=str(state["snapshot_id"]),
                 version=int(state["version"]),
             )
-
-    async def tokens_for(self, rollout_id: str) -> list[TokenEntry]:
-        """Read records for compatibility diagnostics.
-
-        Consumers should use ``freeze``.
-        """
-        return await asyncio.to_thread(self.read_entries, rollout_id)
 
     async def drop(self, rollout_id: str, *, snapshot_id: str, version: int) -> bool:
         """Delete snapshot payloads while retaining its tombstone and lock."""

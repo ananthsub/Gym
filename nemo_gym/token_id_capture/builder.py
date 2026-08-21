@@ -168,8 +168,9 @@ def _resolve_parent(
     """Find this call's parent.
 
     New records preserve the request-time parent decision.
-    Only legacy records may infer a parent from token prefixes.
-    ``note`` reports why the recorded link was not used.
+    Token-prefix inference serves two cases: legacy records with no decision at
+    all, and a RESOLVED link whose parent is absent from the build (recovery).
+    ``note`` reports why the recorded link was not used as recorded.
     """
     prompt = list(node.entry.prompt_token_ids)
     resolution = node.entry.parent_resolution
@@ -186,7 +187,7 @@ def _resolve_parent(
             # A recorded parent absent from the build (e.g. filtered for an empty
             # generation) is not evidence of conflict. Prefix matching can still
             # attach the child to a verified ancestor; digest MISMATCH stays fatal.
-            inferred, ambiguous = _infer_parent(prompt, prefix_index)
+            inferred, ambiguous = prefix_index.infer_parent(prompt)
             if inferred is not None and not ambiguous:
                 return inferred, False, "parent_call_id_missing_recovered"
             return None, False, "parent_call_id_missing"
@@ -199,17 +200,7 @@ def _resolve_parent(
             return parent, False, None
         return None, False, "parent_digest_mismatch"
     # Resolution metadata is absent only on records written before schema 3.
-    return _infer_parent(prompt, prefix_index) + (None,)
-
-
-def _infer_parent(prompt: list[int], index: _PrefixIndex) -> tuple["_Node | None", bool]:
-    """Infer the parent from the longest cumulative prefix.
-
-    This is the fallback when no verified parent link exists.
-    Identical cumulative sequences are ambiguous.
-    The caller quarantines an ambiguous subtree.
-    """
-    return index.infer_parent(prompt)
+    return prefix_index.infer_parent(prompt) + (None,)
 
 
 def _materialize_delta_prompts(entries: list[TokenEntry]) -> tuple[list[TokenEntry], list[str]]:

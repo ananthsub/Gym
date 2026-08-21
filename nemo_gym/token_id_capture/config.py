@@ -22,6 +22,9 @@ env:
       enabled: true
       dir: /tmp/ng_tokcap                  # The writer and consumer share this node-local directory.
       sink: my_pkg.sinks:MyDataPlaneSink   # This optional sink replaces the file store.
+      lineage_store: my_pkg.sinks:MyResolver  # Required with a custom sink (same backend namespace).
+      delta_records: true                  # Store RESOLVED continuations as parent-relative suffixes.
+      max_mask_fraction: 0.5               # Abort a run that is mostly producing masked rollouts.
 ```
 
 Evaluation capture uses ``/ng-rollout/<id>/...``.

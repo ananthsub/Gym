@@ -1542,7 +1542,7 @@ def test_a_record_is_readable_as_soon_as_put_returns(tmp_path):
         generation_log_probs=[-0.1],
     )
     asyncio.run(store.put(entry))
-    assert [e.model_call_id for e in asyncio.run(store.tokens_for("r0"))] == ["c1"]
+    assert [e.model_call_id for e in store.read_entries("r0")] == ["c1"]
 
 
 def test_a_rollout_that_lost_a_call_is_distinguishable_from_a_complete_one(tmp_path):
@@ -1804,7 +1804,7 @@ def test_the_store_is_a_token_source(tmp_path):
             generation_log_probs=[-0.1],
         )
     )
-    assert [e.model_call_id for e in asyncio.run(store.tokens_for("r0"))] == ["c1"]
+    assert [e.model_call_id for e in store.read_entries("r0")] == ["c1"]
 
     # A colocated source can detect a capture failure.
     # This prevents training on an incomplete rollout.

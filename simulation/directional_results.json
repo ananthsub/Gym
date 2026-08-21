@@ -1,0 +1,13 @@
+{
+ "storage": {
+  "full": 53347,
+  "delta": 22693,
+  "ratio": 2.35
+ },
+ "kill_switch": {
+  "finalized": 6,
+  "masked": 6,
+  "fraction": 1.0,
+  "would_trip_at_0.5": true
+ }
+}

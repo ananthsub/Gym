@@ -45,6 +45,30 @@
   "note": "harness reorders tool-call JSON keys; canonicalization must still match"
  },
  {
+  "scenario": "faithful_linear_delta",
+  "verdict": "OK",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true
+  ],
+  "delivered_calls": 3,
+  "engine_calls": 3,
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
+  "http_statuses": [
+   200,
+   200,
+   200
+  ],
+  "note": "same baseline with delta records on: suffix storage, identical delivery"
+ },
+ {
   "scenario": "drift_no_supply",
   "verdict": "SAFE_MASKED",
   "masked": true,

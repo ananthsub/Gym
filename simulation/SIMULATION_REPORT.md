@@ -125,3 +125,11 @@ event, not a correctness event), `InMemoryLineageStore` demoted to a reference/t
 block, and **delta records (schema v5)** — RESOLVED continuations store only the suffix beyond
 their parent's cumulative tokens (O(T²)→O(T) storage), with fail-closed chain reconstruction in
 the builder and the resolver. 2,942 tests pass; the scenario matrix stays clean.
+
+A cleanup pass (`e1915d0be`) removed obsolete code (`tokens_for`, the `_infer_parent`
+forwarder), corrected every stale comment the fixes had invalidated, and added directional
+simulation coverage for the previously deferred limits: a delta-mode baseline scenario
+(identical 3/3 delivery), a storage comparison (12 turns: **2.35× smaller with delta records**,
+ratio grows with rollout length — `directional_results.json`), a kill-switch signal check
+(total sink outage → mask fraction 1.0, trips the 0.5 guard), and an explicit test that the
+in-memory reference resolver refuses delta records. 2,943 tests; 22 scenarios, 0 surprises.

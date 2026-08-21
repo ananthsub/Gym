@@ -55,6 +55,8 @@ class CaptureContext:
     The context identifies the rollout and model call.
     ``token_sink`` receives the resulting record.
     A framework may provide any ``TokenSink`` implementation.
+    The parent decision, delta-storage mode, and prefix-supply intent/proof all
+    live here so one immutable per-call decision is shared by every consumer.
     """
 
     rollout_id: str
@@ -135,7 +137,8 @@ async def resolve_parent(request_messages: list | None) -> None:
     Resolve once before dialect conversion or dispatch.
     Prefix supply and capture then share one parent decision.
     Return without work for untagged traffic.
-    A miss leaves the parent link unset.
+    Every attempted resolution records a decision; a miss records UNRESOLVED
+    with its reason rather than leaving the link ambiguous.
     """
     context = _CAPTURE_CONTEXT.get()
     if context is None or request_messages is None:

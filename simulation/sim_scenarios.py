@@ -66,6 +66,7 @@ def run_scenario(
     supply: bool,
     drive: Callable[[Harness], None],
     use_dir: bool = True,
+    delta: bool = False,
     installed_sink: Callable[[Path], Any] | None = None,
     source_wrapper: Callable[[Any], Any] | None = None,
     expect_masked: bool | None = None,
@@ -82,7 +83,7 @@ def run_scenario(
             sink_obj = installed_sink(tmp)
             install_token_sink(sink_obj)
         try:
-            client = build_server(engine, str(tmp) if use_dir else None, supply)
+            client = build_server(engine, str(tmp) if use_dir else None, supply, delta=delta)
         except Exception as error:
             # Post-fix behavior for the misconfiguration scenarios: refused at startup.
             if bug == "F3" and "lineage_store" in str(error):
@@ -242,6 +243,20 @@ def scenarios() -> list[Outcome]:
             expect_statuses=["root", "resolved"],
             expect_delivered=2,
             note="harness reorders tool-call JSON keys; canonicalization must still match",
+        )
+    )
+
+    results.append(
+        run_scenario(
+            "faithful_linear_delta",
+            engine=SimEngine(),
+            supply=True,
+            drive=three_turns,
+            delta=True,
+            expect_masked=False,
+            expect_statuses=["root", "resolved", "resolved"],
+            expect_delivered=3,
+            note="same baseline with delta records on: suffix storage, identical delivery",
         )
     )
 
@@ -495,6 +510,52 @@ def scenarios() -> list[Outcome]:
     return results
 
 
+def storage_comparison(turns: int = 12) -> dict:
+    """Directional O(T^2) vs O(T) storage measurement through the real server."""
+    import tempfile as _tf
+
+    sizes = {}
+    for mode, delta in (("full", False), ("delta", True)):
+        tmp = Path(_tf.mkdtemp(prefix=f"sim_storage_{mode}_"))
+        engine = SimEngine(scripted=[{"content": f"a fairly long answer number {i} " * 8} for i in range(turns)])
+        client = build_server(engine, str(tmp), True, delta=delta)
+        harness = Harness(client=client, rollout_id="storage")
+        for i in range(turns):
+            harness.turn(f"question {i} with some sustained shared context " * 4)
+        built = asyncio.run(trajectories_from_source("storage", TokenCaptureStore(tmp)))
+        assert built["mask_sample"] is False and len(built["rebuilt_response"]["output"]) == turns
+        sizes[mode] = TokenCaptureStore(tmp).path_for("storage").stat().st_size
+    sizes["ratio"] = round(sizes["full"] / sizes["delta"], 2)
+    return sizes
+
+
+def kill_switch_signal(rollouts: int = 6) -> dict:
+    """Directional kill-switch check: a sink outage must produce the exact
+    mask-fraction signal the collector guard consumes."""
+    import tempfile as _tf
+
+    from sim_stack import FailingSink
+    from nemo_gym.token_id_capture import TokenCaptureStore as _Store, install_token_sink
+
+    masked = 0
+    for i in range(rollouts):
+        tmp = Path(_tf.mkdtemp(prefix="sim_kill_"))
+        install_token_sink(FailingSink(_Store(tmp), fail_on_call=2))
+        try:
+            engine = SimEngine()
+            client = build_server(engine, str(tmp), True)
+            harness = Harness(client=client, rollout_id=f"kill-{i}")
+            harness.turn("q1")
+            harness.turn("q2")
+            built = asyncio.run(trajectories_from_source(f"kill-{i}", _Store(tmp)))
+            masked += bool(built.get("mask_sample"))
+        finally:
+            uninstall_sinks()
+    fraction = masked / rollouts
+    # The collector guard: max_mask_fraction=0.5, min_samples<=rollouts => must trip.
+    return {"finalized": rollouts, "masked": masked, "fraction": fraction, "would_trip_at_0.5": fraction > 0.5}
+
+
 def main() -> None:
     results = scenarios()
     rows = []
@@ -522,6 +583,12 @@ def main() -> None:
             f"{r.name:<{width}}  {r.verdict:<15} {str(r.masked):<7} "
             f"{','.join(r.statuses) or '-'}  d={r.delivered_calls}/{r.engine_calls}  {r.fabrication}"
         )
+    storage = storage_comparison()
+    kill = kill_switch_signal()
+    print(f"\nstorage (12 turns): full={storage['full']}B delta={storage['delta']}B ratio={storage['ratio']}x")
+    print(f"kill-switch signal under total sink outage: {kill}")
+    (Path(__file__).parent / "directional_results.json").write_text(json.dumps({"storage": storage, "kill_switch": kill}, indent=1))
+
     surprises = [r for r in results if r.verdict == "SURPRISE"]
     print(f"\n{len(results)} scenarios: "
           f"{sum(r.verdict == 'OK' for r in results)} OK, "

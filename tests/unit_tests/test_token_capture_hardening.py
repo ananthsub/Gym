@@ -268,3 +268,25 @@ class TestDeltaRecords:
         out = prefix_merging(store.read_entries("orphan"))
         assert out.notes.parent_link_failures.get("delta_chain_unreconstructable") == 1
         assert out.notes.unresolved_parent_calls == ["child"]
+
+
+    def test_delta_records_require_a_durable_log_backed_resolver(self):
+        """The in-memory reference index cannot reconstruct a delta chain; it must
+        refuse loudly rather than index a suffix as if it were the full sequence."""
+        from nemo_gym.token_id_capture import InMemoryLineageStore
+
+        entry = TokenEntry(
+            rollout_id="r",
+            model_call_id="child",
+            prompt_token_ids=[9],
+            generation_token_ids=[10],
+            generation_log_probs=[-0.1],
+            output_items=[{"type": "message", "role": "assistant", "content": "an answer"}],
+        )
+        entry.prompt_is_delta = True
+        stamp_continuation(entry, [{"role": "user", "content": "q"}])
+        stamp_lineage(
+            entry, "parent", parent_resolution=ParentResolutionStatus.RESOLVED, cumulative=[1, 9, 10]
+        )
+        with pytest.raises(ValueError, match="durable-log-backed"):
+            asyncio.run(InMemoryLineageStore().put(entry))

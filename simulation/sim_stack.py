@@ -154,7 +154,7 @@ class SimEngine:
         return {"tokens": tokenize(render_prompt(body.get("messages") or [], drift_history=self.drift_on_rerender))}
 
 
-def build_server(engine: SimEngine, capture_dir: str | None, supply: bool) -> TestClient:
+def build_server(engine: SimEngine, capture_dir: str | None, supply: bool, delta: bool = False) -> TestClient:
     config = VLLMModelConfig(
         host="0.0.0.0",
         port=8080,
@@ -168,7 +168,7 @@ def build_server(engine: SimEngine, capture_dir: str | None, supply: bool) -> Te
         uses_interleaved_reasoning=False,
         supply_prefix_token_ids=supply,
     )
-    capture_block: dict[str, Any] = {"enabled": True}
+    capture_block: dict[str, Any] = {"enabled": True, "delta_records": delta}
     if capture_dir is not None:
         capture_block["dir"] = capture_dir
     global_config = {"token_id_capture": capture_block}
