@@ -2,8 +2,8 @@
   "meta": {
     "python": "3.13.14",
     "cpu_count": 8,
-    "started_at": "2026-08-21T02:19:50",
-    "finished_at": "2026-08-21T02:20:07"
+    "started_at": "2026-08-21T02:48:49",
+    "finished_at": "2026-08-21T02:49:03"
   },
   "f2_concurrent_resolve": {
     "configs": {
@@ -18,7 +18,7 @@
         "reproduction_rate": 0.0,
         "ambiguous_resolves_total": 0,
         "example_corruption": null,
-        "elapsed_s": 1.62
+        "elapsed_s": 1.52
       },
       "sync_default_interval_8t": {
         "trials": 70,
@@ -31,7 +31,7 @@
         "reproduction_rate": 0.0,
         "ambiguous_resolves_total": 0,
         "example_corruption": null,
-        "elapsed_s": 1.61
+        "elapsed_s": 1.53
       },
       "sync_1us_interval_8t": {
         "trials": 70,
@@ -44,7 +44,7 @@
         "reproduction_rate": 0.0,
         "ambiguous_resolves_total": 0,
         "example_corruption": null,
-        "elapsed_s": 1.86
+        "elapsed_s": 1.56
       },
       "continuous_default_interval_4resolvers": {
         "trials": 20,
@@ -56,7 +56,7 @@
         "reproduction_rate": 0.0,
         "ambiguous_resolves_total": 0,
         "example_corruption": null,
-        "elapsed_s": 5.34
+        "elapsed_s": 4.3
       }
     },
     "reproduced_overall": false,
@@ -68,7 +68,7 @@
     "violations_count": 0,
     "timing_misses_freeze_after_writer_done": 0,
     "passed": true,
-    "elapsed_s": 0.71
+    "elapsed_s": 0.56
   },
   "multiprocess_soak": {
     "rollouts": 20,
@@ -78,12 +78,12 @@
     "failures_count": 0,
     "passed": true,
     "resolve_latency_ms": {
-      "p50": 0.393,
-      "p99": 0.64,
-      "mean": 0.406,
-      "max": 0.782
+      "p50": 0.322,
+      "p99": 0.445,
+      "mean": 0.326,
+      "max": 0.497
     },
-    "elapsed_s": 0.84
+    "elapsed_s": 0.66
   },
   "executor_probe": {
     "default_executor_max_workers": 12,
@@ -92,68 +92,68 @@
         "k_in_flight": 8,
         "total_ops": 768,
         "slow_sink_20ms": false,
-        "ops_per_sec": 924.9,
+        "ops_per_sec": 1412.9,
         "op_latency_ms": {
-          "p50": 8.28,
-          "p99": 12.47,
-          "max": 13.46
+          "p50": 5.47,
+          "p99": 7.59,
+          "max": 8.91
         },
         "resolved_and_committed": 768,
         "incomplete_markers": 0,
-        "wall_s": 0.83
+        "wall_s": 0.54
       },
       {
         "k_in_flight": 32,
         "total_ops": 768,
         "slow_sink_20ms": false,
-        "ops_per_sec": 995.1,
+        "ops_per_sec": 1396.6,
         "op_latency_ms": {
-          "p50": 31.61,
-          "p99": 37.93,
-          "max": 40.05
+          "p50": 22.05,
+          "p99": 27.84,
+          "max": 29.1
         },
         "resolved_and_committed": 768,
         "incomplete_markers": 0,
-        "wall_s": 0.77
+        "wall_s": 0.55
       },
       {
         "k_in_flight": 128,
         "total_ops": 768,
         "slow_sink_20ms": false,
-        "ops_per_sec": 983.4,
+        "ops_per_sec": 1364.3,
         "op_latency_ms": {
-          "p50": 131.71,
-          "p99": 158.99,
-          "max": 164.47
+          "p50": 94.94,
+          "p99": 102.22,
+          "max": 104.26
         },
         "resolved_and_committed": 768,
         "incomplete_markers": 0,
-        "wall_s": 0.78
+        "wall_s": 0.56
       },
       {
         "k_in_flight": 512,
         "total_ops": 768,
         "slow_sink_20ms": false,
-        "ops_per_sec": 1010.3,
+        "ops_per_sec": 1475.9,
         "op_latency_ms": {
-          "p50": 413.16,
-          "p99": 492.31,
-          "max": 500.95
+          "p50": 273.31,
+          "p99": 318.19,
+          "max": 324.22
         },
         "resolved_and_committed": 768,
         "incomplete_markers": 0,
-        "wall_s": 0.76
+        "wall_s": 0.52
       }
     ],
     "slow_sink_k128": {
       "k_in_flight": 128,
       "total_ops": 512,
       "slow_sink_20ms": true,
-      "ops_per_sec": 408.1,
+      "ops_per_sec": 411.1,
       "op_latency_ms": {
-        "p50": 289.83,
-        "p99": 352.36,
-        "max": 360.41
+        "p50": 291.23,
+        "p99": 354.72,
+        "max": 359.48
       },
       "resolved_and_committed": 512,
       "incomplete_markers": 0,

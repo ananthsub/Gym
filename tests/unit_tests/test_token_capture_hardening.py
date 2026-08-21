@@ -102,9 +102,9 @@ class TestLazyLineageIndex:
         assert content != path.read_bytes(), "test setup: the payload must actually change"
         path.write_bytes(content)
 
-        with pytest.raises(ValueError, match="digest|offset|points at"):
-            index = lineage._cache["corrupt"][2]
-            lineage._materialize("corrupt", index.by_call_id["corrupt-c1"], index)
+        with pytest.raises(ValueError, match="digest|ref|points at"):
+            cursor, refs, index = lineage._cache["corrupt"]
+            lineage._materialize("corrupt", index.by_call_id["corrupt-c1"], refs, index)
 
 
 class TestStoreGC:

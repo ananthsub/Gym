@@ -43,7 +43,7 @@ harness ──► _CaptureMiddleware ──► model route (vllm_model) ──�
 |---|---|
 | `protocols.py` | The external contract: `TokenSink`, `TokenSource`, `LineageStore` (+ optional sink extension `begin_call`). Leaf-importable: no fastapi/ray/torch. |
 | `records.py` | `TokenEntry` (schema §5), digests (`compute_digest`, `encode_token_ids`), `stamp_lineage`. |
-| `lineage.py` | Canonicalization + hashing (`assistant_fingerprint`, `conversation_digest`, `FINGERPRINT_VERSION`), the matcher (`RolloutLineage`), `FileLineageStore` (production), `InMemoryLineageStore` (reference/tests only — never production). |
+| `lineage.py` | Canonicalization + hashing (`assistant_fingerprint`, `conversation_digest`, `FINGERPRINT_VERSION`), the matcher (`RolloutLineage`), `IncrementalLineageStore` (the base every backend subclasses: two hooks — fetch-new-entries-since-cursor and load-entry-by-ref — inherit the matcher, LRU metadata index, locks, and lazy digest-checked materialization incl. delta chains), `FileLineageStore` (the file-backed reference implementation), `InMemoryLineageStore` (tests only). |
 | `sink.py` | `CaptureContext` (per-call identity + parent decision + delta mode + prefix intent/proof), `resolve_parent`, `register_call_intent`, `capture_tokens`/`commit_entry`, worker health counters (`capture_health_snapshot`). |
 | `store.py` | `TokenCaptureStore`: per-rollout JSONL + flock + state (freeze/version/tombstone), intents, `sweep_retired` GC. Default `TokenSink` and `TokenSource`. |
 | `builder.py` | Offline reconstruction: delta materialization, parent-link chaining with digest verification, missing-parent recovery, retry-sibling resolution, projection. |
@@ -126,8 +126,8 @@ every record with their diagnostic `parent_resolution_reason`:
 
 The hashes are a cross-repo wire contract: `FINGERPRINT_VERSION` is stamped on entries and
 gated at indexing; golden vectors (`tests/unit_tests/token_capture_golden_vectors.json`) pin
-them, including cross-dialect equality. External resolvers should embed `RolloutLineage`
-rather than reimplement hashing. The builder independently re-verifies every claimed link by
+them, including cross-dialect equality. External resolvers subclass
+`IncrementalLineageStore` (two hooks) rather than reimplement hashing or caching. The builder independently re-verifies every claimed link by
 digest — the defense-in-depth that makes the §7 contract relaxations safe. Token-prefix
 matching survives for exactly one purpose: recovering a RESOLVED link whose parent is absent
 from the build (e.g. filtered for an empty generation); a missing decision masks
@@ -172,6 +172,12 @@ mostly-masked data dies loudly instead of burning its budget.
   rebase checklist (tri-state adoption, single publication door, shared custody record).
 
 ## 10. Changelog
+
+- **`IncrementalLineageStore` extracted.** External lineage backends now subclass a base with
+  two hooks (`_fetch_new_entries`, `_load_entry`) and inherit the matcher, LRU metadata-only
+  index, per-rollout locking, and lazy digest-checked materialization including delta chains;
+  `FileLineageStore` is the reference subclass; the conformance suite demonstrates the pattern
+  with a ~15-line memory adapter.
 
 - **v3 floor; legacy prefix-inference reconstruction removed.** No v1/v2 records exist in the
   wild; missing resolution metadata now masks (`missing_resolution`) instead of triggering

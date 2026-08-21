@@ -52,6 +52,7 @@ from nemo_gym.token_id_capture.consumer import (
 )
 from nemo_gym.token_id_capture.lineage import (
     FileLineageStore,
+    IncrementalLineageStore,
     InMemoryLineageStore,
     LineageIndex,
     RolloutLineage,
@@ -133,6 +134,7 @@ __all__ = [
     "commit_entry",
     "current_capture_context",
     "FileLineageStore",
+    "IncrementalLineageStore",
     "InMemoryLineageStore",
     "LineageIndex",
     "RolloutLineage",

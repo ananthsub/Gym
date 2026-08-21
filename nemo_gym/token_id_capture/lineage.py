@@ -518,26 +518,59 @@ class InMemoryLineageStore:
         self.index.clear()
 
 
-class FileLineageStore:
-    """Resolve lineage from the token JSONL committed by ``TokenCaptureStore``."""
+class IncrementalLineageStore:
+    """Base class for lineage resolvers over any committed-entry backend.
 
-    def __init__(self, root: str | Path, *, max_cached_rollouts: int = 65536) -> None:
+    An external backend (e.g. a TransferQueue adapter) implements TWO hooks and
+    inherits everything else — Gym's matcher, the metadata-only LRU index, the
+    per-rollout in-process lock, and lazy digest-checked token materialization
+    (including delta-chain reconstruction). Do not reimplement the hashing or
+    matching; hash-for-hash agreement is the wire contract.
+
+    Required hooks:
+      ``_fetch_new_entries(rollout_id, cursor)`` -> ``(items, new_cursor)`` where
+        ``items`` is ``[(TokenEntry, ref), ...]`` in commit order since ``cursor``
+        (``None`` means from the beginning) and ``ref`` is any handle that
+        ``_load_entry`` can use later (byte offset, KV key, ...). Raise
+        ``CursorReset`` when the cursor no longer describes the backend (file
+        rotated, namespace recreated); the base refetches from the beginning.
+      ``_load_entry(rollout_id, ref)`` -> ``TokenEntry`` for one committed record.
+
+    Optional hooks:
+      ``_read_locked(rollout_id)`` — context manager held around fetch+resolve
+        for backends with a read-lock discipline (default: no lock).
+      ``is_process_shared()`` — default ``True``; an external backend exists to
+        be shared, and the multi-worker startup check trusts this answer.
+    """
+
+    class CursorReset(Exception):
+        """The stored cursor no longer describes the backend; refetch from scratch."""
+
+    def __init__(self, *, max_cached_rollouts: int = 65536) -> None:
         import threading
 
-        from nemo_gym.token_id_capture.store import TokenCaptureStore
-
-        self._store = TokenCaptureStore(root)
-        self._cache: dict[str, tuple[int, int, RolloutLineage]] = {}
+        # (cursor, refs, lineage): lineage stays at index 2 for diagnostics/tooling.
+        self._cache: dict[str, tuple[Any, dict[str, Any], RolloutLineage]] = {}
         # Metadata-only nodes cost a few hundred bytes per call, so the bound can be
-        # generous: ~65k rollouts of 20 calls is on the order of 300 MB. Workers that
-        # can receive any live rollout's next call (no session affinity) need a bound
-        # at total-live-rollout scale, not per-worker-share scale.
+        # generous. Workers that can receive any live rollout's next call (no session
+        # affinity) need a bound at total-live-rollout scale.
         self._max_cached_rollouts = max_cached_rollouts
-        # The flock is shared-mode for readers, so concurrent resolves of one rollout
-        # would otherwise mutate the same cached RolloutLineage from two threads.
         self._cache_guard = threading.Lock()
         self._rollout_locks: dict[str, threading.Lock] = {}
 
+    # -- hooks ----------------------------------------------------------------
+    def _fetch_new_entries(self, rollout_id: str, cursor: Any) -> tuple[list[tuple[TokenEntry, Any]], Any]:
+        raise NotImplementedError
+
+    def _load_entry(self, rollout_id: str, ref: Any) -> TokenEntry:
+        raise NotImplementedError
+
+    def _read_locked(self, rollout_id: str):
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+    # -- shared machinery -----------------------------------------------------
     def _rollout_lock(self, rollout_id: str):
         import threading
 
@@ -547,18 +580,18 @@ class FileLineageStore:
                 lock = self._rollout_locks[rollout_id] = threading.Lock()
             return lock
 
-    def _cache_put(self, rollout_id: str, value: tuple[int, int, RolloutLineage]) -> None:
+    def _cache_put(self, rollout_id: str, value: tuple[Any, dict[str, Any], RolloutLineage]) -> None:
         """Insert or touch a cache row with LRU semantics.
 
         Plain dict reassignment keeps insertion order, which would evict the
         longest-LIVED rollout first — the one lineage matters most for. Pop and
-        reinsert so recency, not birth order, decides eviction.
+        reinsert so recency, not birth order, decides eviction. Eviction only
+        costs the evicted rollout a re-fetch; the backend is the source of truth,
+        never the cache.
         """
         with self._cache_guard:
             self._cache.pop(rollout_id, None)
             self._cache[rollout_id] = value
-            # Eviction only costs the evicted rollout a re-tail on its next resolve;
-            # the durable log is the source of truth, never the cache.
             while len(self._cache) > self._max_cached_rollouts:
                 oldest = next(iter(self._cache))
                 if oldest == rollout_id:
@@ -566,75 +599,53 @@ class FileLineageStore:
                 self._cache.pop(oldest)
                 self._rollout_locks.pop(oldest, None)
 
-    def _refresh(self, rollout_id: str) -> RolloutLineage:
-        path = self._store.path_for(rollout_id)
-        if not path.exists():
-            with self._cache_guard:
-                self._cache.pop(rollout_id, None)
-            return RolloutLineage()
-        file_stat = path.stat()
+    def _refresh(self, rollout_id: str) -> tuple[dict[str, Any], RolloutLineage]:
         with self._cache_guard:
             cached = self._cache.get(rollout_id)
-        inode, offset, lineage = cached if cached is not None else (file_stat.st_ino, 0, RolloutLineage())
-        if inode != file_stat.st_ino or offset < 0 or offset > file_stat.st_size:
-            inode, offset, lineage = file_stat.st_ino, 0, RolloutLineage()
-        if offset == file_stat.st_size:
-            self._cache_put(rollout_id, (inode, offset, lineage))
-            return lineage
-        with path.open("rb") as handle:
-            handle.seek(offset)
-            while True:
-                line_offset = handle.tell()
-                line = handle.readline()
-                if not line:
-                    break
-                payload = line.strip()
-                if not payload:
-                    continue
-                # Metadata-only: the entry's tokens stay on disk at ``line_offset``.
-                lineage.add_entry(
-                    TokenEntry.model_validate(orjson.loads(payload)),
-                    store_tokens=False,
-                    entry_offset=line_offset,
-                )
-            offset = handle.tell()
-        self._cache_put(rollout_id, (inode, offset, lineage))
-        return lineage
+        cursor, refs, lineage = cached if cached is not None else (None, {}, RolloutLineage())
+        try:
+            items, cursor = self._fetch_new_entries(rollout_id, cursor)
+        except IncrementalLineageStore.CursorReset:
+            refs, lineage = {}, RolloutLineage()
+            items, cursor = self._fetch_new_entries(rollout_id, None)
+        for entry, ref in items:
+            refs[entry.model_call_id] = ref
+            # Metadata-only: tokens stay in the backend behind ``ref``.
+            lineage.add_entry(entry, store_tokens=False, entry_offset=ref if isinstance(ref, int) else -1)
+        self._cache_put(rollout_id, (cursor, refs, lineage))
+        return refs, lineage
 
-    def _materialize(self, rollout_id: str, node: LineageNode, lineage: "RolloutLineage") -> list[int]:
-        """Load one RESOLVED parent's cumulative tokens from the durable log.
+    def _materialize(
+        self, rollout_id: str, node: LineageNode, refs: dict[str, Any], lineage: RolloutLineage
+    ) -> list[int]:
+        """Load one RESOLVED parent's cumulative tokens from the backend.
 
         The digest recomputation is the safety interlock for the lazy index: a
-        wrong offset or a mutated file fails closed instead of supplying tokens
+        stale ref or a mutated backend fails closed instead of supplying tokens
         from the wrong call.
         """
         from nemo_gym.token_id_capture.records import compute_digest
 
-        path = self._store.path_for(rollout_id)
-
-        def read_at(target: LineageNode) -> TokenEntry:
-            if target.entry_offset < 0:
-                raise ValueError(f"lineage node for {target.call_id} has no durable offset")
-            with path.open("rb") as handle:
-                handle.seek(target.entry_offset)
-                entry = TokenEntry.model_validate(orjson.loads(handle.readline()))
-            if entry.model_call_id != target.call_id:
-                raise ValueError(f"offset for {target.call_id} points at {entry.model_call_id}")
+        def load(call_id: str) -> TokenEntry:
+            if call_id not in refs:
+                raise ValueError(f"lineage node for {call_id} has no backend ref")
+            entry = self._load_entry(rollout_id, refs[call_id])
+            if entry.model_call_id != call_id:
+                raise ValueError(f"ref for {call_id} points at {entry.model_call_id}")
             return entry
 
         # Walk delta suffixes back to a full-prompt anchor, then replay forward.
         suffixes: list[tuple[list[int], list[int]]] = []
-        current = read_at(node)
+        current = load(node.call_id)
         depth = 0
         while current.prompt_is_delta:
             depth += 1
             if depth > 10_000:
                 raise ValueError(f"delta chain for {node.call_id} exceeds sane depth")
             suffixes.append((list(current.prompt_token_ids), list(current.generation_token_ids)))
-            parent = lineage.by_call_id.get(current.parent_call_id or "")
-            if parent is None:
+            if not current.parent_call_id or lineage.by_call_id.get(current.parent_call_id) is None:
                 raise ValueError(f"delta record {current.model_call_id} has no indexed parent")
-            current = read_at(parent)
+            current = load(current.parent_call_id)
         tokens = cumulative_tokens(current)
         for suffix, generation in reversed(suffixes):
             tokens = tokens + suffix + generation
@@ -646,15 +657,15 @@ class FileLineageStore:
         return await asyncio.to_thread(self._resolve, rollout_id, request_items)
 
     def _resolve(self, rollout_id: str, request_items: list[dict]) -> LineageResolution:
-        # The resolver shares the token store's lock and durable log.
-        # A successful ``TokenSink.put`` is therefore immediately visible.
-        with self._rollout_lock(rollout_id), self._store._locked(rollout_id, shared=True):
-            lineage = self._refresh(rollout_id)
+        with self._rollout_lock(rollout_id), self._read_locked(rollout_id):
+            refs, lineage = self._refresh(rollout_id)
             status, node, reason = lineage.resolve_node(request_items)
             if status != ParentResolutionStatus.RESOLVED:
                 return LineageResolution(status, reason=reason)
             tokens = (
-                node.cum_tokens if node.cum_tokens is not None else self._materialize(rollout_id, node, lineage)
+                node.cum_tokens
+                if node.cum_tokens is not None
+                else self._materialize(rollout_id, node, refs, lineage)
             )
             return LineageResolution(
                 ParentResolutionStatus.RESOLVED,
@@ -669,4 +680,54 @@ class FileLineageStore:
         return True
 
     async def close(self) -> None:
-        self._cache.clear()
+        with self._cache_guard:
+            self._cache.clear()
+
+
+class FileLineageStore(IncrementalLineageStore):
+    """Resolve lineage from the token JSONL committed by ``TokenCaptureStore``.
+
+    The reference ``IncrementalLineageStore`` backend: cursor = (inode, offset),
+    ref = byte offset, reads under the store's shared flock so a committed
+    ``put`` is immediately visible.
+    """
+
+    def __init__(self, root: str | Path, *, max_cached_rollouts: int = 65536) -> None:
+        from nemo_gym.token_id_capture.store import TokenCaptureStore
+
+        super().__init__(max_cached_rollouts=max_cached_rollouts)
+        self._store = TokenCaptureStore(root)
+
+    def _read_locked(self, rollout_id: str):
+        return self._store._locked(rollout_id, shared=True)
+
+    def _fetch_new_entries(self, rollout_id: str, cursor: Any) -> tuple[list[tuple[TokenEntry, Any]], Any]:
+        path = self._store.path_for(rollout_id)
+        if not path.exists():
+            if cursor is not None:
+                raise IncrementalLineageStore.CursorReset
+            return [], None
+        file_stat = path.stat()
+        inode, offset = cursor if cursor is not None else (file_stat.st_ino, 0)
+        if inode != file_stat.st_ino or offset < 0 or offset > file_stat.st_size:
+            raise IncrementalLineageStore.CursorReset
+        items: list[tuple[TokenEntry, Any]] = []
+        if offset < file_stat.st_size:
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                while True:
+                    line_offset = handle.tell()
+                    line = handle.readline()
+                    if not line:
+                        break
+                    payload = line.strip()
+                    if not payload:
+                        continue
+                    items.append((TokenEntry.model_validate(orjson.loads(payload)), line_offset))
+                offset = handle.tell()
+        return items, (inode, offset)
+
+    def _load_entry(self, rollout_id: str, ref: Any) -> TokenEntry:
+        with self._store.path_for(rollout_id).open("rb") as handle:
+            handle.seek(ref)
+            return TokenEntry.model_validate(orjson.loads(handle.readline()))

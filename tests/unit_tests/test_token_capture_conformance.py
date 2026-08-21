@@ -134,6 +134,44 @@ def test_memory_backend_passes_applicable_checks():
     assert len(passed) >= 9
 
 
+class _FeedLineage:
+    """The intended external-adapter shape: subclass the base, implement two hooks."""
+
+    def __new__(cls, backend):
+        from nemo_gym.token_id_capture import IncrementalLineageStore
+
+        class _Impl(IncrementalLineageStore):
+            def __init__(self, backend):
+                super().__init__()
+                self.backend = backend
+
+            def _fetch_new_entries(self, rollout_id, cursor):
+                entries = list(self.backend.entries.get(rollout_id, {}).values())
+                start = cursor or 0
+                items = [(entry, entry.model_call_id) for entry in entries[start:]]
+                return items, len(entries)
+
+            def _load_entry(self, rollout_id, ref):
+                return self.backend.entries[rollout_id][ref]
+
+        return _Impl(backend)
+
+
+def test_memory_backend_passes_via_the_incremental_base():
+    """An adapter built on IncrementalLineageStore passes the kit with ~15 lines of
+    backend-specific code — the pattern a TransferQueue adapter follows."""
+    backend = _MemoryBackend()
+    passed = asyncio.run(
+        run_conformance(
+            lambda: _MemorySink(backend),
+            lambda: _MemorySource(backend),
+            lambda: _FeedLineage(backend),
+        )
+    )
+    assert "lineage_visibility" in passed
+    assert "fresh_client_lineage_visibility" in passed
+
+
 def test_kit_rejects_a_broken_backend(tmp_path):
     class _Amnesiac(TokenCaptureStore):
         def append(self, entry):  # drops writes: put acks without durability
