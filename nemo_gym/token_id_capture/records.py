@@ -68,13 +68,17 @@ def encode_token_ids(token_ids: list[int]) -> bytes:
     """Stable, length-delimited, big-endian encoding of a token sequence.
 
     Independent implementations can hash the same bytes.
+    One vectorized pack replaces a per-token loop: identical output bytes,
+    roughly half the digest cost at 65k tokens.
     """
-    encoded = bytearray(struct.pack(">BQ", DIGEST_VERSION, len(token_ids)))
-    for token_id in token_ids:
-        if token_id < 0:
-            raise ValueError(f"token ids must be non-negative, got {token_id}")
-        encoded.extend(struct.pack(">Q", token_id))
-    return bytes(encoded)
+    header = struct.pack(">BQ", DIGEST_VERSION, len(token_ids))
+    if not token_ids:
+        return header
+    try:
+        return header + struct.pack(f">{len(token_ids)}Q", *token_ids)
+    except struct.error:
+        negative = next(token_id for token_id in token_ids if token_id < 0)
+        raise ValueError(f"token ids must be non-negative, got {negative}") from None
 
 
 def compute_digest(token_ids: list[int]) -> str:
@@ -140,6 +144,13 @@ class TokenEntry(BaseModel):
     # The context fields verify the request that produced this call.
     continuation_context_len: int = 0
     continuation_context_digest: str = ""
+
+    # The resolver's diagnostic reason for the parent decision above.
+    # Persisted so a resolution-rate regression is debuggable from records alone.
+    parent_resolution_reason: str = ""
+    # The fingerprint algorithm version that produced continuation_fingerprint.
+    # A resolver must not match records stamped by a different algorithm.
+    fingerprint_version: int | None = None
 
     # Prefix supply fields were added in schema version 4.
     # Request intent is distinct from generation-time proof.

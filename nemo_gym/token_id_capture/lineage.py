@@ -31,6 +31,12 @@ Downstream inference consumes those tokens to supply the exact prompt prefix.
 
 Every new record distinguishes a root, a resolved parent, and an unresolved boundary.
 Only records that predate this metadata use token-prefix fallback.
+
+The guaranteed invariant is token-chain exactness, not conversation fidelity.
+A delivered chain contains exactly the tokens the policy emitted over exactly the
+recorded context. Fields the hashes deliberately ignore (reasoning content, an item
+inserted between the verified context and the echoed output) can differ from the
+harness's rendering without breaking that invariant.
 """
 
 from __future__ import annotations
@@ -47,6 +53,11 @@ import orjson
 from nemo_gym.token_id_capture.protocols import LineageMatch, LineageResolution
 from nemo_gym.token_id_capture.records import ParentResolutionStatus, TokenEntry, cumulative_tokens
 
+
+# Increment when the canonicalization or hash layout of the fingerprints changes.
+# The value is stamped on every entry; a resolver ignores records from another
+# version instead of silently failing to match them.
+FINGERPRINT_VERSION = 1
 
 _FINGERPRINT_DOMAIN = b"nemo-gym-lineage"
 _CONTEXT_DOMAIN = b"nemo-gym-lineage-context"
@@ -276,7 +287,8 @@ class LineageNode:
     digest: str
     # These fields describe the request context sent for this call.
     # They exclude the model's response.
-    # The request context has a stable item count across dialect round trips.
+    # The item count is stable while the harness stays in one dialect.
+    # A mid-rollout dialect switch can misalign it; verification then fails closed.
     context_len: int = 0
     context_digest: str = ""
 
@@ -286,6 +298,7 @@ def stamp_continuation(entry: TokenEntry, request_items: list[dict]) -> TokenEnt
     entry.continuation_fingerprint = assistant_fingerprint(list(request_items) + list(entry.output_items))
     entry.continuation_context_len = len(request_items)
     entry.continuation_context_digest = conversation_digest(request_items)
+    entry.fingerprint_version = FINGERPRINT_VERSION
     return entry
 
 
@@ -355,6 +368,9 @@ class RolloutLineage:
         """Index lookup metadata carried by one committed token entry."""
         if not entry.continuation_fingerprint:
             return
+        if entry.fingerprint_version is not None and entry.fingerprint_version != FINGERPRINT_VERSION:
+            # A different algorithm produced this fingerprint; matching it would be luck.
+            return
         node = LineageNode(
             call_id=entry.model_call_id,
             cum_tokens=cumulative_tokens(entry),
@@ -404,7 +420,7 @@ class LineageIndex:
     This index backs the single-worker fallback.
     Shared stores provide cross-worker visibility.
     Eviction removes the oldest rollout.
-    An evicted parent degrades to strict token-prefix matching.
+    An evicted parent leaves later continuations unresolved and the builder masks them.
     The only live rollout is never evicted.
     """
 
@@ -483,6 +499,7 @@ class FileLineageStore:
 
         self._store = TokenCaptureStore(root)
         self._cache: dict[str, tuple[int, int, RolloutLineage]] = {}
+        self._max_cached_rollouts = 512
         # The flock is shared-mode for readers, so concurrent resolves of one rollout
         # would otherwise mutate the same cached RolloutLineage from two threads.
         self._cache_guard = threading.Lock()
@@ -516,7 +533,16 @@ class FileLineageStore:
                     continue
                 lineage.add_entry(TokenEntry.model_validate(orjson.loads(payload)))
             offset = handle.tell()
-        self._cache[rollout_id] = (inode, offset, lineage)
+        with self._cache_guard:
+            self._cache[rollout_id] = (inode, offset, lineage)
+            # Bound worker memory: each cached rollout holds full token arrays.
+            # Eviction only costs the evicted rollout a re-tail on its next resolve.
+            while len(self._cache) > self._max_cached_rollouts:
+                oldest = next(iter(self._cache))
+                if oldest == rollout_id:
+                    break
+                self._cache.pop(oldest)
+                self._rollout_locks.pop(oldest, None)
         return lineage
 
     async def resolve(self, rollout_id: str, request_items: list[dict]) -> LineageResolution:

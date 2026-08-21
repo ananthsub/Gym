@@ -220,7 +220,7 @@
  },
  {
   "scenario": "retry_nonfinal_identical",
-  "verdict": "SURPRISE",
+  "verdict": "FIXED",
   "masked": false,
   "statuses": [
    "root",
@@ -367,17 +367,25 @@
  },
  {
   "scenario": "proof_bundle_shape",
-  "verdict": "BUG_REPRODUCED",
-  "masked": true,
-  "statuses": [],
-  "prefix_supplied": [],
-  "delivered_calls": 0,
+  "verdict": "FIXED",
+  "masked": false,
+  "statuses": [
+   "root",
+   "resolved",
+   "resolved"
+  ],
+  "prefix_supplied": [
+   false,
+   true,
+   true
+  ],
+  "delivered_calls": 3,
   "engine_calls": 3,
-  "fabrication_check": "nothing delivered",
+  "fabrication_check": "delivered 3 call(s), all match engine ground truth",
   "http_statuses": [
-   500,
-   500,
-   500
+   200,
+   200,
+   200
   ],
   "note": "engine returns prompt ids in the message bundle: F7 predicts a spurious hard failure (500)"
  },
@@ -449,32 +457,20 @@
  },
  {
   "scenario": "custom_sink_no_lineage",
-  "verdict": "BUG_REPRODUCED",
-  "masked": true,
-  "statuses": [
-   "root",
-   "unresolved",
-   "unresolved"
-  ],
-  "prefix_supplied": [
-   false,
-   false,
-   false
-  ],
-  "delivered_calls": 1,
-  "engine_calls": 3,
-  "fabrication_check": "delivered 1 call(s), all match engine ground truth",
-  "http_statuses": [
-   200,
-   200,
-   200
-  ],
-  "note": "custom sink, no lineage store, one worker: F3 predicts all-UNRESOLVED with no visibility"
+  "verdict": "FIXED",
+  "masked": null,
+  "statuses": [],
+  "prefix_supplied": [],
+  "delivered_calls": 0,
+  "engine_calls": 0,
+  "fabrication_check": "startup refused the configuration",
+  "http_statuses": [],
+  "note": "custom sink, no lineage store, one worker: F3 predicts all-UNRESOLVED with no visibility \u2014 now a startup error: 1 validation error for TokenIdCaptureConfig\n  Value error, token_id_capture has "
  },
  {
   "scenario": "duplicate_snapshot_entry",
-  "verdict": "BUG_REPRODUCED",
-  "masked": true,
+  "verdict": "FIXED",
+  "masked": false,
   "statuses": [
    "root",
    "resolved",

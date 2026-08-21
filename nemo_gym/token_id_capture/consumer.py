@@ -154,10 +154,12 @@ def _assemble(
         "metrics": metrics,
         # A retry of the final call can leave two plausible generations.
         # Mask the rollout when the client-selected generation is unknown.
+        # An empty delivery must never be trainable, whatever produced it.
         "mask_sample": bool(unresolved)
         or bool(notes.unresolved_parent_calls)
         or notes.roots != 1
-        or notes.chains != 1,
+        or notes.chains != 1
+        or not any(item.get("generation_token_ids") for item in response.get("output", [])),
         "unresolved_retries": list(unresolved),
         "unresolved_parent_calls": list(notes.unresolved_parent_calls),
     }

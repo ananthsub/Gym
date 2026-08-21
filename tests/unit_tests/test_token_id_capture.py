@@ -304,7 +304,7 @@ def test_token_store_freeze_is_atomic_and_conditional_drop_is_race_safe(tmp_path
 
 
 def _block(**kwargs) -> dict:
-    return {"token_id_capture": {"enabled": True, "rebuild_response": False, **kwargs}}
+    return {"token_id_capture": {"enabled": True, "rebuild_response": False, "allow_unresolved_continuations": True, **kwargs}}
 
 
 def test_config_disabled_needs_no_dir():
@@ -341,7 +341,7 @@ def test_config_keeps_settings_when_capture_is_off(tmp_path):
 
 def test_agent_capture_selection_uses_static_agent_config_or_all_agents():
     config = {
-        "token_id_capture": {"enabled": True, "rebuild_response": False},
+        "token_id_capture": {"enabled": True, "rebuild_response": False, "allow_unresolved_continuations": True},
         "captured": {"responses_api_agents": {"implementation": {"token_id_capture": True}}},
         "ordinary": {"responses_api_agents": {"implementation": {"token_id_capture": False}}},
     }
@@ -375,7 +375,7 @@ def test_config_rejects_an_unknown_key():
 
 def test_config_accepts_a_sink_without_constructing_the_consumer_source():
     config = TokenIdCaptureConfig.model_validate(
-        {"token_id_capture": {"enabled": True, "sink": f"{__name__}:_ConfiguredSink"}}
+        {"token_id_capture": {"enabled": True, "sink": f"{__name__}:_ConfiguredSink", "allow_unresolved_continuations": True}}
     )
     assert config.token_id_capture.sink == f"{__name__}:_ConfiguredSink"
 
@@ -683,7 +683,7 @@ def _external_mode(tmp_path) -> dict:
     """Capture on, no destination in this process: records are staged elsewhere."""
     return {
         "observability_enabled": False,
-        "token_id_capture": {"enabled": True, "rebuild_response": False},
+        "token_id_capture": {"enabled": True, "rebuild_response": False, "allow_unresolved_continuations": True},
     }
 
 
@@ -849,7 +849,7 @@ def installed_sink():
 
 def test_installed_sink_receives_entries_without_a_capture_dir(installed_sink):
     """The framework path: capture on, no directory anywhere, records still arrive."""
-    config = {"token_id_capture": {"enabled": True, "rebuild_response": False}}
+    config = {"token_id_capture": {"enabled": True, "rebuild_response": False, "allow_unresolved_continuations": True}}
     client = TestClient(_server(config).setup_webserver())
     resp = client.post("/ng-rollout/task0-sink0/training-token-capture/v1/responses", json={"input": "hi"})
     assert resp.status_code == 200
@@ -884,30 +884,25 @@ def test_installed_sink_is_marked_incomplete_through_the_protocol(installed_sink
         raise RuntimeError("transport down")
 
     monkeypatch.setattr(installed_sink, "put", boom)
-    client = TestClient(_server({"token_id_capture": {"enabled": True, "rebuild_response": False}}).setup_webserver())
+    client = TestClient(_server({"token_id_capture": {"enabled": True, "rebuild_response": False, "allow_unresolved_continuations": True}}).setup_webserver())
     resp = client.post("/ng-rollout/task0-sink1/training-token-capture/v1/responses", json={"input": "hi"})
     assert resp.status_code == 200  # capture never fails the model call
     assert installed_sink.incomplete == [("task0-sink1", installed_sink.incomplete[0][1])]
 
 
-def test_a_sink_without_mark_incomplete_is_logged_not_swallowed(caplog):
-    """The signal cannot be lost quietly: that is the outcome the failure path exists to stop."""
+def test_a_sink_without_mark_incomplete_is_refused_at_install():
+    """The signal cannot be lost quietly: a sink that cannot report a lost call is
+    refused when installed, matching the startup validation of configured sinks."""
 
     class _PutOnlySink:
         async def put(self, entry):
             raise RuntimeError("transport down")
 
-    install_token_sink(_PutOnlySink())
-    try:
-        client = TestClient(
-            _server({"token_id_capture": {"enabled": True, "rebuild_response": False}}).setup_webserver()
-        )
-        with caplog.at_level(logging.ERROR):
-            resp = client.post("/ng-rollout/task0-sink2/training-token-capture/v1/responses", json={"input": "hi"})
-        assert resp.status_code == 200
-        assert any("does not implement mark_incomplete" in r.message for r in caplog.records)
-    finally:
-        install_token_sink(None)
+    from nemo_gym.token_id_capture import installed_token_sink
+
+    with pytest.raises(TypeError, match="mark_incomplete"):
+        install_token_sink(_PutOnlySink())
+    assert installed_token_sink() is None
 
 
 def test_commit_entry_records_a_call_with_no_token_fields_on_the_response(installed_sink):
@@ -962,7 +957,7 @@ def test_a_malformed_token_payload_does_not_fail_the_model_call(installed_sink):
 
     with patch("nemo_gym.token_id_capture.sink.TokenEntry", _bad_entry):
         client = TestClient(
-            _server({"token_id_capture": {"enabled": True, "rebuild_response": False}}).setup_webserver()
+            _server({"token_id_capture": {"enabled": True, "rebuild_response": False, "allow_unresolved_continuations": True}}).setup_webserver()
         )
         resp = client.post("/ng-rollout/task0-bad0/training-token-capture/v1/responses", json={"input": "hi"})
 
@@ -1641,6 +1636,7 @@ def test_a_configured_sink_receives_entries(tmp_path):
             "enabled": True,
             "rebuild_response": False,
             "sink": f"{__name__}:_ConfiguredSink",
+                "allow_unresolved_continuations": True,
         }
     }
     client = TestClient(_server(config).setup_webserver())
@@ -1662,6 +1658,7 @@ def test_a_configured_sink_wins_over_an_installed_one(installed_sink):
             "enabled": True,
             "rebuild_response": False,
             "sink": f"{__name__}:_ConfiguredSink",
+                "allow_unresolved_continuations": True,
         }
     }
     client = TestClient(_server(config).setup_webserver())
@@ -1727,6 +1724,7 @@ def test_a_sink_that_cannot_report_failures_is_refused_at_startup():
                 "enabled": True,
                 "rebuild_response": False,
                 "sink": f"{__name__}:_NotASink",
+                "allow_unresolved_continuations": True,
             }
         }
     )
@@ -1746,6 +1744,7 @@ def test_a_sink_whose_protocol_member_is_not_callable_is_refused():
                 "enabled": True,
                 "rebuild_response": False,
                 "sink": f"{__name__}:_NotCallableSink",
+                "allow_unresolved_continuations": True,
             }
         }
     )
@@ -1759,7 +1758,7 @@ def test_a_sink_whose_protocol_member_is_not_callable_is_refused():
 )
 def test_a_malformed_sink_path_is_refused_at_startup(target, expected):
     config = TokenIdCaptureConfig.model_validate(
-        {"token_id_capture": {"enabled": True, "rebuild_response": False, "sink": target}}
+        {"token_id_capture": {"enabled": True, "rebuild_response": False, "sink": target, "allow_unresolved_continuations": True}}
     )
     with pytest.raises(ValueError, match=expected):
         config.build_sink()

@@ -753,17 +753,33 @@ def test_a_stale_parent_link_becomes_an_incomplete_fragment():
     assert "child" not in out.quarantined
 
 
-def test_a_missing_filtered_parent_starts_an_incomplete_fragment():
+def test_a_missing_filtered_parent_recovers_through_prefix_matching():
+    """A recorded parent absent from the build (an empty-generation call, filtered)
+    is not evidence of conflict: prefix matching reattaches the child to a verified
+    ancestor instead of dropping the chain. Digest MISMATCH stays fatal."""
     root = _with_lineage(_entry("root", [1, 2], [3]))
     empty = _with_lineage(_entry("empty", [1, 2, 3, 4], []), parent_call_id="root")
     child = _with_lineage(_entry("child", [1, 2, 3, 4, 5], [6]), parent_call_id="empty")
 
     out = prefix_merging([root, empty, child])
 
-    assert out.notes.parent_link_failures == {"parent_call_id_missing": 1}
-    assert out.notes.unresolved_parent_calls == ["child"]
-    assert len(out.chains) == 2
+    assert out.notes.parent_link_failures == {"parent_call_id_missing_recovered": 1}
+    assert out.notes.unresolved_parent_calls == []
+    assert len(out.chains) == 1
     assert "child" not in out.quarantined
+
+
+def test_a_duplicated_snapshot_entry_is_one_call():
+    """An at-least-once transport can deliver one entry twice; the duplicate must not
+    become a phantom second root that masks a healthy rollout."""
+    root = _with_lineage(_entry("root", [1, 2], [3]))
+    child = _with_lineage(_entry("child", [1, 2, 3, 4], [5]), parent_call_id="root")
+    duplicate = _with_lineage(_entry("child", [1, 2, 3, 4], [5]), parent_call_id="root")
+
+    out = prefix_merging([root, child, duplicate])
+
+    assert len(out.chains) == 1
+    assert out.notes.unresolved_parent_calls == []
 
 
 def test_unresolved_parent_never_uses_prefix_fallback():

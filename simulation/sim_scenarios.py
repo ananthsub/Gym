@@ -81,7 +81,17 @@ def run_scenario(
         if installed_sink is not None:
             sink_obj = installed_sink(tmp)
             install_token_sink(sink_obj)
-        client = build_server(engine, str(tmp) if use_dir else None, supply)
+        try:
+            client = build_server(engine, str(tmp) if use_dir else None, supply)
+        except Exception as error:
+            # Post-fix behavior for the misconfiguration scenarios: refused at startup.
+            if bug == "F3" and "lineage_store" in str(error):
+                return Outcome(
+                    name=name, verdict="FIXED", masked=None, statuses=[], supplied=[],
+                    delivered_calls=0, engine_calls=0, fabrication="startup refused the configuration",
+                    http=[], note=f"{note} — now a startup error: {str(error)[:80]}",
+                )
+            raise
         harness = Harness(client=client, rollout_id=rid)
         drive(harness)
 

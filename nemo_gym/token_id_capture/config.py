@@ -74,6 +74,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from nemo_gym.token_id_capture.protocols import (
     LineageStore,
     TokenSink,
+    installed_lineage_store,
     installed_token_sink,
 )
 
@@ -109,6 +110,15 @@ class TokenIdCaptureSettings(BaseModel):
     # Finalization does not retire the frozen snapshot.
     # Durable delivery permits retirement by snapshot id and version.
     rebuild_response: bool = True
+    # A custom sink without a paired resolver leaves every continuation unresolved,
+    # which masks every multi-call rollout. That is almost always a misconfiguration,
+    # so startup refuses it unless this is set deliberately.
+    allow_unresolved_continuations: bool = False
+    # Abort the run when the masked fraction of finalized rollouts exceeds this,
+    # once at least ``mask_fraction_min_samples`` rollouts finalized.
+    # ``None`` disables the kill switch.
+    max_mask_fraction: float | None = None
+    mask_fraction_min_samples: int = 50
 
 
 class TokenIdCaptureConfig(BaseModel):
@@ -136,12 +146,14 @@ class TokenIdCaptureConfig(BaseModel):
                     "the file store, so %s will not be written to.",
                     block.dir,
                 )
+            self._require_resolver(block)
             return self
         directory = self.resolved_dir()
         if directory is None:
             # A programmatic sink replaces the file store.
             # That process does not need a directory.
             if installed_token_sink() is not None:
+                self._require_resolver(block)
                 return self
             if not block.rebuild_response:
                 return self
@@ -149,6 +161,29 @@ class TokenIdCaptureConfig(BaseModel):
         if not directory.is_absolute():
             raise ValueError("training-token capture directory must be an absolute path")
         return self
+
+    @staticmethod
+    def _require_resolver(block: TokenIdCaptureSettings) -> None:
+        """A custom sink without a paired resolver silently masks every multi-call rollout.
+
+        Continuations resolve UNRESOLVED when no lineage store exists, and current
+        records refuse prefix-matching fallback, so the run trains on nothing while
+        looking healthy. Refuse the configuration instead of degrading silently.
+        """
+        if block.lineage_store is not None or installed_lineage_store() is not None:
+            return
+        if block.allow_unresolved_continuations:
+            logger.warning(
+                "token_id_capture has a custom sink and no lineage_store: every continuation "
+                "will resolve UNRESOLVED and multi-call rollouts will be masked."
+            )
+            return
+        raise ValueError(
+            "token_id_capture has a custom sink but no lineage_store, so no continuation can "
+            "resolve its parent and every multi-call rollout will be masked. Configure "
+            "token_id_capture.lineage_store on the same backend as the sink, or set "
+            "token_id_capture.allow_unresolved_continuations: true to accept the loss."
+        )
 
     @property
     def enabled(self) -> bool:

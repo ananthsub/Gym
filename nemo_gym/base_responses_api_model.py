@@ -73,8 +73,8 @@ from nemo_gym.token_id_capture import (
     capture_tokens,
     installed_lineage_store,
     installed_token_sink,
-    reset_token_sink,
     register_call_intent,
+    reset_token_sink,
     resolve_parent,
     set_token_sink,
 )
@@ -275,7 +275,8 @@ class SimpleResponsesAPIModel(BaseResponsesAPIModel, SimpleServer):
         # all of them.
         # Resolve the parent from the received request before dispatch.
         # Exact prefix supply and capture share this decision.
-        await resolve_parent(_request_messages(params))
+        request_messages = _request_messages(params)
+        await resolve_parent(request_messages)
         await register_call_intent()
         if "request" in inspect.signature(self.chat_completions).parameters:
             completion = await self.chat_completions(request=request, body=params)
@@ -283,7 +284,7 @@ class SimpleResponsesAPIModel(BaseResponsesAPIModel, SimpleServer):
             completion = await self.chat_completions(body=params)
         await capture_tokens(
             completion,
-            request_messages=_request_messages(params),
+            request_messages=request_messages,
         )
         return completion
 
@@ -315,7 +316,8 @@ class SimpleResponsesAPIModel(BaseResponsesAPIModel, SimpleServer):
         # all of them.
         # Resolve the parent from the received request before dispatch.
         # Exact prefix supply and capture share this decision.
-        await resolve_parent(_request_messages(params))
+        request_messages = _request_messages(params)
+        await resolve_parent(request_messages)
         await register_call_intent()
         if "request" in inspect.signature(self.responses).parameters:
             response = await self.responses(request=request, body=params)
@@ -326,7 +328,7 @@ class SimpleResponsesAPIModel(BaseResponsesAPIModel, SimpleServer):
         # The assembled response still carries them here for every dialect.
         await capture_tokens(
             response,
-            request_messages=_request_messages(params),
+            request_messages=request_messages,
         )
         return response
 
@@ -1187,6 +1189,19 @@ class _CaptureMiddleware:
         # Installed sinks are resolved for each request.
         token_sink = self._configured_sink or installed_token_sink() or self._token_store
         capture_wanted = token_capture_requested and (token_sink is not None or self._token_capture_enabled)
+        if token_capture_requested and dialect is None:
+            # An uncapturable call under the capture prefix must not look like a complete rollout.
+            # Its output can feed later prompts; mark the rollout so consumers mask it, then forward.
+            if token_sink is not None:
+                try:
+                    await token_sink.mark_incomplete(rollout_from_path, "")
+                except Exception:
+                    logger.warning(
+                        "Could not mark rollout %s incomplete for unobserved path %s.",
+                        rollout_from_path,
+                        path,
+                        exc_info=True,
+                    )
         if (self._store is None and not capture_wanted) or rollout_from_path is None or dialect is None:
             await self._app(scope, receive, send)
             return

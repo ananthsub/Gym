@@ -183,6 +183,12 @@ def _resolve_parent(
             return None, False, "resolved_parent_missing_id"
         parent = by_call_id.get(claimed)
         if parent is None:
+            # A recorded parent absent from the build (e.g. filtered for an empty
+            # generation) is not evidence of conflict. Prefix matching can still
+            # attach the child to a verified ancestor; digest MISMATCH stays fatal.
+            inferred, ambiguous = _infer_parent(prompt, prefix_index)
+            if inferred is not None and not ambiguous:
+                return inferred, False, "parent_call_id_missing_recovered"
             return None, False, "parent_call_id_missing"
         cum_len = parent.entry.cum_len
         if cum_len is None:
@@ -206,7 +212,37 @@ def _infer_parent(prompt: list[int], index: _PrefixIndex) -> tuple["_Node | None
     return index.infer_parent(prompt)
 
 
+class _NullPrefixIndex:
+    """Stands in when no entry can need prefix inference.
+
+    Every modern entry carries a request-time parent decision, so the trie —
+    ~90% of build cost on long rollouts — is pure waste unless a legacy record
+    or a broken recorded link needs the fallback.
+    """
+
+    def add(self, candidate: "_Node") -> None:
+        return
+
+    def infer_parent(self, prompt: list[int]) -> tuple["_Node | None", bool]:
+        return None, False
+
+
 def prefix_merging(entries: list[TokenEntry]) -> BuildOutput:
+    # An at-least-once transport can deliver one entry twice in a snapshot.
+    # A byte-identical duplicate is one call; conflicting payloads for one id are corruption.
+    deduped: dict[str, TokenEntry] = {}
+    duplicate_conflicts: list[str] = []
+    for candidate in entries:
+        previous = deduped.get(candidate.model_call_id)
+        if previous is None:
+            deduped[candidate.model_call_id] = candidate
+        elif (list(previous.prompt_token_ids), list(previous.generation_token_ids)) != (
+            list(candidate.prompt_token_ids),
+            list(candidate.generation_token_ids),
+        ):
+            duplicate_conflicts.append(candidate.model_call_id)
+    entries = list(deduped.values())
+
     # A call without generated tokens has no training signal.
     # Its cumulative sequence equals its prompt.
     # Keeping it would make it the parent of another call with the same prompt.
@@ -227,11 +263,22 @@ def prefix_merging(entries: list[TokenEntry]) -> BuildOutput:
     nodes: list[_Node] = []
     roots: list[_Node] = []
     quarantined: list[str] = []
-    prefix_index = _PrefixIndex()
+    # The trie exists only for records with no usable parent decision:
+    # legacy pre-resolution records, and recorded links whose parent is absent.
+    surviving_ids = {e.model_call_id for e in ordered}
+    needs_prefix_index = any(e.parent_resolution is None for e in ordered) or any(
+        e.parent_call_id is not None and e.parent_call_id not in surviving_ids for e in ordered
+    )
+    prefix_index = _PrefixIndex() if needs_prefix_index else _NullPrefixIndex()
 
     nodes_by_call_id: dict[str, _Node] = {}
     parent_link_failures: dict[str, int] = {}
     unresolved_parent_calls: list[str] = []
+    for call_id in duplicate_conflicts:
+        parent_link_failures["duplicate_call_id_conflict"] = parent_link_failures.get(
+            "duplicate_call_id_conflict", 0
+        ) + 1
+        unresolved_parent_calls.append(call_id)
 
     for entry in ordered:
         prompt = list(entry.prompt_token_ids)
@@ -239,8 +286,11 @@ def prefix_merging(entries: list[TokenEntry]) -> BuildOutput:
         parent, ambiguous, note = _resolve_parent(node, nodes_by_call_id, prefix_index)
         if note:
             parent_link_failures[note] = parent_link_failures.get(note, 0) + 1
-            node.unresolved_boundary = True
-            unresolved_parent_calls.append(entry.model_call_id)
+            # A "_recovered" note reports a fallback that found a safe parent.
+            # The chain is intact; only genuinely unusable links mask.
+            if not note.endswith("_recovered"):
+                node.unresolved_boundary = True
+                unresolved_parent_calls.append(entry.model_call_id)
         if parent is not None:
             node.parent = parent
             if ambiguous:

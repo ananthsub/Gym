@@ -27,8 +27,10 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import hashlib
+import logging
 import os
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,9 @@ import orjson
 
 from nemo_gym.token_id_capture.protocols import TokenCaptureSnapshot
 from nemo_gym.token_id_capture.records import TokenEntry
+
+
+logger = logging.getLogger(__name__)
 
 
 def validate_rollout_id(rollout_id: str) -> str:
@@ -129,11 +134,29 @@ class TokenCaptureStore:
         if path.exists():
             with path.open("rb") as handle:
                 handle.seek(indexed_size)
-                for line in handle:
-                    payload = line.strip()
-                    if not payload:
-                        continue
-                    entry = TokenEntry.model_validate(orjson.loads(payload))
+                tail = handle.read()
+            position = 0
+            while position < len(tail):
+                newline = tail.find(b"\n", position)
+                end = len(tail) if newline == -1 else newline
+                payload = tail[position:end].strip()
+                if payload:
+                    try:
+                        parsed = orjson.loads(payload)
+                    except orjson.JSONDecodeError:
+                        remainder = tail[end + 1 :] if newline != -1 else b""
+                        if remainder.strip():
+                            # A malformed line before further content is real corruption.
+                            raise
+                        # A torn final line was never acked; drop it under the caller's
+                        # exclusive lock (_sync_entry_index runs inside _locked).
+                        os.truncate(path, indexed_size + position)
+                        file_size = indexed_size + position
+                        logger.warning(
+                            "Dropped %d torn trailing bytes from %s", len(tail) - position, path
+                        )
+                        break
+                    entry = TokenEntry.model_validate(parsed)
                     digest = self._entry_digest(payload)
                     existing = entry_digests.get(entry.model_call_id)
                     if existing is not None and existing != digest:
@@ -146,6 +169,7 @@ class TokenCaptureStore:
                         )
                     entry_digests[entry.model_call_id] = digest
                     recovered += 1
+                position = end + 1
 
         state["entry_digests"] = entry_digests
         state["indexed_size"] = file_size
@@ -153,20 +177,25 @@ class TokenCaptureStore:
             state["version"] = int(state.get("version", 0)) + recovered
         return True
 
-    def _write_state(self, rollout_id: str, state: dict[str, Any]) -> None:
+    def _write_state(self, rollout_id: str, state: dict[str, Any], *, durable: bool = True) -> None:
+        # durable=False skips both fsyncs but keeps tempfile+replace atomicity.
+        # Safe only where the state is reconstructible from the JSONL tail
+        # (_sync_entry_index); lifecycle flags (frozen/retired/incomplete) are not.
         payload = orjson.dumps(state, option=orjson.OPT_SORT_KEYS | orjson.OPT_APPEND_NEWLINE)
         with tempfile.NamedTemporaryFile(dir=self._root, prefix=".tokens-state-", delete=False) as handle:
             temporary_path = Path(handle.name)
             try:
                 handle.write(payload)
                 handle.flush()
-                os.fsync(handle.fileno())
+                if durable:
+                    os.fsync(handle.fileno())
             except BaseException:
                 temporary_path.unlink(missing_ok=True)
                 raise
         try:
             os.replace(temporary_path, self.state_path_for(rollout_id))
-            self._fsync_root()
+            if durable:
+                self._fsync_root()
         finally:
             temporary_path.unlink(missing_ok=True)
 
@@ -233,7 +262,9 @@ class TokenCaptureStore:
                 state["indexed_size"] = handle.tell()
             entry_digests[entry.model_call_id] = digest
             state["version"] = int(state.get("version", 0)) + 1
-            self._write_state(rollout_id, state)
+            # The entry line's fsync above is the durability guarantee; the index
+            # here is reconstructible from the JSONL tail, so skip its fsyncs.
+            self._write_state(rollout_id, state, durable=False)
 
     # The file store is Gym's default TokenSink and TokenSource.
     # A framework can replace it without changing the capture path.
@@ -353,6 +384,38 @@ class TokenCaptureStore:
             self.intents_path_for(rollout_id).unlink(missing_ok=True)
             self.state_path_for(rollout_id).unlink(missing_ok=True)
             self._fsync_root()
+
+    def sweep_retired(self, older_than_seconds: float) -> int:
+        """Remove retired tombstones older than the cutoff and return the count removed.
+
+        This is the operator/GC hook for tombstone growth; callers decide policy.
+        Entries and JSONL payloads are already gone after ``drop``; this removes
+        the remaining state, lock, intents, and incomplete files.
+        """
+        cutoff = time.time() - older_than_seconds
+        removed = 0
+        for state_path in self._root.glob("*.tokens.state.json"):
+            rollout_id = state_path.name[: -len(".tokens.state.json")]
+            try:
+                validate_rollout_id(rollout_id)
+            except ValueError:
+                continue
+            with self._locked(rollout_id):
+                try:
+                    if state_path.stat().st_mtime > cutoff:
+                        continue
+                except FileNotFoundError:
+                    continue
+                if not self._read_state(rollout_id).get("retired", False):
+                    continue
+                state_path.unlink(missing_ok=True)
+                self.intents_path_for(rollout_id).unlink(missing_ok=True)
+                self.incomplete_path_for(rollout_id).unlink(missing_ok=True)
+                self.lock_path_for(rollout_id).unlink(missing_ok=True)
+                removed += 1
+        if removed:
+            self._fsync_root()
+        return removed
 
     def read_entries(self, rollout_id: str) -> list[TokenEntry]:
         with self._locked(rollout_id, shared=True):

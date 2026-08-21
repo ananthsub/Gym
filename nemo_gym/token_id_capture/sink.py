@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import time
+import threading
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
@@ -86,6 +87,27 @@ class CaptureContext:
 
 _CAPTURE_CONTEXT: ContextVar[CaptureContext | None] = ContextVar("nemo_gym_capture_context", default=None)
 
+# Worker-level health counters, logged periodically.
+# A resolution-rate regression or a failing sink must be visible without log archaeology.
+_STATS_LOCK = threading.Lock()
+_RESOLUTION_COUNTS = {"root": 0, "resolved": 0, "unresolved": 0}
+_CAPTURE_FAILURES = [0]
+_RESOLVER_UNAVAILABLE_WARNED: set[str] = set()
+
+
+def _count_resolution(status_value: str) -> None:
+    with _STATS_LOCK:
+        _RESOLUTION_COUNTS[status_value] = _RESOLUTION_COUNTS.get(status_value, 0) + 1
+        total = sum(_RESOLUTION_COUNTS.values())
+    if total % 1000 == 0:
+        logger.info("token-capture resolutions: %s", dict(_RESOLUTION_COUNTS))
+
+
+def capture_health_snapshot() -> dict:
+    """Return worker-level capture health for metrics endpoints."""
+    with _STATS_LOCK:
+        return {"resolutions": dict(_RESOLUTION_COUNTS), "capture_failures": _CAPTURE_FAILURES[0]}
+
 
 def set_token_sink(context: CaptureContext) -> Token:
     return _CAPTURE_CONTEXT.set(context)
@@ -124,8 +146,22 @@ async def resolve_parent(request_messages: list | None) -> None:
                 ParentResolutionStatus.UNRESOLVED,
                 reason="resolver_unavailable",
             )
+            # Without a resolver every continuation masks; that must not be silent.
+            with _STATS_LOCK:
+                first_for_rollout = context.rollout_id not in _RESOLVER_UNAVAILABLE_WARNED
+                if first_for_rollout:
+                    if len(_RESOLVER_UNAVAILABLE_WARNED) > 4096:
+                        _RESOLVER_UNAVAILABLE_WARNED.clear()
+                    _RESOLVER_UNAVAILABLE_WARNED.add(context.rollout_id)
+            if first_for_rollout:
+                logger.warning(
+                    "No lineage resolver is available: continuations of rollout %s resolve UNRESOLVED "
+                    "and the rollout will be masked. Configure token_id_capture.lineage_store.",
+                    context.rollout_id,
+                )
         else:
             context.parent_resolution = await context.lineage_store.resolve(context.rollout_id, request_messages)
+        _count_resolution(context.parent_resolution.status.value)
     except Exception:
         logger.warning("Could not resolve a parent for rollout %s.", context.rollout_id, exc_info=True)
         context.parent_resolution = LineageResolution(
@@ -271,6 +307,7 @@ async def commit_entry(
             resolution.match.model_call_id if resolution.match is not None else None,
             parent_resolution=resolution.status,
         )
+        entry.parent_resolution_reason = resolution.reason or ""
         await context.token_sink.put(entry)
         context.committed = True
     except Exception:
@@ -284,6 +321,11 @@ async def _capture_failed(context: CaptureContext, stage: str) -> None:
     Mark the rollout so consumers can mask the sample.
     Call this only from an ``except`` block.
     """
+    with _STATS_LOCK:
+        _CAPTURE_FAILURES[0] += 1
+        failures = _CAPTURE_FAILURES[0]
+    if failures % 10 == 0:
+        logger.error("Training-token capture has failed %d times in this worker.", failures)
     logger.warning(
         "Training-token capture failed to %s the record for model call %s of rollout %s.",
         stage,

@@ -142,7 +142,12 @@ class SimEngine:
         if self.proof_shape == "top":
             response["prompt_token_ids"] = list(prompt_ids)
         elif self.proof_shape == "bundle":
+            # A real bundle backend carries the complete token triple in the message
+            # and does NOT also set the transport-level fields.
             message["prompt_token_ids"] = list(prompt_ids)
+            message["generation_token_ids"] = list(gen_ids)
+            message["generation_log_probs"] = [-0.1] * len(gen_ids)
+            response["choices"][0].pop("token_ids", None)
         return response
 
     async def create_tokenize(self, **body: Any) -> dict:

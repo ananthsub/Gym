@@ -1121,6 +1121,7 @@ class TestRolloutCollection:
                     "all_agents": True,
                     "sink": "framework.capture:Sink",
                     "rebuild_response": True,
+                    "allow_unresolved_continuations": True,
                 }
             },
         )
@@ -1180,6 +1181,7 @@ class TestRolloutCollection:
                     "all_agents": True,
                     "sink": "framework.capture:Sink",
                     "rebuild_response": True,
+                    "allow_unresolved_continuations": True,
                 }
             },
         )
@@ -2016,7 +2018,11 @@ class TestFinalizeRolloutTokenCapture:
 
         await finalize_rollout_token_capture(result, store)
         rebuilt = deepcopy(result["response"]["output"])
-        assert await finalize_rollout_token_capture(result, store) is None
+        second = await finalize_rollout_token_capture(result, store)
+        # Re-finalization still hands back the snapshot so retirement works on every path.
+        assert second is not None
+        assert second.get("rebuilt_response") is None
+        assert second.get("_capture_snapshot", {}).get("snapshot_id")
         assert result["response"]["output"] == rebuilt
 
     async def test_no_source_means_this_caller_is_not_capturing(self, tmp_path: Path) -> None:
