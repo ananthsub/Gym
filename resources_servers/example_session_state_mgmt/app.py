@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Dict
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
@@ -83,6 +83,23 @@ class StatefulCounterResourcesServer(SimpleResourcesServer):
         session_id = request.session[SESSION_ID_KEY]
         counter = self.session_id_to_counter.setdefault(session_id, 0)
         return GetCounterValueResponse(count=counter)
+
+    # -- session checkpointing (partial rollouts) ------------------------------
+    # This server is the class-A reference: its whole per-session state is a
+    # JSON-trivial value, so export/restore is a direct copy. The framework
+    # routes (/ng-session/export, /ng-session/restore) call these hooks and own
+    # all storage; enable by setting ``session_state_dir`` in the config.
+
+    def supports_session_state(self) -> bool:
+        return True
+
+    async def export_session_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        if session_id not in self.session_id_to_counter:
+            return None
+        return {"counter": self.session_id_to_counter[session_id]}
+
+    async def restore_session_state(self, session_id: str, state: Dict[str, Any]) -> None:
+        self.session_id_to_counter[session_id] = int(state["counter"])
 
     async def verify(self, request: Request, body: StatefulCounterVerifyRequest) -> BaseVerifyResponse:
         session_id = request.session[SESSION_ID_KEY]

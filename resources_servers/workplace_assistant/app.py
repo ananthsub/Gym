@@ -12,8 +12,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from typing import Any, Dict
+from io import StringIO
+from typing import Any, Dict, Optional
 
+import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +29,15 @@ from nemo_gym.base_resources_server import (
 )
 from nemo_gym.server_utils import SESSION_ID_KEY
 from resources_servers.workplace_assistant.utils import get_tools, is_correct
+
+
+TOOLKITS = [
+    "email",
+    "calendar",
+    "analytics",
+    "project_management",
+    "customer_relationship_manager",
+]
 
 
 class WorkbenchResourcesServerConfig(BaseResourcesServerConfig):
@@ -71,15 +82,48 @@ class WorkbenchResourcesServer(SimpleResourcesServer):
     async def seed_session(self, request: Request, body: BaseSeedSessionRequest) -> BaseSeedSessionResponse:
         # init session once for each sample.
         session_id = request.session[SESSION_ID_KEY]
-        toolkits = [
-            "email",
-            "calendar",
-            "analytics",
-            "project_management",
-            "customer_relationship_manager",
-        ]
-        self.session_id_to_tool_env[session_id] = get_tools(toolkits)
+        self.session_id_to_tool_env[session_id] = get_tools(TOOLKITS)
         return BaseSeedSessionResponse()
+
+    # -- session checkpointing (partial rollouts) ------------------------------
+    # Class-A logical state: every tool container's mutable state is one or two
+    # pandas DataFrames (emails, calendar events, tasks, CRM rows, plot log).
+    # Export serializes each container's DataFrame attributes generically, so
+    # new tools and new frames are covered without touching this code; restore
+    # rebuilds a fresh tool env (functions are rebound to the new containers)
+    # and overwrites its frames. A direct snapshot is both cheaper and safer
+    # here than replaying tool history: no divergence risk, no re-execution.
+
+    def supports_session_state(self) -> bool:
+        return True
+
+    async def export_session_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        tool_env = self.session_id_to_tool_env.get(session_id)
+        if tool_env is None:
+            return None
+        containers: Dict[str, Dict[str, str]] = {}
+        for name, container in tool_env["containers"].items():
+            containers[name] = {
+                attr: frame.to_json(orient="split")
+                for attr, frame in vars(container).items()
+                if isinstance(frame, pd.DataFrame)
+            }
+        return {"containers": containers}
+
+    async def restore_session_state(self, session_id: str, state: Dict[str, Any]) -> None:
+        tool_env = get_tools(TOOLKITS)
+        for name, frames in state["containers"].items():
+            container = tool_env["containers"][name]
+            for attr, payload in frames.items():
+                # dtype=False + convert_dates=False: the source frames are
+                # read with dtype=str; inference would corrupt id and date
+                # columns into ints/timestamps.
+                setattr(
+                    container,
+                    attr,
+                    pd.read_json(StringIO(payload), orient="split", dtype=False, convert_dates=False),
+                )
+        self.session_id_to_tool_env[session_id] = tool_env
 
     async def route_to_python_function(self, path: str, body: WorkbenchRequest, request: Request) -> WorkbenchResponse:
         session_id = request.session[SESSION_ID_KEY]

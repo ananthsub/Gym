@@ -25,6 +25,11 @@ if TYPE_CHECKING:
     # module) and would pull the mcp SDK into agent/model processes that never need it.
     from nemo_gym.mcp_auto_exposure import MCPTool
 
+import json
+from time import time
+
+from fastapi import HTTPException, Request
+
 from nemo_gym.config_types import AggregateMetrics, AggregateMetricsRequest
 from nemo_gym.judge import judge_failsafe
 from nemo_gym.openai_utils import (
@@ -32,8 +37,22 @@ from nemo_gym.openai_utils import (
     NeMoGymResponseCreateParamsNonStreaming,
 )
 from nemo_gym.reward_profile import AggregateMetricsMixin, compute_aggregate_metrics
-from nemo_gym.rollout_correlation import RolloutContextMiddleware
-from nemo_gym.server_utils import BaseRunServerInstanceConfig, BaseServer, SimpleServer
+from nemo_gym.rollout_correlation import RolloutContextMiddleware, current_rollout_id
+from nemo_gym.server_utils import SESSION_ID_KEY, BaseRunServerInstanceConfig, BaseServer, SimpleServer
+from nemo_gym.session_state import FileSessionStateStore, SessionSnapshot
+
+
+# Framework routes for partial-rollout session checkpointing. Multi-segment on
+# purpose: they are framework plumbing, not tools, and must never be harvested
+# for MCP exposure (mcp_auto_exposure skips this prefix explicitly).
+SESSION_STATE_URL_PREFIX = "/ng-session"
+
+# States at or below this serialized size are returned inline in the export
+# response so the agent can embed them in the boundary record: one append and
+# one fsync per boundary instead of an extra snapshot file with its
+# rename-and-directory-fsync dance — the difference that matters on
+# metadata-bound shared filesystems (Lustre). Larger states keep the file.
+SESSION_STATE_INLINE_MAX_BYTES = 32_768
 
 
 NEMO_GYM_MCP_SESSION_TOKEN_HEADER = "X-NeMo-Gym-Session-Token"
@@ -77,6 +96,11 @@ class ReverifyMode(str, Enum):
 class BaseResourcesServerConfig(BaseRunServerInstanceConfig):
     # Opt in to serve this server's tool routes over MCP; default off.
     expose_tools_over_mcp: bool = False
+    # Root directory of the session-state store for partial rollout
+    # checkpointing. Shared storage, typically co-located with the token
+    # capture dir; the agent driving this server must point at the same dir.
+    # None (the default) disables session checkpointing for this server.
+    session_state_dir: Optional[str] = None
     # The mode of reverification (for gym eval reverify) of this server.
     REVERIFY_MODE: ClassVar[ReverifyMode] = ReverifyMode.UNKNOWN
 
@@ -121,6 +145,38 @@ class BaseSeedSessionResponse(BaseModel):
     pass
 
 
+class SessionExportRequest(BaseModel):
+    # The agent step this export is taken at (state after that step's tools).
+    boundary_index: int
+    # Caller accepts the state inline in the response (to embed in its
+    # boundary record) instead of a snapshot file. Off by default so older
+    # callers keep file semantics.
+    inline_ok: bool = False
+
+
+class SessionExportResponse(BaseModel):
+    supported: bool
+    exported: bool = False
+    boundary_index: Optional[int] = None
+    # Set when the state was returned inline instead of written to a file.
+    inline: bool = False
+    state: Optional[dict[str, Any]] = None
+    detail: str = ""
+
+
+class SessionRestoreRequest(BaseModel):
+    boundary_index: int
+    # Inline state from the boundary record; when present the server restores
+    # from it directly instead of reading a snapshot file.
+    state: Optional[dict[str, Any]] = None
+
+
+class SessionRestoreResponse(BaseModel):
+    supported: bool
+    restored: bool = False
+    detail: str = ""
+
+
 class MCPServerMetadata(BaseModel):
     """Metadata returned from /seed_session for per-rollout Gym MCP access."""
 
@@ -143,8 +199,19 @@ class SimpleResourcesServer(BaseResourcesServer, AggregateMetricsMixin, SimpleSe
         app.post("/verify")(judge_failsafe(self.verify))
         app.post("/aggregate_metrics")(self.aggregate_metrics)
         app.get("/reverify_mode")(self.get_reverify_mode)
+        self.setup_session_state_routes(app)
 
         return app
+
+    def setup_session_state_routes(self, app: FastAPI) -> None:
+        """Register the session-checkpointing framework routes.
+
+        Servers that build their own FastAPI app instead of calling
+        ``SimpleResourcesServer.setup_webserver`` (e.g. GymnasiumServer) must
+        call this themselves to be checkpointable.
+        """
+        app.post(f"{SESSION_STATE_URL_PREFIX}/export")(self.session_export)
+        app.post(f"{SESSION_STATE_URL_PREFIX}/restore")(self.session_restore)
 
     def normalize_tool_name(self, name: str) -> str:
         """Strip this server's MCP namespace from a trajectory tool-call name (see module function)."""
@@ -167,6 +234,95 @@ class SimpleResourcesServer(BaseResourcesServer, AggregateMetricsMixin, SimpleSe
 
     async def seed_session(self, body: BaseSeedSessionRequest) -> BaseSeedSessionResponse:
         return BaseSeedSessionResponse()
+
+    # -- session checkpointing (partial rollouts) ------------------------------
+    #
+    # Export runs in the process that owns the live session objects and is
+    # driven by the agent at tool boundaries; the trainer never calls servers
+    # directly. Both routes require a rollout context (``/ng-rollout/<id>/...``
+    # prefix), which also binds the transport session id to the rollout id, so
+    # a restored session is addressable by any worker or restarted process
+    # without a cookie handoff.
+
+    def supports_session_state(self) -> bool:
+        """Capability declaration: whether this server can export/restore session state.
+
+        Override to return True and implement ``export_session_state`` /
+        ``restore_session_state``. Servers without support keep whole-rollout
+        retry semantics; the agent treats them as stateless.
+        """
+        return False
+
+    async def export_session_state(self, session_id: str) -> Optional[dict[str, Any]]:
+        """Return a JSON-serializable snapshot of one session's state, or None if there is nothing to export.
+
+        Servers whose real state lives in an external durable backend should
+        return the reconnect descriptor (e.g. ``AsyncSandbox.serialize()``),
+        not the state itself.
+        """
+        return None
+
+    async def restore_session_state(self, session_id: str, state: dict[str, Any]) -> None:
+        """Rebind ``state`` (as produced by ``export_session_state``) to ``session_id``."""
+        raise NotImplementedError
+
+    def _session_state_store(self) -> Optional[FileSessionStateStore]:
+        if not self.config.session_state_dir:
+            return None
+        return FileSessionStateStore(self.config.session_state_dir)
+
+    @staticmethod
+    def _require_rollout_id() -> str:
+        rollout_id = current_rollout_id()
+        if rollout_id is None:
+            # Session state is keyed by rollout id, never by the session cookie:
+            # a cookie-keyed snapshot could not be found again after a restart.
+            raise HTTPException(
+                status_code=400,
+                detail="session-state routes require the /ng-rollout/<rollout_id>/ request prefix",
+            )
+        return rollout_id
+
+    async def session_export(self, request: Request, body: SessionExportRequest) -> SessionExportResponse:
+        store = self._session_state_store()
+        if store is None or not self.supports_session_state():
+            return SessionExportResponse(supported=False, detail="session state not enabled for this server")
+        rollout_id = self._require_rollout_id()
+        state = await self.export_session_state(request.session[SESSION_ID_KEY])
+        if state is None:
+            return SessionExportResponse(supported=True, detail="no session state to export")
+        if body.inline_ok and len(json.dumps(state)) <= SESSION_STATE_INLINE_MAX_BYTES:
+            # Small states ride back to the caller and into the boundary
+            # record: no snapshot file, no extra fsyncs on shared storage.
+            return SessionExportResponse(
+                supported=True, exported=True, boundary_index=body.boundary_index, inline=True, state=state
+            )
+        await store.write_snapshot(
+            SessionSnapshot(
+                rollout_id=rollout_id,
+                server_name=self.config.name or self.__class__.__name__,
+                boundary_index=body.boundary_index,
+                state=state,
+                created_at=time(),
+            )
+        )
+        return SessionExportResponse(supported=True, exported=True, boundary_index=body.boundary_index)
+
+    async def session_restore(self, request: Request, body: SessionRestoreRequest) -> SessionRestoreResponse:
+        store = self._session_state_store()
+        if store is None or not self.supports_session_state():
+            return SessionRestoreResponse(supported=False, detail="session state not enabled for this server")
+        rollout_id = self._require_rollout_id()
+        if body.state is not None:
+            await self.restore_session_state(request.session[SESSION_ID_KEY], body.state)
+            return SessionRestoreResponse(supported=True, restored=True)
+        snapshot = await store.read_snapshot(
+            rollout_id, self.config.name or self.__class__.__name__, body.boundary_index
+        )
+        if snapshot is None:
+            return SessionRestoreResponse(supported=True, detail=f"no snapshot at boundary {body.boundary_index}")
+        await self.restore_session_state(request.session[SESSION_ID_KEY], snapshot.state)
+        return SessionRestoreResponse(supported=True, restored=True)
 
     @abstractmethod
     async def verify(self, body: BaseVerifyRequest) -> BaseVerifyResponse:

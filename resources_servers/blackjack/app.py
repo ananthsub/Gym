@@ -22,7 +22,7 @@ Reward: +1 win, 0 draw, -1 loss.
 
 import random
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from nemo_gym.openai_utils import NeMoGymResponse
 from resources_servers.gymnasium import GymnasiumServer, extract_text
@@ -108,6 +108,38 @@ class BlackjackEnv(GymnasiumServer):
                 "dealer_value": dv,
             },
         )
+
+    # -- session checkpointing (partial rollouts) ------------------------------
+    # The hand is unseeded and stateful: the exact upcoming cards live in the
+    # ``random.Random`` instance. Replay cannot recover this (fresh RNG, fresh
+    # deal), which is precisely why partial-rollout checkpointing uses explicit
+    # export/restore. ``getstate()`` round-trips through JSON (the internal
+    # state is a tuple of ints), so a restored session deals bit-identical
+    # cards to the uninterrupted run.
+
+    def supports_session_state(self) -> bool:
+        return True
+
+    async def export_session_state(self, session_id: str) -> Optional[dict[str, Any]]:
+        state = self.session_state.get(session_id)
+        if state is None:
+            return None
+        version, internal, gauss = state["rng"].getstate()
+        return {
+            "player": list(state["player"]),
+            "dealer": list(state["dealer"]),
+            "rng_state": {"version": version, "internal": list(internal), "gauss": gauss},
+        }
+
+    async def restore_session_state(self, session_id: str, state: dict[str, Any]) -> None:
+        rng = random.Random()
+        rng_state = state["rng_state"]
+        rng.setstate((rng_state["version"], tuple(rng_state["internal"]), rng_state["gauss"]))
+        self.session_state[session_id] = {
+            "player": list(state["player"]),
+            "dealer": list(state["dealer"]),
+            "rng": rng,
+        }
 
 
 if __name__ == "__main__":

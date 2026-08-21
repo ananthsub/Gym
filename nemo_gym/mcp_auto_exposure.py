@@ -458,6 +458,9 @@ def harvest_tools(app: FastAPI, server: Any) -> dict[str, MCPTool]:
         # Never tools. GET docs/openapi are excluded by the POST filter above; /mcp by path.
         if route.path.lstrip("/") in RESERVED_MCP_TOOL_NAMES or route.path == MCP_URL_PATH:
             continue
+        # Session-checkpointing framework routes are plumbing, not tools.
+        if route.path.startswith("/ng-session/"):
+            continue
         if "{" in route.path:
             catchall_routes.append(route)
             continue

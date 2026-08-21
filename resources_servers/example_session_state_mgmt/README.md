@@ -9,6 +9,18 @@ python create_examples.py
 
 For an annotated walkthrough of per-episode session state and `SESSION_ID_KEY`, see the [Stateful Environment](https://docs.nvidia.com/nemo/gym/main/environment-tutorials/stateful-environment) tutorial.
 
+## Session checkpointing (partial rollouts)
+
+This server is the reference implementation of the session export/restore capability
+(`nemo_gym/session_state/`): it overrides `supports_session_state`, `export_session_state`,
+and `restore_session_state` on `SimpleResourcesServer`. With `session_state_dir` set here and
+on `simple_agent`, the agent exports a snapshot and commits a tool-boundary record after each
+tool step, and a killed rollout can be redispatched with `_ng_resume: true` under the same
+`_ng_rollout_id` to continue from its last committed boundary — the environment is restored
+from the snapshot and the conversation from the boundary records, with no tool re-execution.
+See `responses_api_agents/simple_agent/tests/test_session_checkpointing.py` for the
+end-to-end kill-and-resume flow.
+
 # Licensing information
 Code: Apache 2.0
 Data: Apache 2.0

@@ -567,8 +567,18 @@ class SimpleServer(BaseServer):
 
         @app.middleware("http")
         async def add_session_id(request: Request, call_next):  # pragma: no cover
+            session_id = request.session.get(SESSION_ID_KEY)
+            if session_id is None:
+                # Bind the session to the rollout when the request carries a
+                # ``/ng-rollout/<id>/`` prefix (RolloutContextMiddleware runs
+                # first and set the context). The signing key is deterministic,
+                # so any worker or restarted process re-derives the same
+                # session for the same rollout with no cookie handoff — this is
+                # what makes session state resumable and multi-worker-safe.
+                # Un-prefixed requests keep the historical random session id.
+                session_id = current_rollout_id() or str(uuid4())
             # Always assign so Starlette 1.0+ marks session.modified=True and re-sends Set-Cookie.
-            request.session[SESSION_ID_KEY] = request.session.get(SESSION_ID_KEY, str(uuid4()))
+            request.session[SESSION_ID_KEY] = session_id
 
             response: Response = await call_next(request)
             return response

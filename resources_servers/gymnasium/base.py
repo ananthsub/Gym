@@ -84,6 +84,7 @@ class GymnasiumServer(SimpleResourcesServer):
         app.post("/reset")(self._reset_endpoint)
         app.post("/step")(self._step_endpoint)
         app.post("/aggregate_metrics")(self.aggregate_metrics)
+        self.setup_session_state_routes(app)
         return app
 
     async def _reset_endpoint(self, body: EnvResetRequest, request: Request) -> EnvResetResponse:
