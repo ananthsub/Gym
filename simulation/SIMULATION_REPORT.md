@@ -118,3 +118,10 @@ switch, F5 cache bound + `sweep_retired`, `protocols.py` contract rewrite, confo
 vectors; +1,464/−163 across 26 files). Verification: **2,931 tests pass** (one pre-existing enroot
 environment failure, unrelated), scenario matrix clean, races 0/220, soak 380/380. Destination of
 each change: [STACK_REVIEW.md §14](STACK_REVIEW.md#14-change--pr-mapping).
+
+A third commit (`d1dc93747`) adds the scale hardening: true-LRU metadata-only lineage index with
+lazy, digest-checked token materialization (eviction mid-rollout is now provably a performance
+event, not a correctness event), `InMemoryLineageStore` demoted to a reference/test building
+block, and **delta records (schema v5)** — RESOLVED continuations store only the suffix beyond
+their parent's cumulative tokens (O(T²)→O(T) storage), with fail-closed chain reconstruction in
+the builder and the resolver. 2,942 tests pass; the scenario matrix stays clean.
