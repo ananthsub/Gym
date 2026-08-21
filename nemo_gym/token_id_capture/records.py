@@ -51,6 +51,12 @@ TOKEN_FIELDS = ("prompt_token_ids", "generation_token_ids", "generation_log_prob
 #      parent's cumulative tokens; full arrays reconstruct by walking parent links
 TOKEN_ENTRY_RECORD_SCHEMA_VERSION = 5
 
+# No v1/v2 records were ever written outside development, so readers refuse them
+# rather than carrying the prefix-inference machinery their reconstruction needed.
+# Raising this floor is a deliberate compatibility decision; records at or above
+# it always carry a request-time parent decision.
+TOKEN_ENTRY_MIN_SCHEMA_VERSION = 3
+
 # Increment this version when the digest encoding changes.
 # A stale digest must fail verification.
 DIGEST_VERSION = 1
@@ -180,6 +186,12 @@ class TokenEntry(BaseModel):
                 f"token record is schema_version {self.schema_version}, but this reader understands "
                 f"up to {TOKEN_ENTRY_RECORD_SCHEMA_VERSION}. Upgrade the reader, or point it at "
                 "records written by a writer it matches."
+            )
+        if self.schema_version < TOKEN_ENTRY_MIN_SCHEMA_VERSION:
+            raise ValueError(
+                f"token record is schema_version {self.schema_version}, below the supported minimum "
+                f"{TOKEN_ENTRY_MIN_SCHEMA_VERSION}. Pre-lineage records were never written in "
+                "production; regenerate the rollout with a current writer."
             )
         if len(self.generation_token_ids) != len(self.generation_log_probs):
             raise ValueError(

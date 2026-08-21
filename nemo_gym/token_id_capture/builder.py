@@ -158,8 +158,8 @@ def _resolve_parent(
     """Find this call's parent.
 
     New records preserve the request-time parent decision.
-    Token-prefix inference serves two cases: legacy records with no decision at
-    all, and a RESOLVED link whose parent is absent from the build (recovery).
+    Token-prefix matching serves one case: recovery of a RESOLVED link whose
+    parent is absent from the build.
     ``note`` reports why the recorded link was not used as recorded.
     """
     prompt = list(node.entry.prompt_token_ids)
@@ -189,8 +189,9 @@ def _resolve_parent(
         ):
             return parent, False, None
         return None, False, "parent_digest_mismatch"
-    # Resolution metadata is absent only on records written before schema 3.
-    return prefix_index.infer_parent(prompt) + (None,)
+    # Every supported record carries a request-time decision; its absence means a
+    # nonconforming writer, and guessing a parent for it is the forbidden move.
+    return None, False, "missing_resolution"
 
 
 def _materialize_delta_prompts(entries: list[TokenEntry]) -> tuple[list[TokenEntry], list[str]]:
@@ -310,10 +311,10 @@ def prefix_merging(entries: list[TokenEntry]) -> BuildOutput:
     nodes: list[_Node] = []
     roots: list[_Node] = []
     quarantined: list[str] = []
-    # The trie exists only for records with no usable parent decision:
-    # legacy pre-resolution records, and recorded links whose parent is absent.
+    # The trie exists only for missing-parent recovery: a RESOLVED link whose
+    # parent is absent from the build (e.g. filtered for an empty generation).
     surviving_ids = {e.model_call_id for e in ordered}
-    needs_prefix_index = any(e.parent_resolution is None for e in ordered) or any(
+    needs_prefix_index = any(
         e.parent_call_id is not None and e.parent_call_id not in surviving_ids for e in ordered
     )
     prefix_index = _PrefixIndex() if needs_prefix_index else _NullPrefixIndex()

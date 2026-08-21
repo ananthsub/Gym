@@ -1923,17 +1923,20 @@ class TestFinalizeRolloutTokenCapture:
 
     @staticmethod
     def _capture(store: TokenCaptureStore) -> None:
-        store.append(
-            TokenEntry(
-                rollout_id="0-0",
-                model_call_id="c1",
-                prompt_token_ids=[1, 2, 3],
-                generation_token_ids=[4, 5],
-                generation_log_probs=[-0.1, -0.2],
-                output_items=[{"type": "message", "role": "assistant", "content": []}],
-                token_item_index=0,
-            )
+        from nemo_gym.token_id_capture.records import ParentResolutionStatus, stamp_lineage
+
+        entry = TokenEntry(
+            rollout_id="0-0",
+            model_call_id="c1",
+            prompt_token_ids=[1, 2, 3],
+            generation_token_ids=[4, 5],
+            generation_log_probs=[-0.1, -0.2],
+            output_items=[{"type": "message", "role": "assistant", "content": []}],
+            token_item_index=0,
         )
+        # Stamp the way a current writer does; unstamped records now mask.
+        stamp_lineage(entry, None, parent_resolution=ParentResolutionStatus.ROOT)
+        store.append(entry)
 
     async def test_rebuilds_a_rollout_that_has_no_token_ids(self, tmp_path: Path) -> None:
         store = TokenCaptureStore(tmp_path)
