@@ -28,6 +28,38 @@ Four stages, all merged in `main` (#2124 capture, #2125 chaining, #2126 delivery
 3. **Store.** Records land in a `TokenSink` (file-based by default, pluggable for framework transports).
 4. **Rebuild and deliver.** After the rollout completes, a builder chains the calls into one contiguous Responses payload, or masks the sample if it cannot do so safely.
 
+A two-call rollout through the merged pipeline:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant RC as Rollout collection
+    participant H as External harness
+    participant M as Model server
+    participant V as vLLM engine
+    participant S as TokenSink
+
+    RC->>H: dispatch task (rollout id assigned, stale captures pre-cleared)
+    Note over H,M: model URL carries /ng-rollout/id/training-token-capture/v1
+    H->>M: call 1 (chat, responses, or anthropic dialect)
+    M->>M: mint model_call_id, set CaptureContext
+    M->>V: generation request (logprobs and sampling pinned)
+    V-->>M: complete response with token ids and logprobs
+    M->>S: put TokenEntry (fsync before return)
+    S-->>M: durable
+    M-->>H: response (token fields dropped by dialect conversion)
+    H->>M: call 2 (history extended with call 1 output)
+    M->>V: generation request
+    V-->>M: response
+    M->>S: put TokenEntry
+    M-->>H: response
+    H-->>RC: transcript and result (no token ids)
+    RC->>S: freeze rollout into an atomic snapshot
+    RC->>RC: chain entries, verify contiguity, project onto the Responses payload (or mask_sample)
+    RC->>RC: fsync results JSONL
+    RC->>S: drop snapshot (conditional retirement)
+```
+
 ## Rollout identity and correlation
 
 - `nemo_gym/config_types.py` defines `ROLLOUT_PATH_PREFIX = "ng-rollout"` and `TOKEN_CAPTURE_PATH_SEGMENT = "training-token-capture"`.
@@ -100,6 +132,31 @@ Token-prefix inference has a structural blind spot: a retried call shares its pr
 
 The engine rebuilds each prompt by re-rendering the whole conversation through the chat template, which can produce a different token sequence than was sampled — a tool parser truncates the assistant turn, a template re-tokenizes it differently, a reasoning template drops earlier thinking. The chain then breaks at rebuild time. #2181 removes the re-render from the continuation boundary: when request-time resolution produced a unique verified parent, the outbound vLLM request carries `required_prefix_token_ids` (the parent's exact cumulative tokens). Intent and proof are separate persisted facts — `prefix_requested` records that the extension was asked for; `prefix_supplied` becomes true only after the generation response's `prompt_token_ids` prove the served prompt extended the exact requested tokens. An unproven supply fails the call loudly (one of two deliberate exceptions to "capture never fails the model call"). Stock vLLM does not implement the extension; the backend must honor it.
 
+How #2180 and #2181 combine at serving time:
+
+```mermaid
+sequenceDiagram
+    participant H as Harness
+    participant M as Model server worker
+    participant L as LineageStore
+    participant V as vLLM
+    participant S as TokenSink
+
+    H->>M: continuation request echoing the previous response
+    M->>L: resolve parent from the request as received
+    alt RESOLVED (unique fingerprint match, context digest verified)
+        L-->>M: parent call and exact cumulative token ids
+        M->>V: generate with required_prefix_token_ids
+        V-->>M: response with generation-time prompt_token_ids
+        M->>M: proof check that the served prompt extends the requested prefix, else fail loudly
+    else ROOT or UNRESOLVED
+        M->>V: ordinary generation request
+        V-->>M: response
+    end
+    M->>S: put TokenEntry with parent decision, digests, prefix intent and proof
+    M-->>H: response
+```
+
 ### The v2 line (#2349 docs branch, unmerged)
 
 Iterates on #2180/#2181 and is the form to assess for merge: schema v5 parent-relative prompt deltas (a `RESOLVED` continuation may store only the prompt suffix beyond its parent, cutting per-rollout storage from O(T²) to O(T); a broken delta chain masks), a schema floor of v3, `IncrementalLineageStore` with backend adapter hooks, an executable conformance kit for sink/source/lineage adapters, golden fingerprint vectors pinning the cross-repo hash contract, worker health counters, and `nemo_gym/token_id_capture/DESIGN.md` — the authoritative architecture document.
@@ -107,6 +164,27 @@ Iterates on #2180/#2181 and is the form to assess for merge: schema v5 parent-re
 ### #2278 — worker-locus staging (unmerged, second topology)
 
 #2278 moves token custody out of Gym entirely, for trainers that own their inference workers and data plane (NeMo RL's TransferQueue is the target). The inference worker stages each call's token delta durably in framework storage before acknowledging the response; Gym's model server keeps only a token-free per-rollout capture ledger (typed commit coordinates with digests) and serves it read-only over one bearer-authenticated manifest route. Request-time resolution becomes a strict admission decision (`token_in` continuation with a verified staged-prefix chain, `text` root, or a poison row — an unresolved request is never converted into a new root). Each staged record carries a chained ancestry hash; the framework's finalizer fetches the manifest and staged rows, re-verifies every digest, and linearizes the terminal chain into a flat trainable row with per-call weight-version spans and optional routed-expert tensors. Token IDs, logprobs, and routing data never appear on any agent-facing response. The branch has evolved past its PR description: the earlier stateful custody component was replaced by the ledger (commit `1e1a16cb2`); its serving surface is deliberately narrow (non-streaming chat).
+
+The two custody topologies side by side — the load-bearing difference is where token bytes rest and who rebuilds:
+
+```mermaid
+flowchart LR
+    subgraph GC["Gym custody (main + PR 2180/2181)"]
+        H1["Harness"] --> M1["Model server<br/>resolves parent, captures TokenEntry"]
+        M1 --> V1["vLLM"]
+        M1 --> S1["Gym TokenSink<br/>token arrays + lineage on Gym storage"]
+        S1 --> F1["Gym finalizer<br/>freeze, rebuild, conditional retire"]
+        F1 --> T1["Trainer consumes<br/>rebuilt Responses payload"]
+    end
+    subgraph WC["Worker custody (PR 2278)"]
+        H2["Harness"] --> M2["Model server<br/>admission + token-free capture ledger"]
+        M2 --> W2["Inference worker<br/>proves prefix, stages token delta"]
+        W2 --> Q2["Framework storage<br/>e.g. TransferQueue"]
+        M2 -.->|"manifest over bearer-auth route"| F2["Framework finalizer<br/>verify_and_linearize"]
+        Q2 --> F2
+        F2 --> T2["Trainer consumes flat row<br/>tokens, mask, logprobs, weight versions"]
+    end
+```
 
 The two custody topologies — Gym-custody (#2180/#2181/v2) and worker-custody (#2278) — share the resolution machinery but differ in protocol APIs and schema numbering. Their reconciliation is the stack's main open design item, tracked in `DESIGN.md`.
 

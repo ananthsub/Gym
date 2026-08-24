@@ -28,6 +28,26 @@ A gateway impersonates every provider endpoint (OpenAI Chat, OpenAI Responses, A
 
 At post-run, a `prefix_merging` builder reconstructs trajectories: a completion joins the open chain whose last prompt is the longest strict token-prefix of its prompt (comparing server-side prompt tokenizations only, never sampled response IDs). The merged stream is the first prompt, then per turn the raw sampled response IDs (loss mask 1, real logprobs) plus the interstitial tokens sliced from the next call's prompt at the first end-of-turn token (loss mask 0). A prefix break — e.g. harness compaction rewrote history — truncates the chain at the break, never repairs it. The Slime bridge converts each trace to a Slime `Sample`, validates masks and logprobs fail-closed, drops stale or under-complete groups, and computes leave-one-out GRPO baselines per prompt group.
 
+The two paths side by side:
+
+```mermaid
+flowchart LR
+    subgraph G["Gym: capture inside the serving stack"]
+        A1["External harness"] --> M1["Gym model server<br/>capture + lineage"]
+        M1 --> V1["vLLM"]
+        M1 --> S1["TokenSink<br/>durable, digest-verified"]
+        S1 --> F1["freeze, verify, linearize"]
+        F1 --> T1["NeMo RL<br/>PR 3407 / PR 3456"]
+    end
+    subgraph P["Polar: capture at an intercepting gateway"]
+        A2["Agent CLI, unmodified<br/>provider URLs redirected, API key = session id"] --> GW["Gateway<br/>detect dialect, transform to chat"]
+        GW --> V2["SGLang (patched) or vLLM"]
+        GW --> S2["CompletionRecords<br/>in-memory, best-effort disk"]
+        S2 --> F2["post-run prefix merging<br/>sampled ids mask 1, interstitials mask 0"]
+        F2 --> T2["Slime bridge<br/>patched router"]
+    end
+```
+
 ## Shared doctrine
 
 - **No local retokenization.** Polar has no tokenizer dependency at all; Gym records tokens where the engine produced them. Both treat sampled response IDs as untouchable — Polar explicitly never prefix-matches on them because re-serialized text can re-tokenize differently, which is the same drift Gym's #2181 exists to defeat.
@@ -43,6 +63,21 @@ At post-run, a `prefix_merging` builder reconstructs trajectories: a completion 
 Polar decides chain membership entirely after the run, by longest strict token-prefix. The approach is simple and has one property Gym currently lacks: it demultiplexes interleaved parallel sub-agents into separate chains and delivers all of them as separate training samples sharing a group ID. Gym's merged builder does the same inference (a prefix trie) but delivers only the main chain and masks or quarantines the rest; multi-trace delivery is explicit future work in `DESIGN.md`.
 
 The open Gym stack (#2180) then goes where post-hoc inference cannot: the parent is resolved at request time from the live request, persisted in the same durable write as the tokens, and re-verified by digest at rebuild. That disambiguates retries — identical prompts with different generations — which pure prefix matching is structurally blind to. Polar's answer to retries is coarser: single-use session IDs, timestamp order, and truncation on any break.
+
+```mermaid
+flowchart LR
+    subgraph PM["Polar: chain decided after the run"]
+        A["C1 prompt ids<br/>mask 0"] --> B["C1 sampled ids<br/>mask 1, real logprobs"]
+        B --> C["interstitial sliced from C2 prompt<br/>split at end-of-turn token<br/>mask 0"]
+        C --> D["C2 sampled ids<br/>mask 1"]
+        D --> E["C3 prompt does not extend C2:<br/>truncate the chain at the break"]
+    end
+    subgraph GL["Gym PR 2180: chain recorded at request time"]
+        F["C1: ROOT<br/>digest over prompt and generation"] --> G1["C2: RESOLVED with parent C1<br/>digest re-verified at rebuild"]
+        G1 --> H1["C2 retry, identical prompt:<br/>disambiguated by fingerprint"]
+        G1 --> I1["C3: UNRESOLVED<br/>masked fragment, never guessed"]
+    end
+```
 
 ### Loss masks and delivery shape
 

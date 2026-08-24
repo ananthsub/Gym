@@ -14,6 +14,50 @@ The Switchyard integration (#2026) is a well-engineered design that reached full
 
 **Switchyard integration (on the wire).** OpenHands policy calls are routed through the Switchyard proxy, which injects `return_token_ids` and `logprobs` into the upstream vLLM request and records each call's engine-authoritative token triple as a versioned JSON file under `sessions/<uuid>/`. Gym retrieves the session after the run (`GET /v1/sessions/<uuid>/completions`) and rebuilds the records into its trainer-facing Responses rollout. The integration is zero-fork: the pinned OpenHands client is steered entirely by per-run configuration — the agent TOML `model` becomes the Switchyard route ID, the session UUID rides `completion_kwargs.proxy_x_session_id` (stripped before forwarding), and the agent container's model-server entry is rewritten to Switchyard's host and port. Gym imports nothing from Switchyard; the coupling is a wire contract guarded by a `schema_version` check.
 
+Where each design captures, and where token data rests:
+
+```mermaid
+flowchart LR
+    subgraph N["Native stack: capture in process"]
+        H1["Harness"] -->|"base URL /ng-rollout/id/training-token-capture/v1"| M1["Gym model server<br/>capture middleware"]
+        M1 --> V1["vLLM"]
+        M1 --> S1["TokenSink<br/>fsync before the response returns"]
+        S1 --> B1["freeze, chain, digest-verify"]
+        B1 --> R1["rebuilt Responses payload<br/>or mask_sample"]
+    end
+    subgraph Y["Switchyard integration (PR 2026): capture on the wire"]
+        H2["OpenHands"] -->|"model = route id<br/>session uuid in request body"| P2["Switchyard proxy"]
+        P2 -->|"inject return_token_ids + logprobs<br/>force non-streaming"| V2["vLLM"]
+        P2 --> D2["sessions/uuid/*.json<br/>one record per call"]
+        D2 --> G2["Gym post-run GET<br/>strict-history rebuild"]
+        G2 --> R2["token triples inline on the<br/>rollout payload, or mask_sample"]
+    end
+```
+
+The #2026 session lifecycle in detail:
+
+```mermaid
+sequenceDiagram
+    participant G as Gym swe_agents
+    participant H as OpenHands container
+    participant P as Switchyard proxy
+    participant V as vLLM
+
+    G->>H: launch with route id, session uuid, rewritten model-server entry
+    loop each policy call
+        H->>P: chat completion (model = route id, session id in body)
+        P->>P: resolve session, strip the session field
+        P->>V: substitute real model, inject return_token_ids and logprobs, buffer streaming
+        V-->>P: response with prompt and generation token ids plus logprobs
+        P->>P: write session record (atomic, schema v1)
+        P-->>H: translated response without token fields
+    end
+    H-->>G: patch and transcript
+    G->>P: GET /v1/sessions/uuid/completions
+    P-->>G: schema-gated records
+    G->>G: validate, run dual contiguity checks, rebuild - any failure sets mask_sample
+```
+
 ## Where the two designs agree
 
 The convergence validates the program's core doctrine from two independent directions:
