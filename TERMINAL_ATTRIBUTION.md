@@ -392,7 +392,54 @@ yield loss — and the other witnesses exist precisely to shrink them. The hones
 
 The eventual goal is to train on **every** captured chain — the full forest: the main
 chain, sub-agent branches, auxiliary calls — not just the single rewarded chain.
-Implications, so no upcoming review simplifies it away:
+
+**Strategic framing (2026-08-22): the forest is the foundation; attribution is a label,
+not a gate.** The forest is built purely from tokens — prefix relations and digests —
+and therefore works identically for every harness with no transcript fidelity, no
+fingerprints, no response ids, no cooperation. Terminal attribution is the one
+harness-*dependent* step. The dependency direction must be: forest first (always
+delivers), attribution on top (enriches when the harness is faithful, abstains
+otherwise). Consequences:
+
+- **Attribution is not a per-harness program.** Under forest delivery an auxiliary call
+  the server captured is just another segment — delivered, labeled "not the terminal",
+  never a reason to mask. The single-chain design masked multi-root rollouts only
+  because it was forced to pick one root; remove that constraint and the failure mode
+  dissolves.
+- **Outcome-reward broadcast is the v1 credit model.** Under outcome-supervised RL the
+  reward is a property of the rollout, and every segment the policy generated during the
+  attempt is policy behavior that produced that outcome. Broadcasting the outcome reward
+  to every fully-contiguous segment is defensible, and it makes **compaction linkage
+  unnecessary for v1** — pre-compaction segments receive the reward as segments of the
+  rollout, link or no link. Linkage stays metadata for finer credit later.
+- **The one structural exception is the abandoned retry sibling** (same prompt, same
+  parent, one generation off the causal path). The forest *detects* retry groups from
+  tokens alone; attribution *resolves* them when a witness exists; otherwise the group
+  carries `retry_kept_unknown` and the trainer chooses (exclude the group, or include
+  both). Never a masked rollout.
+- **What attribution becomes:** the labeler of the reward-bearing segment and the
+  resolver of retry groups; on failure it emits flags, not masks. PRs 2675/2676 remain
+  the label source and fix the single-chain interim; their mask semantics re-scope when
+  the forest lands — "unattributed" means "forest delivered, terminal label absent".
+- **Missing captures become segment-scoped with #2180.** A call that returned no token
+  ids marks the rollout incomplete today (rollout-fatal), because the store cannot know
+  whether its output entered a later prompt. With request-time lineage, a request whose
+  model-authored history includes an unrecorded call fails to resolve — so "incomplete"
+  can shrink to the affected segments. On this base it stays conservative.
+
+Implementation shape: Gym adds `project_forest` (one contiguity-verified projection per
+chain with structural labels: root/terminal call, `retry_group_id`, `retry_kept`,
+`is_attributed_terminal`; quarantined subtrees become their own flagged root segments
+instead of being dropped) and delivers the segment list alongside the unchanged main
+chain in `_ng_token_capture`, with per-segment masks. NeMo RL's TQ path is nearly free —
+the manifest already carries parent pointers, so `linearize` becomes a per-tree
+`linearize_forest` publishing `{rollout}_s{k}` rows with the outcome reward and labels
+as tags — and the RL #3407 grouping-ids-as-batch-column patch graduates from bug fix to
+forest prerequisite. Sequencing: forest contract (next Gym PR after 2675/2676) → RL
+consumption → attribution labels enrich; compaction linkage drops behind all three.
+
+Implications the original single-chain discussion established, so no upcoming review
+simplifies them away:
 
 - **The forest is already computed.** `prefix_merging` materializes every chain
   (`main` + `branch-N`); only the *delivery* contract drops all but one
@@ -446,35 +493,14 @@ Implications, so no upcoming review simplifies it away:
 
 ### 2.9 Auxiliary calls the model server does not understand
 
-A blackbox harness gets one base URL — the capture-prefixed one — so *every* endpoint it
-touches lands under the prefix. The capture middleware observes three paths; any other
-prefixed request (a count-tokens probe, `/v1/models`, embeddings) currently triggers
-`mark_incomplete(rollout_id, "")` before forwarding: one stray utility call masks the
-whole rollout. If the Claude Code CLI calls `/v1/messages/count_tokens`
-(version-dependent), this silently costs every rollout — a live-harness smoke-test item.
-
-The blanket rule guards a real hazard — an *uncaptured generation* whose output re-enters
-the conversation would train policy tokens as environment tokens — but the hazard only
-exists for calls whose output can enter the chain. The refinement, in two stages matching
-the evidence available:
-
-1. **Now (independent PR): a non-generative endpoint safe-list** at the middleware.
-   Prefixed requests to known non-generative paths forward without capture and without
-   the incomplete marker (a counter at most). Classification by endpoint semantics,
-   knowable statically.
-2. **Post-#2180: demote "incomplete" from verdict to evidence.** Typed incompleteness
-   reasons (`unobserved_path:<path>` vs `missing_token_ids` vs `capture_write_failed`),
-   and the build delivers despite off-chain holes when the delivered chain is
-   terminal-attributed **and every link is verified RESOLVED** — verified lineage
-   *detects* the dangerous case automatically (an uncaptured assistant turn inserted into
-   the conversation breaks the model-authored spine → UNRESOLVED → masks for the right
-   reason). On trie-only main an uncaptured generation would ride undetected as mask-0
-   interstitial, which is why the blanket rule cannot be fully relaxed before #2180.
-
-Same principle as §2.8 and the compaction discussion: decide from token evidence at
-build time, not from events at capture time. And the same courtesy this branch already
-extended to aux calls the server *does* understand (excluded, not masking) applies to
-ones it doesn't: exclusion with evidence, never silent acceptance.
+Tracked separately on branch `ansubramania/model-aux-calls` (`MODEL_AUX_CALLS.md`).
+Summary: prefixed utility calls to unobserved endpoints (count-tokens probes,
+`/v1/models`) currently trigger `mark_incomplete` and mask the whole rollout; the fix is
+a non-generative endpoint safe-list now, then typed incompleteness with hole-tolerant
+delivery once chain links are content-verifiable — which that doc identifies as an early
+split of #2180 (continuation stamping, schema v3) that also activates this design's
+cumulative content witness. The Claude Code endpoint-probe question rides the same live
+smoke test as the §6.1 id-reuse check.
 
 ---
 
@@ -596,13 +622,17 @@ environment-tutorial pages. Carries the survey evidence from §2.5 and documents
   finalize path — the root invocation's last `ModelCallRef`, resolved against
   `TokenEntry.response_id`, joins as a harness-declared terminal witness (§2.5.1).
   Zero per-agent work: the five instrumented wrappers already produce the bundle.
+- **Forest delivery contract** (the next Gym PR after 2675/2676, §2.8): `project_forest`
+  + per-segment labels/masks delivered alongside the unchanged main chain; then the RL
+  consumption (`linearize_forest`, `{rollout}_s{k}` rows, outcome-reward broadcast,
+  #3407 grouping ids). Re-scopes attribution's mask semantics to flags.
 - **Compaction linkage pass** (forest scope, §2.8): the typed between-tree graph —
   declared compaction edges corroborated by the captured summary call and kept item
-  ids, tree labels exposed to delivery for reward attribution. Gated on the
-  multi-sequence delivery contract existing first.
-- **Non-generative endpoint safe-list** (independent, small): prefixed requests to
-  known non-generative endpoints stop marking the rollout incomplete (§2.9). The
-  typed-incompleteness / deliver-despite-off-chain-holes refinement follows with #2180.
+  ids. Deprioritized: outcome-reward broadcast handles compaction for v1; linkage is
+  for finer credit later.
+- **Auxiliary-endpoint handling**: tracked on `ansubramania/model-aux-calls` (§2.9) —
+  safe-list now; typed incompleteness + hole-tolerant delivery after the
+  continuation-stamping slice of #2180.
 - **RL seal carries the declared terminal** — with the gate-successor (#2278 rebase); the
   seal's terminal feeds the `explicit` witness, replacing last-committed-wins.
 - **`image_tools_agent` scores/persists mismatch** — pre-existing, surfaced by the survey;
