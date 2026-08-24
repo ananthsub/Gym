@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from tqdm.asyncio import tqdm
 
 from nemo_gym import _resolve_under_cwd_or_install
+from nemo_gym.agent_routing import load_agent_routing_map, resolve_agent_name
 from nemo_gym.base_resources_server import AggregateMetrics, AggregateMetricsRequest
 from nemo_gym.base_responses_api_model import (
     clear_model_call_captures_for_rollouts,
@@ -51,6 +52,7 @@ from nemo_gym.exporters import export_metrics, export_rollouts, get_exporters
 from nemo_gym.global_config import (
     AGENT_REF_KEY_NAME,
     ATTEMPT_INDEX_KEY_NAME,
+    RESOLVED_AGENT_REF_KEY_NAME,
     RESPONSES_CREATE_PARAMS_KEY_NAME,
     ROLLOUT_ID_KEY_NAME,
     ROLLOUT_INDEX_KEY_NAME,
@@ -805,6 +807,10 @@ class RolloutCollectionHelper(BaseModel):
         # Resolve capture dirs once so each rollout's captured model calls can be folded
         # into its record below (uniform across agents; no-op when capture is off / dirs absent).
         global_config = get_global_config_dict()
+        # Routing keys in `agent_ref` may be remapped to different agent servers at dispatch
+        # time; per-agent config lookups below must use the resolved name, while grouping and
+        # reporting stay keyed by the routing key.
+        agent_routing = load_agent_routing_map(global_config)
         capture_dirs = model_call_capture_dirs_from_config(global_config)
         # Resolve the training-token store directory once.
         # Training capture is independent of evaluation capture.
@@ -833,7 +839,7 @@ class RolloutCollectionHelper(BaseModel):
         token_capture_rows = [
             row
             for row in input_rows
-            if token_id_capture_enabled_for_agent(global_config, (row.get(AGENT_REF_KEY_NAME) or {}).get("name"))
+            if token_id_capture_enabled_for_agent(global_config, resolve_agent_name(row, agent_routing))
         ]
         if token_capture_config.token_id_capture.rebuild_response and token_capture_rows and token_source is None:
             raise ValueError(
@@ -867,6 +873,9 @@ class RolloutCollectionHelper(BaseModel):
             result[TASK_INDEX_KEY_NAME] = row[TASK_INDEX_KEY_NAME]
             result[ROLLOUT_INDEX_KEY_NAME] = row[ROLLOUT_INDEX_KEY_NAME]
             result[AGENT_REF_KEY_NAME] = row[AGENT_REF_KEY_NAME]
+            resolved_agent_name = resolve_agent_name(row, agent_routing)
+            if resolved_agent_name != row[AGENT_REF_KEY_NAME]["name"]:
+                result[RESOLVED_AGENT_REF_KEY_NAME] = {"name": resolved_agent_name}
             if SKILLS_REF_KEY_NAME in row:
                 result[SKILLS_REF_KEY_NAME] = row[SKILLS_REF_KEY_NAME]
             if ATTEMPT_INDEX_KEY_NAME in row:
@@ -1068,6 +1077,7 @@ Aggregate metrics: {aggregate_metrics_fpath}""")
             agent_results.setdefault(agent_name, []).append(result)
 
         server_client = self.setup_server_client()
+        agent_routing = load_agent_routing_map(server_client.global_config_dict)
 
         async def _fetch_agent_metrics(agent_name: str, agent_result_list: List[Dict]) -> Dict:
             # Strip heavyweight fields before sending, but preserve response.usage
@@ -1092,7 +1102,7 @@ Aggregate metrics: {aggregate_metrics_fpath}""")
 
             agg_request = AggregateMetricsRequest(verify_responses=stripped)
             agg_response = await server_client.post(
-                server_name=agent_name,
+                server_name=agent_routing.get(agent_name, agent_name),
                 url_path="/aggregate_metrics",
                 json=agg_request,
             )
@@ -1154,11 +1164,15 @@ Aggregate metrics: {aggregate_metrics_fpath}""")
         We provide this function as a lower level interface for running rollout collection.
         """
         server_client = self.setup_server_client(head_server_config)
+        agent_routing = load_agent_routing_map(server_client.global_config_dict)
         semaphore = semaphore or nullcontext()
 
         async def _post_subroutine(row: Dict) -> Tuple[Dict, Dict]:
             async with semaphore:
-                res = await server_client.post(server_name=row["agent_ref"]["name"], url_path="/run", json=row)
+                routing_key = row["agent_ref"]["name"]
+                res = await server_client.post(
+                    server_name=agent_routing.get(routing_key, routing_key), url_path="/run", json=row
+                )
                 try:
                     await raise_for_status(res)
                 except Exception:

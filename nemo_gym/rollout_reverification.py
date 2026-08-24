@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 from tqdm.asyncio import tqdm
 
 from nemo_gym import _resolve_under_cwd_or_install
+from nemo_gym.agent_routing import load_agent_routing_map
 from nemo_gym.base_resources_server import AggregateMetrics, AggregateMetricsRequest, ReverifyMode
 from nemo_gym.config_types import BaseNeMoGymCLIConfig, ConfigError, UploadRolloutsConfigMixin
 from nemo_gym.exporters import export_metrics, export_rollouts, get_exporters
@@ -446,10 +447,13 @@ def _run_verification_payloads(
     semaphore = semaphore or nullcontext[None]()
     server_client = setup_server_client()
     agent_to_rs = _build_agent_to_resources_server_mapping(server_client.global_config_dict)
+    # agent_to_rs is keyed by agent server instance names, so routing keys must be resolved first.
+    agent_routing = load_agent_routing_map(server_client.global_config_dict)
 
     async def _post_subroutine(row: Dict) -> Tuple[Dict, Dict]:
         async with semaphore:
-            rs_name = agent_to_rs[row[AGENT_REF_KEY_NAME]["name"]]
+            routing_key = row[AGENT_REF_KEY_NAME]["name"]
+            rs_name = agent_to_rs[agent_routing.get(routing_key, routing_key)]
             res = await server_client.post(server_name=rs_name, url_path="/verify", json=row)
             try:
                 await raise_for_status(
@@ -554,6 +558,7 @@ async def _call_aggregate_metrics(
 
     server_client = setup_server_client()
     agent_to_rs = _build_agent_to_resources_server_mapping(server_client.global_config_dict)
+    agent_routing = load_agent_routing_map(server_client.global_config_dict)
     # Group results by agent name
     agent_results: Dict[str, List[Dict]] = {}
     for row, result in zip(rows, results):
@@ -574,7 +579,7 @@ async def _call_aggregate_metrics(
 
         agg_request = AggregateMetricsRequest(verify_responses=stripped)
         agg_response = await server_client.post(
-            server_name=agent_to_rs[agent_name],
+            server_name=agent_to_rs[agent_routing.get(agent_name, agent_name)],
             url_path="/aggregate_metrics",
             json=agg_request,
         )

@@ -101,6 +101,9 @@ TOKEN_ID_CAPTURE_BLOCK = "token_id_capture"
 COMPONENT_NAME_KEY_NAME = "component_name"
 SKIP_VERIFICATION_KEY_NAME = "skip_verification"
 SKIP_VERIFICATION_REWARD_KEY_NAME = "skip_verification_reward"
+# Run-level routing of dataset rows to agent servers.
+# See ``nemo_gym/agent_routing.py``.
+ENVIRONMENTS_KEY_NAME = "environments"
 NEMO_GYM_RESERVED_TOP_LEVEL_KEYS = [
     CONFIG_PATHS_KEY_NAME,
     ENTRYPOINT_KEY_NAME,
@@ -136,6 +139,7 @@ NEMO_GYM_RESERVED_TOP_LEVEL_KEYS = [
     COMPONENT_NAME_KEY_NAME,
     SKIP_VERIFICATION_KEY_NAME,
     SKIP_VERIFICATION_REWARD_KEY_NAME,
+    ENVIRONMENTS_KEY_NAME,
 ]
 
 # Data keys
@@ -151,6 +155,9 @@ ROLLOUT_ID_KEY_NAME = "_ng_rollout_id"
 RESPONSES_CREATE_PARAMS_KEY_NAME = "responses_create_params"
 RESPONSE_KEY_NAME = "response"
 AGENT_REF_KEY_NAME = "agent_ref"
+# Stamped onto results when the ``environments`` routing map sent a row to a different agent
+# server than its ``agent_ref`` routing key names; records which agent actually ran the rollout.
+RESOLVED_AGENT_REF_KEY_NAME = "resolved_agent_ref"
 SKILLS_REF_KEY_NAME = "skills_ref"
 
 POLICY_BASE_URL_KEY_NAME = "policy_base_url"
