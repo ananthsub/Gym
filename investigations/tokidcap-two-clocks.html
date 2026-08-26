@@ -1,0 +1,486 @@
+<title>Tokidcap Two Clocks</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #FAF9F5;
+    --ink: #20261F;
+    --muted: #5C665F;
+    --accent: #0E7565;
+    --accent-ink: #0A5A50;
+    --accent-soft: #E2EFEA;
+    --heavy: #A83A2C;
+    --heavy-soft: #F5E4E0;
+    --amber: #9A6700;
+    --amber-soft: #F5EDD8;
+    --proto: #34547E;
+    --proto-soft: #E4EAF3;
+    --line: #DDE1DA;
+    --card: #F0F2EC;
+    --code-bg: #EAEDE5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #141815; --ink: #E6EAE5; --muted: #97A29A;
+      --accent: #3FB8A2; --accent-ink: #5CC7B4; --accent-soft: #1B2E29;
+      --heavy: #DA7A66; --heavy-soft: #331E19;
+      --amber: #D5A64A; --amber-soft: #2E2716;
+      --proto: #7DA3D4; --proto-soft: #1D2634;
+      --line: #2B332C; --card: #1B211C; --code-bg: #212823;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #141815; --ink: #E6EAE5; --muted: #97A29A;
+    --accent: #3FB8A2; --accent-ink: #5CC7B4; --accent-soft: #1B2E29;
+    --heavy: #DA7A66; --heavy-soft: #331E19;
+    --amber: #D5A64A; --amber-soft: #2E2716;
+    --proto: #7DA3D4; --proto-soft: #1D2634;
+    --line: #2B332C; --card: #1B211C; --code-bg: #212823;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: "Source Serif 4", Georgia, serif; font-size: 17px; line-height: 1.62;
+    padding: 3.2rem 1.4rem 6rem;
+  }
+  .page { max-width: 56rem; margin: 0 auto; }
+  h1, h2, h3 { font-family: Archivo, "Helvetica Neue", Arial, sans-serif; line-height: 1.18; text-wrap: balance; margin: 0; }
+  h1 { font-size: 2.15rem; font-weight: 700; letter-spacing: -0.015em; margin: 0.4rem 0 0.6rem; }
+  h2 { font-size: 1.35rem; font-weight: 700; margin: 3rem 0 0.8rem; padding-top: 1.4rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.02rem; font-weight: 600; margin: 1.7rem 0 0.5rem; }
+  p { margin: 0.7rem 0; }
+  a { color: var(--accent-ink); text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: 2px; }
+  .eyebrow { font-family: Archivo, sans-serif; font-size: 0.74rem; font-weight: 600; letter-spacing: 0.13em; text-transform: uppercase; color: var(--accent); }
+  .dateline { font-family: Archivo, sans-serif; font-size: 0.85rem; color: var(--muted); margin-bottom: 1.8rem; }
+  .lede { font-size: 1.06rem; }
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: 0.83em; background: var(--code-bg); border-radius: 3px; padding: 0.08em 0.3em; }
+  .tablewrap { overflow-x: auto; margin: 0.9rem 0 1.3rem; border: 1px solid var(--line); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+  th { font-family: Archivo, sans-serif; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); background: var(--card); white-space: nowrap; }
+  td { padding: 0.48rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.opt { font-family: "IBM Plex Mono", monospace; font-size: 0.85rem; white-space: nowrap; color: var(--accent); }
+  .chip { display: inline-block; font-family: Archivo, sans-serif; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; border-radius: 999px; padding: 0.1rem 0.5rem; white-space: nowrap; }
+  .chip.reject { color: var(--heavy); background: var(--heavy-soft); }
+  .chip.spine  { color: var(--accent); background: var(--accent-soft); }
+  .chip.exists { color: var(--proto); background: var(--proto-soft); }
+  .chip.reserve{ color: var(--amber); background: var(--amber-soft); }
+  .chip.dead   { color: var(--muted); background: var(--card); }
+  ul, ol { padding-left: 1.3rem; margin: 0.6rem 0; }
+  li { margin: 0.4rem 0; }
+  li::marker { color: var(--accent); }
+  ol.path { counter-reset: step; }
+  ol.path li { margin: 0.55rem 0; }
+  .callout { border-left: 3px solid var(--accent); background: var(--card); border-radius: 0 8px 8px 0; padding: 0.75rem 1.1rem; margin: 1.2rem 0; font-size: 0.96rem; }
+  .callout.warn { border-left-color: var(--heavy); }
+  .callout .label { display: block; font-family: Archivo, sans-serif; font-weight: 700; font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.25rem; }
+  figure.diagram { margin: 1.6rem 0; }
+  figure.diagram svg { display: block; max-width: 100%; height: auto; color: var(--ink); }
+  figure.diagram figcaption { margin-top: 0.55rem; font-family: Archivo, sans-serif; font-size: 0.83rem; color: var(--muted); line-height: 1.5; }
+  .option { margin: 1.6rem 0 1.4rem; padding: 1rem 1.2rem 1.05rem; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  .option h3 { margin: 0 0 0.4rem; display: flex; align-items: baseline; gap: 0.55rem; flex-wrap: wrap; }
+  .option .ono { font-family: "IBM Plex Mono", monospace; font-size: 0.95rem; color: var(--accent); font-weight: 500; }
+  .option p { font-size: 0.95rem; margin: 0.45rem 0; }
+  .option ul { font-size: 0.95rem; }
+  .small { font-size: 0.87rem; color: var(--muted); }
+  .footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.84rem; font-family: Archivo, sans-serif; }
+</style>
+
+<div class="page">
+  <div class="eyebrow">NeMo Gym × NeMo RL · partial rollout checkpointing · resume dataflow</div>
+  <h1>Tokidcap Two Clocks</h1>
+  <div class="dateline">What resume needs, who owns it, and the exact save/load paths · v3, Aug 24, 2026 · self-contained — companion links at the end · topology verified against NeMo&nbsp;RL <code>main</code>, PR&nbsp;#3407, PR&nbsp;#3456 (branch state 2026‑08‑23), Gym <code>main</code> + PR&nbsp;#2180 head</div>
+
+  <p class="lede">A killed rollout must resume from its last committed model call, independent of tool/sandbox state. This note lays out the complete resume dataflow — every piece of data a resume needs, its single owner, its save mechanism and location, the join keys, and the exact save and load paths — under the real constraints: per-process virtual environments (the Gym model server cannot import torch or TransferQueue), the Ray-actor hosting topology, and multiple uvicorn workers per server. It then re-evaluates the proposed egress options under the corrected assumption that <strong>#3456-style worker staging is the baseline</strong>: the vLLM worker persists token ids and logprobs to TransferQueue directly; they are not sent back through Gym.</p>
+
+  <div class="callout warn">
+    <span class="label">Supersession notice — Aug 25</span>
+    An adversarial audit reconciled this page against its newer companion, <a href="https://claude.ai/code/artifact/d6aa39a8-fa67-4f12-b12e-e49c265d8da1">Checkpoint Choreography</a>, which now governs wherever the two disagree. Superseded here: the boundary record schema (now thin — <code>tool_results</code> + <code>agent_state</code>, no output items); the boundary join key (now the echoed <code>model_call_id</code>, with <code>response_id</code> + fingerprint as witnesses only); checkpoint custody (anchors and file details now live inside an opaque <code>gym_dir</code> the SingleController never reads — not in the SC sidecar); the adopt verb (deleted — restore re-dispatches under the <em>same</em> attempt id and the SC never contacts Gym servers); the single-phase <code>checkpoint(deadline)</code> API (now two-phase <code>prepare</code>/<code>commit(gym_dir)</code>/<code>abort</code>); and the ledger/session storage location (node-local with pack-at-cut, not shared FS). This page remains the record for the storage design rationale, the option analysis, and the scale/tiering arguments.
+  </div>
+
+  <div class="callout">
+    <span class="label">The settled design, in five lines</span>
+    <b>1.</b> Per model call, the model server appends <b>one fsync'd row</b> to the rollout's file on <b>node-local disk</b>: the lineage/custody columns, the environment-authored input items, and the completion output items (Variant B′). That single write is simultaneously the durability spine, the multi-worker sharing medium, and the resume record.
+    <b>2.</b> The vLLM worker stages token deltas + logprobs to TransferQueue before acking; tokens never transit Gym; TQ's staging partition is covered by TQ's own coordinated checkpoint.
+    <b>3.</b> Nothing "checkpoints" the files — a checkpoint only <em>references</em> them. Storage is tiered: fsync node-local per call; batch byte-range sync to the shared filesystem at rollout completion and at every cut (append-only logs make this a copy-from-offset); the sidecar references only shared-FS-visible state; retention is a rule (nothing referenced by a live checkpoint or an unsealed rollout is ever deleted), the same trust model as the trainer's own checkpoint files.
+    <b>4.</b> The SingleController's sidecar at each cut records rollout states, attempt ids, resume anchors, and the capture/session directory paths.
+    <b>5.</b> Resume: the controller re-dispatches; the model server lazily re-reads the rollout's file and rebuilds lineage; the agent's conversation is rebuilt from the stored inputs + completions; prefix supply splices prior calls token-exactly; the regenerated tail call's orphaned staged rows are masked.
+  </div>
+
+  <h2>Ground rules</h2>
+  <p>Three decisions from the earlier design rounds, restated in full so this document stands alone:</p>
+  <ul>
+    <li><b>Durable-before-ack.</b> A completed model call is made durable before its response is released to the agent. The rollout can then never advance past an unpersisted call, so "last committed call" is always a consistent resume point, with no coordination.</li>
+    <li><b>Hard-kill correctness first; drain is an optimization.</b> The system must resume correctly after an abrupt death (OOM, node loss, preemption without grace). Any graceful-shutdown protocol only improves resume freshness; it must never be the thing correctness depends on.</li>
+    <li><b>One durable home per fact; joins, not replication.</b> Each kind of state has exactly one owner and one durable location. Other copies are projections — rebuildable, evictable, clearable. Systems coordinate through join keys, never by synchronizing replicas.</li>
+  </ul>
+
+  <h2>Verified topology</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Process</th><th>Environment</th><th>Can import</th><th>Sees / owns</th></tr>
+    <tr><td><b>NemoGym Ray actor</b> (<code>max_restarts=0</code> going forward — spinup is explicit)</td><td>Per-node venv synced from <b>RL's own <code>uv.lock</code></b> (<code>uv run --locked --extra nemo_gym</code>)</td><td><code>nemo_rl</code>, <code>torch</code>, <code>tensordict</code>, <code>transfer_queue</code>, <code>nemo_gym</code></td><td>Rollout dispatch; per-rollout id stamping; receipt assembly (pulls the manifest from the model server over HTTP)</td></tr>
+    <tr><td><b>Gym servers</b> (head / agent / model / resources) — OS subprocesses on the actor's node</td><td>Gym-managed per-server venvs (light)</td><td><code>nemo_gym</code> + server deps; <code>torch</code>/<code>transfer_queue</code> <b>not importable</b></td><td>Model server: pure HTTP proxy, CPU-only, N uvicorn workers; the one full request+reply view per rollout</td></tr>
+    <tr><td><b>vLLM generation worker</b> (DP-leader Ray actor, in-actor FastAPI)</td><td>torch venv; #3456 adds the <code>nemo_gym</code> extra</td><td>torch, TQ client, <code>nemo_gym.token_id_capture</code></td><td>Stages token/mask/logprob deltas to TQ per call, synchronously, before acking; resolves prefix chains against TQ itself</td></tr>
+    <tr><td><b>FinalizerActor pool</b> (CPU, connect-only TQ clients)</td><td>driver env + Gym on path</td><td>TQ client, Gym builder</td><td>Fetches staged deltas by manifest keys at seal, verifies, publishes N canonical train rows per group</td></tr>
+    <tr><td><b>TransferQueue</b> (Ascend/TransferQueue, pinned base dep of nemo-rl)</td><td>controller Ray actor + standalone storage processes</td><td>client needs torch + tensordict + zmq + ray; <b>no thin producer exists</b></td><td>Staging rows per call; canonical rows per group; contents are memory-resident, persisted by an explicit coordinated <code>save_checkpoint</code></td></tr>
+  </table></div>
+  <p class="small">Two deployment modes follow from this. <b>File mode</b> (#3407-style): no TransferQueue anywhere; the model server captures full token records itself; the trainer consumes rebuilt payloads per rollout. <b>Staged mode</b> (#3456-style): the worker stages tokens to TQ per call; the model server handles identity and custody only, behind opaque staging keys. The resume design below works identically in both — that is its main design property.</p>
+
+  <h2>The resume inventory</h2>
+  <p>Everything a resume needs, with its single responsible owner. No row appears twice; every cross-reference is a join key.</p>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Data</th><th>Resume needs it to…</th><th>Owner (responsible system)</th><th>Save mechanism · clock</th><th>Location</th><th>Join keys</th></tr>
+    <tr><td>1</td><td><b>Token deltas + generation logprobs</b> (+ routed experts) per model call</td><td>finalize the trajectory at seal; supply exact prefixes for bit-exact continuation</td><td>Staged mode: <b>vLLM worker</b> writes, SC owns lifecycle. File mode: <b>model server</b></td><td>Staged: synchronous TQ put before the call is acked; persisted across restarts by the coordinated TQ checkpoint. File: append+fsync per call</td><td>TQ staging partition, key <code>{rollout}/{call}</code> · capture-dir JSONL</td><td>attempt rollout id · <code>model_call_id</code> · staging key · weight version · digest</td></tr>
+    <tr><td>2</td><td><b>Call custody &amp; lineage</b>: parent links, prev/cum lengths, digests, admission state, terminal witnesses, staging keys</td><td>rebuild the model server's serving state at adopt; assemble receipts; anchor the boundary join</td><td><b>Model server</b></td><td>Ledger append+fsync per call at commit; <b>process-shared across the N uvicorn workers via the file + flock</b> (this sharing is load-bearing: a rollout's calls land on different workers)</td><td><code>capture_dir/{rollout}</code> ledger JSONL on shared FS</td><td><code>model_call_id</code> ↔ <code>parent_call_id</code> · staging key → TQ row · <code>response_id</code> → boundary record</td></tr>
+    <tr><td>3</td><td><b>Conversation items</b>: assistant text, tool calls, tool outputs per boundary</td><td>rebuild the agent's transcript for the resumed <code>/run</code></td><td><b>Agent server</b> via the session store</td><td>One boundary-record append + fsync per tool boundary</td><td>Session dir on shared FS</td><td>rollout id · boundary index · <code>response_id</code> anchor</td></tr>
+    <tr><td>4</td><td><b>Environment state</b> (serializable state, seeds, sandbox descriptors)</td><td>restore tools to the boundary the transcript resumes from</td><td><b>Resources server</b> via the session store</td><td>Snapshot-then-boundary commit per boundary; external sandboxes save a reconnect descriptor</td><td>Session dir on shared FS</td><td>(server, boundary index)</td></tr>
+    <tr><td>5</td><td><b>Group / sibling / attempt / reward / dispatch state</b></td><td>decide which rollouts resume, keep GRPO group shape</td><td><b>SingleController</b> — Gym never holds it</td><td>Ledger sidecar at checkpoint cuts + periodic (~60&nbsp;s) rollout-only snapshots</td><td><code>rollout_recovery.pt</code> beside the trainer checkpoint</td><td>logical id <code>{group}_g{i}</code> ↔ attempt id <code>…_a{n}</code></td></tr>
+    <tr><td>6</td><td><b>Resume anchors + control auth</b>: per in-flight rollout, the chosen resume point; the token that authorizes adopt</td><td>authorize and target the adopt call after restart</td><td><b>SingleController</b> (derived from #2 and #3 at cut time)</td><td>Written into the sidecar at each cut; auth from durable env, not per-run memory</td><td>Sidecar</td><td><code>response_id</code> / logical request id</td></tr>
+  </table></div>
+
+  <div class="callout">
+    <span class="label">Why the ledger file exists even in staged mode</span>
+    Row #2 is the crux of the whole egress debate. The model server must resolve each request's parent <em>on the serving path</em>, across N uvicorn worker processes, in a venv that cannot read TransferQueue. The ledger file is simultaneously three things: the durable home of custody facts, the <b>process-shared substrate</b> that makes multi-worker parent resolution work (the startup check requires a process-shared lineage store when <code>num_workers&gt;1</code>), and the <b>lazy-load backend</b> for the lineage cache — which keeps metadata for up to 65,536 rollouts in memory and materializes token chains only for a resolved parent, by byte offset, digest-verified. Every "skip the file" proposal must replace all three jobs, not one.
+  </div>
+
+  <div class="callout">
+    <span class="label">How lineage is built when token ids never reach Gym</span>
+    Parent resolution is <b>text-native, not token-native</b> — it always was. The resolver fingerprints the assistant-authored turns of the request (content, tool calls — canonicalized and hashed), and the model server sees that text in full on every call because the API is stateless: the harness re-sends the whole message list. Matching a new request to the call that produced its prefix is a fingerprint join, tri-state and fail-closed (unique match → token-in continuation; empty/seeded → root; ambiguous → poison). Token ids play no part in it. The ledger row's token-adjacent columns — delta/cumulative lengths, digests, staging key, weight version — arrive as <b>opaque values in the worker's token-free commit coordinates</b> and are recorded without interpretation. On the next call, the resolved result hands the worker the parent's staging-key chain, and the worker — the only party holding tokens — materializes the exact prefix from its local cache or TQ. The code already supports this shape: the lineage cache's metadata-only mode (<code>store_tokens=False</code>, "token arrays stay in the durable log") is precisely "build the DAG without holding ids." Two schema requirements fall out: the worker's <b>prefix-exactness attestation</b> (served prompt extends the parent chain byte-for-byte) must ride back in the coordinates and be recorded per ledger row, since Gym can no longer verify it — finalization checks the chain against these attestations; and cumulative/chain hashes are computed where tokens live (the worker) and stored Gym-side as opaque strings. One operational note: "local cache, else TQ" for prefix materialization needs deliberate rollout→worker affinity (hash of the rollout id), or every re-route turns the else-branch into a TQ read on the hot path.
+  </div>
+
+  <h2>The save path</h2>
+  <p>The design's central property: <b>checkpoint time is trivial because every save already happened.</b></p>
+  <h3>Per model call (the only hot path)</h3>
+  <ol class="path">
+    <li>Agent POSTs the conversation to the model server (<code>/ng-rollout/{rid}/…/v1/responses</code>).</li>
+    <li>The model server resolves the parent call (fingerprint match through the lineage cache over the ledger file), mints <code>model_call_id</code>, and appends a durable intent line.</li>
+    <li>It forwards to the vLLM worker's HTTP endpoint with the capture identity and the prefix requirement — file mode: the parent's exact cumulative token ids; staged mode: the parent's staging-chain keys, which the worker resolves against TQ itself.</li>
+    <li>The worker generates. Staged mode: it writes the delta row (token ids, mask, logprobs, identity tags) to the TQ staging partition and waits for the ack, then returns text + commit coordinates (the delta ids ride back). File mode: it returns the token bundle on the message body.</li>
+    <li>The model server appends the commit row to the rollout's ledger and fsyncs — file mode: the full token record; staged mode: the custody row (whether it also carries the delta ids is the one open fork, below).</li>
+    <li>Only then is the response released to the agent.</li>
+  </ol>
+  <h3>Per tool boundary</h3>
+  <ol class="path">
+    <li>The resources server exports or snapshots environment state (when stateful).</li>
+    <li>The agent appends one boundary record — output items, usage, <code>response_id</code>, small env state inline — with one fsync.</li>
+  </ol>
+  <h3>At a checkpoint cut</h3>
+  <ol class="path">
+    <li>The NemoGym actor syncs every in-flight (and completed-but-unconsumed) rollout's files from node-local disk to the shared filesystem — an <b>incremental byte-range copy</b> (append-only files make "sync" a copy from the last-synced offset), fsync'd on the shared side, truncating any torn final line.</li>
+    <li>Staged mode: TQ runs its coordinated <code>save_checkpoint</code>, digest-bound to the sidecar.</li>
+    <li><b>Only then</b> does the SingleController write its sidecar: group/attempt/reward state plus, per in-flight rollout, the resume anchor — which may only reference state that is <em>shared-FS-visible</em>. An interrupted cut leaves the previous sidecar pointing at the previous consistent set.</li>
+  </ol>
+
+  <div class="callout">
+    <span class="label">Storage tiering (Aug 24)</span>
+    The hot path never touches the shared filesystem: <b>per-call fsync is node-local</b> (the measured +2.29&nbsp;ms/call baseline applies as-is), and Lustre is written in batches at exactly two moments — <b>rollout completion</b> (hand-off for consumption and GC; the trainer deletes after consuming) and <b>checkpoint cuts</b> (in-flight and unconsumed files). Restore re-seeds node-local storage by copying back down. This is sound because the logs are append-only, idempotent, and monotone: any point-in-time byte-prefix is a valid earlier state, so a stale shared copy is an earlier resume point, never corruption. The rules that keep it correct: files land and fsync on the shared side <em>before</em> the sidecar that references them; anchors only ever point at shared-FS-visible state; torn final lines are truncated at copy or read. The explicit trade: an <b>unplanned node death</b> loses work since the last sync — those rollouts restart from their last shared-FS state or from scratch, correctly — while planned cuts and mere process crashes lose nothing. An optional periodic background sync (every N seconds, same byte-range copy, off the serving path) bounds node-death loss at zero hot-path cost.
+  </div>
+  <h3>At shutdown</h3>
+  <ol class="path">
+    <li>Cut (as above), then kill. Optional drain — agents pause between a boundary commit and the next model call — only moves anchors forward. It is never required for correctness.</li>
+  </ol>
+
+  <div class="callout">
+    <span class="label">Scale: hundreds of thousands of in-flight rollouts</span>
+    <b>Per-rollout file size:</b> deltas keep the file O(final context), not O(context²) — roughly the final conversation's JSON plus ~1&nbsp;KB/call of custody columns. Typical multi-turn tool rollouts land at <b>100&nbsp;KB–1&nbsp;MB</b>; long-context, heavy-tool-output rollouts a few MB. <b>Aggregate bytes are not the problem:</b> 200k in-flight × ~300&nbsp;KB ≈ 60&nbsp;GB full state, and a cut ships only deltas since the last sync — tens of GB at worst, seconds of Lustre bandwidth. <b>The problem is file count:</b> per-file sync of 200k small files means ~4 metadata ops each (open/write/fsync/close) — nearly a million MDS operations, minutes of wall time from one process, and abuse of a shared metadata server. The fix is that nothing requires the shared-FS representation to be one file per rollout: <b>pack at the cut</b>. The actor concatenates all per-rollout deltas into a handful of large immutable pack shards (~1–4&nbsp;GB each, striped, sequential — Lustre's best case) plus an index <code>{rollout_id → [(pack, offset, len), …]}</code> carried by the sidecar. 200k metadata ops become a few dozen large writes. A rollout's shared log is the concatenation of its segments across packs; restore reads the index and extracts <em>only the adopted rollouts, lazily</em>; retirement drops index entries, and packs are GC'd (or compacted) when all their entries are dead. Every invariant carries over unchanged — packs are append-only immutable objects, the sidecar still references only shared-visible state, and the monotone-prefix property still makes any synced state a valid earlier resume point. The node-local per-rollout layout stays exactly as prototyped (it exists for flock granularity and trivial GC); only the Lustre representation changes. At this scale the deployment is also sharded across multiple Gym nodes anyway — each node packs its own shard in parallel. <b>V1 rung: <code>tar -I zstd</code> of the unretired set per cut</b> — full state, self-contained, so retention is "keep the last two archives" with no refcounting; JSON compresses 3–6×, putting even 60&nbsp;GB of state at a few seconds per cut. Its limits, which define when to move to delta packs: tar re-archives every touched file <em>in full</em> (no bytes-after-offset incrementality, and every in-flight rollout touches its file between cuts), so cut cost scales with total live state rather than progress; and selective restore needs either a full untar (fine — restores are rare) or an emitted member-offset index, which is the pack design with tar as the container. Both rungs share the same sidecar contract and invariants; moving between them is a storage-format change, not a design change. Either way, archive live files with the shipper's read discipline — up to size-at-scan, torn tail handled at the line boundary. <b>Restore-side extraction is the easy direction</b>: it targets local NVMe, where metadata is private and cheap — thousands of JSONLs extract in seconds — and it should run <em>without fsync</em>, because the archive on the shared filesystem remains the durable truth until the next cut (a mid-restore crash just re-extracts). Restore is also re-shardable: rollout files are self-contained, so on a changed node count the SingleController assigns rollouts to the nodes that exist now and each extracts its assigned members.
+  </div>
+
+  <h2>Lifecycle of the rollout file</h2>
+  <p>One per-rollout file (ledger + message columns, B′), from birth to deletion. No registration step exists anywhere in this lifecycle — creation, sync, and retirement are all lazy or framework-driven.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Phase</th><th>Trigger</th><th>Actor</th><th>Mechanism</th></tr>
+    <tr><td><b>Create</b></td><td>First capture-admitted model call of the rollout</td><td>Model server (any uvicorn worker)</td><td>The first append creates the file (<code>O_CREAT|O_APPEND</code> under the rollout's flock — the creation race is benign). The rollout id arrives in the URL path and is validated; there is nothing to pre-register.</td></tr>
+    <tr><td><b>Steady state</b></td><td>Every model call, at commit, before the response is released</td><td>Model server</td><td>One append: custody columns + environment-authored input items + completion output items. fsync per the policy knob (per-call / periodic / at-cut).</td></tr>
+    <tr><td><b>Sync up</b></td><td>Every checkpoint cut and shutdown; optionally periodic, and optionally at rollout completion to shorten exposure</td><td>NemoGym actor</td><td>Byte-range copy from the last-synced offset (append-only makes sync a copy-from-offset), fsync file + directory on the shared side, torn final line truncated. Only after all copies land does the SingleController write its sidecar: <code>{rollout_id → shared path, synced_len, resume anchor}</code>.</td></tr>
+    <tr><td><b>Retire</b></td><td>The rollout's training row is published and accepted downstream — or the SingleController abandons the rollout terminally</td><td>NemoGym actor, on the SingleController's behalf. Never the model server (its lifecycle verbs were removed deliberately) and never time-based alone</td><td>Idempotent delete of the node-local and shared copies (#3407's retire-after-accept pattern; #2126's guarded <code>drop()</code> underneath). <b>Pinned while any live cut's sidecar references it.</b> A TTL sweep catches orphans of dead runs only.</td></tr>
+    <tr><td><b>Re-seed</b></td><td>Restore after a restart</td><td>NemoGym actor, before the Gym servers start</td><td>Copy each sidecar-referenced file shared → node-local; verify length ≥ <code>synced_len</code>; the lineage store's cursor-reset absorbs the new inodes. Resume dispatch then passes the rebuilt conversation <em>as the task row's input</em> — the same <code>responses_create_params.input</code> shape as a fresh task — so the harness doesn't know it is resuming; the model server fingerprint-resolves the parent exactly as it would mid-run.</td></tr>
+    <tr><td><b>Tail to TQ</b> <span class="chip reserve">optional, future</span></td><td>Only if a TQ consumer for transcripts ever exists (today none does)</td><td>NemoGym actor</td><td>Byte-offset tail over unretired files, idempotent puts keyed <code>(rollout_id, call_id)</code> — at-least-once with dedup by key, restart-safe because the cursor rebuilds by re-reading. Entirely off the serving path; backpressure is just visible shipper lag; the file remains the single truth.</td></tr>
+  </table></div>
+  <p class="small">The one uncovered edge is the tiering trade already stated: a rollout whose file never reached the shared filesystem before an unplanned node death is not resumable — it restarts from scratch, correctly. Every other transition above is idempotent and crash-restartable at any point.</p>
+  <p class="small"><b>Validated by local prototype (Aug 24):</b> a stdlib-only implementation of this design passes kill-and-resume end to end — multi-turn rebuild, torn-tail resume round trip (parent resolution finds the anchor and the delta on the resumed request), SIGKILL'd writer leaving a clean file, tampered-row fail-closed with automatic fallback to the longest verified chain, two writer processes sharing lineage through flock alone, sub-agent branches excluded from the main-chain rebuild, ambiguity poisoning, tiering node-loss → re-seed → resume with incremental sync. Parallel stress: 4 processes × 50 concurrent commits, 200/200 rows clean. Append+fsync of a ~3&nbsp;KB row: p50 0.23&nbsp;ms local. One implementation requirement the tests surfaced: <b>appends must be self-healing</b> — if the file doesn't end in a newline (a predecessor died mid-append), the writer terminates the torn fragment first, or the next commit welds onto it and both rows are lost.</p>
+
+  <h2>The pause verb</h2>
+  <p>Checkpoint cuts want a quiescent window: if vLLM workers keep staging per-call rows while TQ's coordinated <code>save_checkpoint</code> runs, the snapshot races concurrent puts. First, the honest scoping — <b>the cut is already crash-consistent without a pause</b>, by ordering: every call stages <em>before</em> its ledger commit, files flush <em>before</em> the TQ save, and the sidecar anchors only flushed rows — so every anchored call's staged row is inside the TQ snapshot by construction, and extra rows staged during the save are just orphans that resume masks. What the pause actually buys: (a) it satisfies TQ's snapshot concurrency contract <em>if</em> <code>save_checkpoint</code> is not safe under concurrent puts — a verification item on the TQ side that the pause makes moot; (b) it bounds orphaned work and checkpoint skew. Correctness never leans on it (the hard-kill-first rule is preserved); it is cut-time hygiene.</p>
+  <ul>
+    <li><b>Locate it at the model server, not the agents.</b> The model server is the chokepoint every generation request passes through — including blackbox harnesses that no agent-side drain could ever reach. An admission pause there stops all new dispatches to vLLM with zero agent changes. Backpressure is protocol-native: block briefly, then <code>503 + Retry-After</code> — OpenAI-compatible clients retry that automatically, so even external harnesses pause themselves without knowing why.</li>
+    <li><b>Multi-worker mechanics match the house idiom:</b> a flock'd sentinel file in the capture dir, checked per request — one control verb from the SingleController (bearer-authed, restart-surviving) pauses all N uvicorn workers atomically; no cross-process RPC.</li>
+    <li><b>Two levels, deadline-bounded.</b> Admission pause stops new dispatches; in-flight generations complete, stage, and commit normally, so the drain window is bounded by remaining generation time — budget it against the deadline, and at the deadline proceed anyway (the ordering argument covers the stragglers). If a tighter window is ever needed without waiting out long generations, the second level is a brief <em>sink barrier</em> at the workers: hold <code>stage()</code> during the snapshot itself, letting decoding continue.</li>
+    <li><b>Piggyback on refit.</b> On-policy training already quiesces generation periodically for weight updates. Aligning cuts with the refit barrier gets the quiescent window at near-zero added stall — the pause verb then only covers cuts that can't wait for one.</li>
+    <li><b>Cut sequence becomes:</b> pause admission → wait quiet-or-deadline → flush files → TQ <code>save_checkpoint</code> → sidecar write → resume admission. Shutdown is the same sequence without the resume.</li>
+  </ul>
+  <p class="small">This is the earlier drain-verb design in embryo, relocated from the agents to the model server — which covers every harness class at once. The agent-level drain (pause between boundary commit and next model call) remains the later, freshness-maximizing upgrade once boundary markers exist; it composes with, rather than replaces, the admission pause.</p>
+
+  <h2>The full save sequence under the SingleController</h2>
+  <p>Reconciling the team's checkpoint proposal (Aug 24) with the settled design. Three corrections first, then the merged sequence.</p>
+  <div class="callout warn">
+    <span class="label">Three corrections to the proposal</span>
+    <p><b>1. Each system should pause only the components it started.</b> The SingleController starts the vLLM generation workers, so the SingleController pauses them. The NemoGym actor starts the Gym servers, so the actor pauses those. The proposal instead has a checkpoint request enter Gym and travel through the agent, resources, and model servers out to the generation workers, with acknowledgments coming back along the same chain. Consider what happens when one generation worker is slow or dead: the acknowledgment chain stalls somewhere inside Gym, and the SingleController cannot tell which layer failed — a Gym server, a network hop, or the worker itself. Gym also cannot retry or restart a worker, because workers are Ray actors that only the SingleController manages. The consequence is that every checkpoint failure becomes a two-system debugging session. The fix is to send the two pause commands independently and in parallel: the SingleController pauses its own workers directly, and separately tells the actor to pause Gym. Neither system waits on the other's internal components.</p>
+    <p><b>2. Save token ids, never the KV cache — and for the first version, drop in-progress generations.</b> A checkpoint should save the smallest data from which everything else can be recomputed. For a generation in progress, that smallest data is the token ids produced so far. The KV cache is a computation cache over those same tokens: given the tokens, the engine rebuilds the cache by running prefill, which takes seconds per sequence. The cache itself is many gigabytes per node — often larger than the model weights — and its layout changes with engine versions. Saving it turns a checkpoint of megabytes of JSON and token arrays into a checkpoint of hundreds of gigabytes of GPU state, for data that resume can recompute anyway. Separately: a generation that never finished was never returned to the agent, so nothing in the system depends on it. The first version should therefore not save partial generations at all — the resumed rollout re-runs that one call. Saving partial generations is a real feature (it preserves minutes of decoding on very long generations), but it is its own project, not part of this cut.</p>
+    <p><b>3. Write the completeness marker last.</b> A checkpoint needs one marker that means "this checkpoint is complete and safe to restore from", and restore code must look for that marker first. The proposal creates <code>training_info.json</code> at step 4, before the model save, the TQ save, and the Gym file sync have run. Suppose the job is killed while those saves are half done — for example, TQ state saved but the Gym archive did not. On restart, the restore code finds <code>training_info.json</code>, concludes the checkpoint is complete, and then either fails or silently proceeds without the Gym files. The fix: create the temporary directory early, write every part into it, write <code>training_info.json</code> only after every part has landed, and finish with an atomic directory rename. The rename is the moment the checkpoint exists.</p>
+    <p><b>The alternative proposal — shut the workers down and let Gym react to error responses — should be rejected.</b> Gym should stop sending generation requests because it was asked to stop, not because requests started failing. Walk through what the error-driven version does: the workers begin checkpointing and start returning errors; Gym has hundreds of requests in flight and thousands more about to be sent; every in-flight request fails; Gym's HTTP client retries each failure three times with backoff, hammering the checkpointing workers; the model server cannot tell whether the workers are checkpointing (so it should wait) or have crashed (so it should fail the rollouts); and external harnesses see their calls fail and apply retry behavior we do not control. An error response carries no intent — it means "something is wrong", not "please wait". The consequence is that every checkpoint exercises every error path in every client, and real failures hide inside checkpoint noise. The fix is an explicit pause command flowing down the same path as everything else: SingleController → actor → model server. A checkpointing worker may still return a clean error to a late-arriving request as a safety net, but that error is never the coordination mechanism.</p>
+  </div>
+  <h3>The merged sequence</h3>
+  <ol class="path">
+    <li><b>Fence dispatch.</b> The SingleController pauses the rollout and train pumps so no new rollout can start. The NemoGym actor then confirms that every rollout already dispatched has actually arrived in Gym. After this point, the set of in-flight rollouts is fixed and known. (Proposal steps 1–3, kept as written.)</li>
+    <li><b>Start the independent saves early.</b> The SingleController creates the temporary checkpoint directory and starts the model+optimizer save asynchronously. This save touches only trainer state, so it depends on nothing that follows and can overlap with all of it. (Proposal step 5, kept.)</li>
+    <li><b>Pause new generation requests.</b> The SingleController calls <code>checkpoint(deadline)</code> on the actor. The actor sets the model server's pause flag — a file in the capture directory that all uvicorn workers check, so one write pauses all of them. New requests from agents receive a retry-later response with an explicit retry time; OpenAI-compatible clients honor it automatically. Generations already running finish normally: each one stages its tokens to TransferQueue and commits its row to the rollout file, exactly as during normal operation. If a generation has not finished by the deadline, it is abandoned — it was never returned to an agent, so nothing depends on it, and the resumed rollout will re-run that call.</li>
+    <li><b>Finish tool work and snapshot environments</b> <span class="chip reserve">session tier only</span>. When boundary records exist, agents finish the tool calls already in progress, resources servers snapshot their state (or record a sandbox reconnect descriptor), and each agent writes a boundary record pairing the conversation position with the environment state. When boundary records do not exist yet, skip this step entirely: without a record to capture the tool outputs, waiting for tools to finish preserves nothing, and resume starts from the last committed model call either way.</li>
+    <li><b>Run the three remaining saves in parallel.</b> The SingleController saves TransferQueue state; the model+optimizer save from step 2 continues; the actor packs the unretired rollout files into one compressed archive and writes it to the shared filesystem. These three can overlap safely because generation is paused — nothing is writing to TransferQueue — and the rollout files never touch TransferQueue at all.</li>
+    <li><b>Commit.</b> The SingleController writes the manifest that binds all parts together — the trainer checkpoint, the TransferQueue checkpoint digest, the archive paths with their synced lengths, and each rollout's resume anchor — and then atomically renames the temporary directory. For a periodic checkpoint, it then resumes the pause flag and the pumps. For a shutdown, it kills the job here.</li>
+  </ol>
+  <h3>Who calls the pause, exactly</h3>
+  <p>The processes involved: the SingleController is a Ray actor in NeMo RL. The NemoGym actor is another Ray actor; when it starts, it launches the Gym servers — head, agent, model, resources — as ordinary OS subprocesses <em>on its own node</em>. The model server subprocess runs N uvicorn worker processes behind one port. Because the actor and the Gym servers share a node, they share a filesystem, and the actor already holds HTTP clients to the Gym servers (it uses them to dispatch <code>/run</code> requests today). The pause flow:</p>
+  <ol class="path">
+    <li>The SingleController calls <code>nemo_gym_actor.checkpoint.remote(deadline)</code> — a Ray method call, the same mechanism it uses for everything else it asks the actor to do.</li>
+    <li>Inside <code>checkpoint()</code>, the actor sends <code>POST http://localhost:&lt;model_port&gt;/control/pause</code> with the bearer token. This is one HTTP request that lands on one uvicorn worker.</li>
+    <li>That worker writes the pause sentinel — an atomic file create inside the capture directory. The file is how one request pauses all N workers: every worker stats the sentinel at the top of each request handler, so the other N−1 workers see the pause on their very next request. The actor could write this file itself, since it shares the filesystem, but routing it through the HTTP endpoint keeps the file layout private to the model server and gives standalone Gym deployments the same API.</li>
+    <li>A paused model server handles an incoming generation request in one of two ways. For in-cluster callers (Gym's own agent servers), it <em>holds</em> the request — the async handler awaits the resume event — because Gym's internal HTTP client retries only three times with backoff, and a pause longer than that budget would otherwise surface errors into agent loops. For external harnesses, or when a hold exceeds a threshold, it returns <code>503</code> with <code>Retry-After</code>, which OpenAI-compatible clients obey automatically.</li>
+    <li>The actor then polls <code>GET /control/status</code> until the in-flight count reaches zero or the deadline passes. The in-flight count needs no shared memory between workers: an admitted call writes an intent line to the rollout file at admission and a commit row at completion, so "in flight" is exactly the number of intents without commits, countable from the files by whichever worker serves the status request.</li>
+    <li>On <code>resume()</code>, the actor calls <code>POST /control/resume</code>; the handler deletes the sentinel; held requests release and retried requests succeed.</li>
+  </ol>
+  <h3>What a boundary is, exactly</h3>
+  <p>An agent server's <code>/run</code> loop does the same four things repeatedly: send the conversation to the model server; receive a response; if the response contains tool calls, execute them against the resources server; append the tool results to the conversation. A <b>tool boundary</b> is the moment between appending the tool results and sending the next model call. At that moment, and only at that moment, the conversation and the environment agree: every tool effect that has happened is also recorded in the conversation. Boundary <em>k</em> is that moment after the <em>k</em>-th round of tool execution; boundary 0 is after seeding, before the first call. This is why boundaries are the safe save points and mid-loop moments are not: between sending a tool call and appending its result, the environment has changed in ways the conversation does not yet reflect.</p>
+  <p>The session tier is three concrete changes, all present in the <code>session-state-prototype</code> branch. First, agent servers write a <code>ToolBoundaryRecord</code> at each boundary — output items, usage, the serving <code>response_id</code>, and the environment state — and their <code>/run</code> becomes resumable: re-dispatched with a known rollout id, it reads the records, truncates to the last resumable boundary, rebuilds the conversation, and continues. Second, resources servers implement two hooks, export and restore: a server holding pandas DataFrames in memory returns their serialized form from export; a server wrapping a sandbox returns a reconnect descriptor; a server that can do neither declares itself unsupported and its rollouts restart from scratch rather than resuming. Session identity is a pure function of the rollout id, so a restarted server process re-derives the same session key and a restore lands in the right session. Third, the commit order is fixed: the environment snapshot is persisted first, the boundary record that references it is appended second — so a boundary record's existence guarantees its snapshot exists. The one genuinely new API for the checkpoint story is <code>POST /control/drain(deadline)</code> on the agent server: it sets a flag that each active <code>/run</code> loop checks at its boundary point, and a loop that reaches a boundary while the flag is set commits the record and waits instead of sending the next model call. NeMo RL never calls a resources server: the SingleController talks to the actor, the actor talks to the agent and model servers, and the agent server drives the resources servers — because only the agent knows when a boundary has been reached.</p>
+
+  <h3>The state hierarchy, mapped</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Tier</th><th>State</th><th>Mechanism</th><th>Saved when</th><th>Needs quiesce?</th></tr>
+    <tr><td>0</td><td>Stateless / single-turn: tokens only</td><td>Worker staging → TQ; SC ledger</td><td>Per call; TQ checkpoint at cuts</td><td>Only the TQ-save concurrency window</td></tr>
+    <tr><td>1</td><td>Multi-turn conversation</td><td>B′ rollout file (custody + input deltas + output items)</td><td>Continuously, per call — the cut only packs it</td><td><b>No</b> — already durable</td></tr>
+    <tr><td>2</td><td>Tool results</td><td>Arrive as the next call's input delta (tier 1); mid-cut in-flight tools captured only by boundary records</td><td>Per call; per boundary once the session tier lands</td><td>Drain-to-boundary is the freshness upgrade, never load-bearing</td></tr>
+    <tr><td>3</td><td>Environment / sandbox state</td><td>Session-store snapshots; class C = reconnect descriptor (sandbox id), provider-side suspend; class D = whole-rollout retry</td><td>Per boundary, snapshot-then-boundary order</td><td>Boundary drain makes it fresh</td></tr>
+  </table></div>
+  <h3>The Gym API surface</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Component</th><th>API</th><th>Caller</th><th>Purpose</th></tr>
+    <tr><td>Model server</td><td><code>POST /control/pause</code> · <code>/control/resume</code> · <code>GET /control/status</code> (paused?, in-flight count, last commit)</td><td>NemoGym actor</td><td>Admission pause + quiesce polling; sentinel file spans all uvicorn workers</td></tr>
+    <tr><td>Model server</td><td>Manifest route (read-only, exists in the #2278 direction)</td><td>Actor / finalizer</td><td>Token-free receipts at seal and cut</td></tr>
+    <tr><td>NemoGym actor</td><td>Ray methods: <code>fence()</code> · <code>checkpoint(deadline) → report</code> · <code>restore(assignments)</code> · <code>resume()</code></td><td>SingleController</td><td>The orchestration seam — SC never talks to Gym servers directly</td></tr>
+    <tr><td>Agent server <span class="chip reserve">session tier</span></td><td><code>POST /control/drain(deadline)</code> · resumable <code>/run</code></td><td>Actor</td><td>Drain-to-boundary; resume dispatch (both from the session-state prototype)</td></tr>
+    <tr><td>Resources servers <span class="chip reserve">session tier</span></td><td><code>/ng-session</code> export/restore hooks (prototype)</td><td>Agent, at boundary commit</td><td>Env snapshots + sandbox descriptors — invoked per boundary, never by the cut directly</td></tr>
+  </table></div>
+  <p class="small">What Gym deliberately does <b>not</b> need: any API that commands generation workers (RL-owned), any TQ client, any KV interface. The interaction pattern is strictly layered: SC → actor (Ray) → Gym servers (bearer-authed HTTP) — and each layer quiesces only what it owns.</p>
+
+  <h2>The load path</h2>
+  <ol class="path">
+    <li>The trainer restarts. The SingleController loads its sidecar; staged mode also runs TQ <code>load_checkpoint</code> and reconciles expected staging keys against what the store actually holds (counting — partial key misses return fewer rows without error).</li>
+    <li>The SingleController explicitly re-spins the NemoGym actor (<code>max_restarts=0</code> fits this: restarts are always deliberate). Before starting the Gym servers, the actor <b>re-seeds node-local storage</b>: it copies the sidecar-referenced rollout files down from the shared filesystem into the local capture dir. The lineage store's cursor-reset machinery absorbs the changed inodes — a re-seeded file just reads as a fresh backend.</li>
+    <li>For each unsealed rollout marked resumable, the SingleController issues an <b>adopt</b> call to the model server — new attempt id, authorized by the durable control token, targeting the recorded anchor.</li>
+    <li>The model server needs no state pushed into it: its lineage store lazily reads the rollout's ledger file on first touch (metadata into the cache; token chains only if and when a parent resolves).</li>
+    <li>The agent's <code>/run</code> is re-dispatched with the resume flag: it truncates the session record to the anchor boundary, rebuilds the transcript from boundary records, and the resources server restores the environment snapshot (or reconnects the sandbox descriptor).</li>
+    <li>The first continued model call resolves against the rebuilt lineage and gets its exact prefix — file mode: cumulative ids from the ledger; staged mode: staging-chain keys against the restored TQ rows. The worker verifies the served prompt extends the prefix exactly; continuation is bit-exact.</li>
+    <li>At seal, delivery proceeds normally: staged mode — the finalizer fetches the chain's staged rows, verifies, and publishes the group's train rows; file mode — the builder freezes the JSONL into the rollout payload. Retirement after consumption triggers file/staging-key GC; anything referenced by a still-live checkpoint is pinned.</li>
+  </ol>
+
+  <div class="callout">
+    <span class="label">Rebuilding the conversation on load</span>
+    Request/response correlation is free by construction: <b>each row pairs a call's input delta with its output items, written in one atomic append at commit</b> — there is no separate tracking to reconcile. Chain order comes from parent pointers, not file order (concurrent sub-agent calls interleave in the file). The rebuild, given the anchor call from the sidecar:
+    <ol class="path">
+      <li>Read the rollout's rows — last row wins per <code>call_id</code>, torn tail dropped. Rows with an intent but no committed row (in-flight at the kill) are excluded and masked.</li>
+      <li>Walk <code>parent_call_id</code> pointers back from the anchor to the root — this selects the main chain out of the DAG.</li>
+      <li>Concatenate forward: <code>input_delta(root) · output_items(root) · input_delta(c₂) · output_items(c₂) · … · output_items(anchor)</code>. Each input delta is exactly the environment/user-authored items between calls, so the interleaving reproduces the conversation as of the anchor's response. For native agents everything is Responses items end-to-end — pure concatenation, zero conversion — and the result drops directly into <code>responses_create_params.input</code>.</li>
+      <li>Verify while walking: recompute the assistant-turn fingerprint of the rebuilt prefix at each step and compare it against the parent fingerprint the <em>next</em> row recorded at admission. Any disagreement fails closed to whole-rollout retry. This re-embedding step carries no new assumption — serving output items and matching them when the harness re-embeds them in its next request is <em>exactly the round trip the fingerprint join already validates on every live call</em>.</li>
+    </ol>
+    The delta itself costs nothing to extract at write time: admission already verifies that each request extends the parent's conversation, so the delta is the suffix beyond the verified prefix — a byproduct of the check that runs anyway. The remaining loss window is unchanged: environment turns that completed after the anchor's response but never arrived in a request exist nowhere and are regenerated.
+  </div>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 880 430" role="img" aria-label="Two-plane diagram: the durability plane runs per model call through the model server to fsync'd capture files; the delivery plane runs per rollout from the capture files or worker staging into the trainer's data plane. A reserved shipper path from files via the NemoGym actor into TransferQueue is drawn dashed.">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+        <marker id="ah-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+        </marker>
+        <marker id="ah-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--amber)"/>
+        </marker>
+        <marker id="ah-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--proto)"/>
+        </marker>
+      </defs>
+      <g font-family="Archivo, sans-serif" font-size="11" fill="var(--muted)">
+        <text x="16" y="26" font-weight="700" letter-spacing="1.5" font-size="10">DURABILITY PLANE · CONTINUOUS · PER CALL</text>
+        <text x="16" y="256" font-weight="700" letter-spacing="1.5" font-size="10">DELIVERY PLANE · BATCH · PER ROLLOUT / GROUP</text>
+      </g>
+      <line x1="16" y1="238" x2="864" y2="238" stroke="var(--line)" stroke-width="1"/>
+      <g font-family="Archivo, sans-serif" font-size="12" fill="currentColor">
+        <rect x="16" y="52" width="104" height="34" rx="5" fill="none" stroke="currentColor"/>
+        <text x="68" y="73" text-anchor="middle">Agent server</text>
+        <rect x="200" y="52" width="150" height="46" rx="5" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+        <text x="275" y="71" text-anchor="middle">Model server</text>
+        <text x="275" y="87" text-anchor="middle" font-size="10" fill="var(--muted)">Gym venv · N workers</text>
+        <rect x="446" y="52" width="150" height="46" rx="5" fill="none" stroke="currentColor"/>
+        <text x="521" y="71" text-anchor="middle">vLLM worker FastAPI</text>
+        <text x="521" y="87" text-anchor="middle" font-size="10" fill="var(--muted)">RL actor · torch venv</text>
+        <rect x="680" y="44" width="184" height="60" rx="5" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+        <text x="772" y="66" text-anchor="middle" fill="var(--accent)">ledger / capture files</text>
+        <text x="772" y="82" text-anchor="middle" font-size="10" fill="var(--muted)">JSONL · fsync/line · flock</text>
+        <text x="772" y="96" text-anchor="middle" font-size="10" fill="var(--muted)">shared FS for adopt</text>
+      </g>
+      <g font-family="Archivo, sans-serif" font-size="11">
+        <line x1="120" y1="69" x2="195" y2="69" stroke="currentColor" stroke-width="1.4" marker-end="url(#ah)"/>
+        <text x="158" y="61" text-anchor="middle" fill="currentColor">responses</text>
+        <line x1="350" y1="69" x2="441" y2="69" stroke="currentColor" stroke-width="1.4" marker-end="url(#ah)"/>
+        <text x="396" y="61" text-anchor="middle" fill="currentColor">chat/completions</text>
+        <line x1="350" y1="130" x2="675" y2="130" stroke="var(--accent)" stroke-width="2.2" marker-end="url(#ah-a)"/>
+        <text x="512" y="122" text-anchor="middle" fill="var(--accent)">append custody row (+ tokens in file mode) · fsync · then ack</text>
+        <line x1="275" y1="98" x2="275" y2="130" stroke="var(--accent)" stroke-width="2.2"/>
+        <line x1="762" y1="104" x2="762" y2="160" stroke="var(--accent)" stroke-width="1.4" marker-end="url(#ah-a)" stroke-dasharray="none"/>
+        <text x="778" y="140" fill="var(--accent)">adopt / resume reads</text>
+        <rect x="694" y="162" width="156" height="34" rx="5" fill="none" stroke="var(--accent)"/>
+        <text x="772" y="183" text-anchor="middle" font-size="11.5" fill="var(--accent)" font-family="Archivo, sans-serif">rebuild lineage + prefix</text>
+      </g>
+      <g font-family="Archivo, sans-serif" font-size="12" fill="currentColor">
+        <rect x="16" y="282" width="170" height="46" rx="5" fill="none" stroke="currentColor"/>
+        <text x="101" y="301" text-anchor="middle">NemoGym actor</text>
+        <text x="101" y="317" text-anchor="middle" font-size="10" fill="var(--muted)">RL venv · TQ-capable</text>
+        <rect x="270" y="282" width="164" height="46" rx="5" fill="none" stroke="currentColor"/>
+        <text x="352" y="301" text-anchor="middle">Finalizer / trainer</text>
+        <text x="352" y="317" text-anchor="middle" font-size="10" fill="var(--muted)">RL-owned · TQ clients</text>
+        <rect x="520" y="282" width="140" height="46" rx="5" fill="none" stroke="currentColor"/>
+        <text x="590" y="301" text-anchor="middle">TransferQueue</text>
+        <text x="590" y="317" text-anchor="middle" font-size="10" fill="var(--muted)">memory · saved at cuts</text>
+      </g>
+      <g font-family="Archivo, sans-serif" font-size="11">
+        <line x1="700" y1="104" x2="101" y2="278" stroke="var(--proto)" stroke-width="1.6" marker-end="url(#ah-p)"/>
+        <text x="330" y="205" fill="var(--proto)">file mode: freeze() per rollout → builder → train payload</text>
+        <line x1="521" y1="98" x2="586" y2="278" stroke="var(--proto)" stroke-width="1.6" marker-end="url(#ah-p)"/>
+        <text x="600" y="205" fill="var(--proto)">staged mode: worker puts per call</text>
+        <line x1="186" y1="305" x2="265" y2="305" stroke="currentColor" stroke-width="1.4" marker-end="url(#ah)"/>
+        <line x1="434" y1="305" x2="515" y2="305" stroke="currentColor" stroke-width="1.4" marker-end="url(#ah)"/>
+        <line x1="101" y1="328" x2="101" y2="370" stroke="var(--amber)" stroke-width="1.6" stroke-dasharray="5 4"/>
+        <line x1="101" y1="370" x2="588" y2="370" stroke="var(--amber)" stroke-width="1.6" stroke-dasharray="5 4"/>
+        <line x1="588" y1="370" x2="588" y2="332" stroke="var(--amber)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#ah-m)"/>
+        <text x="345" y="388" text-anchor="middle" fill="var(--amber)">restore-time re-stager (token-bearing fork only): re-stage adopted rollouts' chains from files, once</text>
+      </g>
+    </svg>
+    <figcaption>The model server writes the durability plane per call and acks only after fsync. The delivery plane consumes per rollout — file mode via <code>freeze()</code> and the run result, staged mode via worker staging + the finalizer. The dashed path exists only in the token-bearing fork, runs once at restore, and only for adopted rollouts.</figcaption>
+  </figure>
+
+  <h2>The proposed options, re-evaluated under the corrected assumptions</h2>
+  <p>Corrections applied: the relay carries <b>only a token-free text receipt</b> (tokens and logprobs go worker→TQ and never return to Gym); the NemoGym actor is <code>max_restarts=0</code>, so its death is loud, not silent; and worker staging is the baseline, not an alternative.</p>
+
+  <div class="option">
+    <h3><span class="ono">O1a</span>Per-call text receipt → actor → TQ <span class="chip reject">unnecessary hop</span></h3>
+    <p>With tokens out of the payload, the earlier serialization critique mostly evaporates — the receipt is small. What remains is that the hop delivers data that has to exist locally anyway and can be pulled on demand:</p>
+    <ul>
+      <li>The model server must keep process-shared custody/lineage state for its own serving path regardless (inventory row #2) — the receipt push doesn't replace the ledger, it copies from it.</li>
+      <li>#3456 already assembles receipts by <b>pulling</b> the manifest from the model server at seal. Pull-from-durable-truth beats push-per-call: a push can be lost in flight and must be idempotently retried; a pull re-reads the ledger whenever it's needed — at seal, at a cut, or never.</li>
+      <li>Conversation text cannot ride this path into TQ anyway — the staging and finalizer schemas structurally reject content fields by design. The transcript a resume actually replays comes from session-store boundary records (row #3).</li>
+    </ul>
+    <p>Synchronous, the hop adds an actor-liveness dependency to every model call; asynchronous, it adds a loss window — for a copy of data whose truth is durable a fsync away. The pull model needs neither.</p>
+  </div>
+
+  <div class="option">
+    <h3><span class="ono">O1b</span>Actor-side queue + drain, with <code>max_restarts=0</code> <span class="chip reject">loud loss is still loss</span></h3>
+    <p>The fix is real: with restarts disabled and spinup explicit, an actor death fails the run visibly instead of silently swallowing queued receipts. But the queue's contents are still gone — rollouts whose receipts existed only there cannot resume — and the actor is now a run-wide single point of failure on a per-call path it previously wasn't part of. The deeper question stands: a queue exists to buffer pushes, and nothing here needs a push. The durable ledger plus pull-when-needed has no queue to lose.</p>
+  </div>
+
+  <div class="option">
+    <h3><span class="ono">O1c</span>Flush custody state at shutdown only <span class="chip reject">coherent, but pays more than the file it avoids</span></h3>
+    <p>Corrected reading: tokens and logprobs are already in TQ per call (worker staging) — so a shutdown flush would carry only custody metadata, and much of the call DAG is even re-derivable from TQ row tags (rollout, call, parent, lengths, digests). This makes O1c coherent. What it still costs, against the ledger file it's trying to avoid:</p>
+    <ul>
+      <li><b>Multi-worker parent resolution loses its substrate.</b> During the run, N uvicorn workers share lineage through the ledger file. RAM-only custody means single-worker model servers or new shared-memory machinery — a bigger change than the file it removes.</li>
+      <li><b>Adopt becomes TQ-dependent and push-based.</b> A restarted model server cannot read TQ, so an RL-venv process must read the tags and push seed state in — a new protocol, replacing a lazy local file read that already exists.</li>
+      <li><b>Unplanned deaths still lose what tags don't carry</b>: admission decisions, fingerprint state, terminal witnesses — plus everything for rollouts whose flush never ran.</li>
+      <li>The memory story, stated precisely: the file-backed lineage cache holds <em>metadata only</em> for up to 65,536 rollouts and lazily materializes token chains from the file by byte offset. That design is cheap <em>because</em> a locally readable backend exists; file-less custody gives the lazy loads nowhere to go.</li>
+    </ul>
+    <p>And the flush itself is drain machinery promoted to a correctness requirement — whereas with the ledger, shutdown is a no-op.</p>
+  </div>
+
+  <div class="option">
+    <h3><span class="ono">O2</span>The model-server ledger file <span class="chip spine">the spine, both modes</span></h3>
+    <p>One append+fsync per call at commit (measured +2.29&nbsp;ms/call p50 on local disk; the Lustre number is the open measurement). In file mode it carries full token records; in staged mode, custody rows. It is three mechanisms in one file: durable custody home, multi-worker sharing substrate, lazy-load backend. File count is bounded by in-flight rollouts plus consumption lag (files are deleted at retirement, pinned while a checkpoint references them). Delta records keep long-multi-turn rollouts linear rather than quadratic.</p>
+  </div>
+
+  <div class="option">
+    <h3><span class="ono">O6′</span>Restore-time re-stager <span class="chip reserve">the useful remnant of the shipper idea</span></h3>
+    <p>The original shipper (actor continuously tails files into TQ) is moot in staged mode — the worker already puts once per call, and nothing else should; there is no second stream of TQ traffic to create or to optimize away. The one moment a file→TQ copy earns its keep is <b>restore</b>, and only in the token-bearing fork below: if the ledger carries the deltas, an RL-venv process re-stages just the <em>adopted</em> rollouts' chains into TQ at restore — bounded work (in-flight count × chain length, once, off every hot path) — and the staging partition then never needs to be part of the TQ checkpoint at all.</p>
+  </div>
+
+  <h2>Variant A vs Variant B — the two live step-by-step proposals</h2>
+  <p>Both walkthroughs (Aug 24) share the entire spine: stateless agent re-sends the full conversation; the model server fingerprints assistant turns and resolves the parent in the lineage JSONL under flock; dispatch carries text + identity only; the worker splices the parent prefix from its cache or TQ, stages the delta before acking, and returns text + token-free coordinates; the model server appends the lineage row <em>before</em> releasing the response (the publication point — a later call can only then resolve it); finalization pulls the token-free manifest, verifies, linearizes staged rows, and clears. <b>The only difference is where the transcript text goes.</b></p>
+  <div class="tablewrap"><table>
+    <tr><th></th><th>Variant A — POST /transcript → actor proxy → TQ <code>rollout_transcript</code></th><th>Variant B — messages JSONL beside the lineage file</th></tr>
+    <tr><td><b>Transport</b></td><td>Per-call localhost HTTP (×2: request copy + completion copy), bounded queue + drain thread, tensor-encode, TQ put</td><td>Local append under the same per-rollout flock; stdlib only; no new processes</td></tr>
+    <tr><td><b>Durability clock</b></td><td>Fire-and-forget into a memory queue, then TQ memory — durable only at TQ checkpoint cuts</td><td>fsync at commit — continuous, same clock and same directory as the lineage file</td></tr>
+    <tr><td><b>Loss modes</b></td><td>POST failure, queue overflow (block or drop), actor death with queued items, TQ put failure after enqueue — each silently punches a hole in the transcript</td><td>Process crash before fsync loses at most the uncommitted call, which was never published</td></tr>
+    <tr><td><b>Achievable invariant</b></td><td>None — the durable lineage row can reference a call whose transcript never landed</td><td><b>"No published call without its durable transcript"</b>: order the transcript append before (or merge it into) the lineage commit</td></tr>
+    <tr><td><b>Resume read path</b></td><td>An RL-venv process reads TQ, reconstructs, and pushes the conversation into the agent — new machinery</td><td>The agent (or model server) reads the file directly in the Gym venv</td></tr>
+    <tr><td><b>Who else consumes it</b></td><td>Nobody — the finalizer structurally rejects text fields; the trainer trains on tokens</td><td>Same consumers, without a tensor store holding UTF-8-as-uint8 rows</td></tr>
+  </table></div>
+  <h3>Is the transcript necessary at all?</h3>
+  <p><b>For the training pipeline the walkthroughs describe: no, provably.</b> Trace every consumer through the 18 steps. Parent resolution (steps 2, 11) hashes the <em>incoming</em> request and compares against fingerprints already stored in lineage rows — stored text is never read. Context-digest verification: hashes again. Prefix supply (steps 13–14): staging-key chains and token ids, never text. Finalization (step 18): the token-free manifest plus staged token rows — the finalizer structurally rejects text fields. Delete steps 3, 8, and 12 from both walkthroughs and every training-correctness property is unchanged.</p>
+  <p><b>For crash-resume, with boundary markers deferred to a follow-up: a conversation record is necessary — but only half of one.</b> The resumed agent must re-send the conversation, and after a kill the harness's memory is gone. Split the conversation by author:</p>
+  <ul>
+    <li><b>Environment/user-authored turns (tool outputs, user messages) are irreducible.</b> They exist token-side only as rendered prompt-delta tokens, and recovering structured items from rendered template text is template inversion — fragile and rejected. If they aren't stored as text, they are gone. <b>This is the part of the transcript that is genuinely necessary</b>, and it is exactly what steps 3 and 12 append.</li>
+    <li><b>Assistant-authored turns are recoverable from the staged tokens.</b> Detokenizing a <em>generation span</em> is exact (no template inversion — it's the model's own output), and parsing tool calls out of generated text is precisely what the serving path already does. But the recovery runs only in an RL-venv process against live-or-restored TQ — so storing completions too keeps the resume read Gym-local and independent of the data plane, which is this document's third ground rule. Recommended, not required.</li>
+  </ul>
+  <p><b>What resume looks like with this per-call record and no boundary markers:</b> resume at the <em>last recorded request</em>. Rebuild the conversation as seed (the re-dispatched task row) + stored input deltas + completions; re-dispatch the tail call; prefix supply splices calls 1…k−1 token-exactly; the dead attempt's staged rows for the regenerated call are orphaned and masked. This never mixes old observations with re-run tools — the kept prefix embeds only stored observations — so it is <b>sound for stateless environments</b>; at most one call's work (the tail call and its tool executions) is lost. The boundary-marker follow-up then improves freshness by at most that one call and adds the environment-state pairing that stateful servers need — and the input-delta record built now is the <em>embryonic boundary record</em>: same content, re-keyed per boundary with the <code>response_id</code> anchor. Nothing is thrown away.</p>
+  <p><b>Verdict: keep steps 3 and 12 as an inputs append (the necessary half), keep step 8 if you want resume reads self-contained in the Gym venv (recommended), and store it as the JSONL — never through TQ.</b> The table above is the reason: the TQ route adds a proxy, a queue, a drain thread, a text partition in a tensor store that no existing consumer reads, and an RL-venv restore path — while making the one invariant that matters ("no published call without its inputs durable") unachievable, since fire-and-forget can always leave holes precisely in the record whose one critical consumer, resume, cannot tolerate them. As B′: fold the text columns into the ledger's commit append — one row, one fsync per call. For blackbox harnesses none of this enables resume (their loop state lives outside Gym); their transcript value is diagnostics, which evaluation capture on main already provides.</p>
+  <p class="small">Step-level corrections that apply to <em>both</em> walkthroughs: (1) the staged delta must be <code>rendered_prompt[prev_len:] + generated</code> — it includes the tokenized environment-authored turns, not only "output tokens", or linearization has gaps; the mask distinguishes carried from generated. (2) The lineage-append-before-release ordering is load-bearing — keep it stated as an invariant, not a step. (3) "Local cache, else TQ" prefix loading needs deliberate rollout→worker affinity; TQ makes no documented cross-client read-after-write promise, so the else-branch should be a cold path. (4) "Clears all rollout stores" at finalization must except anything referenced by a still-live checkpoint (adopted/partial rollouts). (5) Freshness honesty: with a token-free ledger, resume freshness is bounded by the last TQ checkpoint <em>in either variant</em> — the tokens for the kept prefix must exist in TQ at restore. Variant B's continuous transcript still pays off in integrity and in enabling the token-bearing upgrade below, which is the actual freshness lever.</p>
+
+  <h2>The B′ walkthrough — updated steps</h2>
+  <p>The original Variant B walkthrough, updated to the settled design. Differences from the original: old steps 3, 8, and 12 (separate messages-JSONL writes at request arrival and response) are <b>merged into the single commit append</b>; the append is self-healing and node-local with the fsync-policy knob; and the lifecycle steps (completion, cut, restore, resume) are now explicit.</p>
+  <h3>Call 1</h3>
+  <ol class="path">
+    <li>Agent → model server: <code>POST /ng-rollout/r42/training-token-capture/v1/responses</code> with the full task prompt. The rollout id in the path is the capture key everywhere.</li>
+    <li>Model server resolves the parent: hashes the assistant-authored turns, reads the rollout's file under shared flock (cursored cache). No rows → root call; parent null; the input delta is the entire request.</li>
+    <li>Model server dispatches to the vLLM worker: text + capture identity (rollout id, call id <code>c1</code>, parent null). No token arrays on this hop.</li>
+    <li>Worker renders and generates; <b>before acking</b>, stages the call's delta — token ids (rendered prompt + generated), mask, logprob delta, router indices — to <code>rollout_staging</code> keyed <code>r42/c1</code>. Synchronous, durable-before-ack at the worker.</li>
+    <li>Worker → model server: text + token-free coordinates (staging key, prev/delta/cum lengths, digests, weight version). Token ids never ride back.</li>
+    <li><b>The commit: one self-healing append</b> to the rollout's node-local file, fsync per policy — a single row holding the custody columns (call id, parent, fingerprint of the served turn, staging key, lengths, digests), the <code>input_delta</code> (request items as received), and the <code>output_items</code> (served response items). This one write is simultaneously the durability event, the cross-worker publication (any uvicorn worker can now resolve <code>c1</code>), and the resume record.</li>
+    <li>Only then does the model server return the token-stripped response to the agent.</li>
+    <li>The environment executes the returned tool calls; the harness appends the results to its in-memory conversation.</li>
+  </ol>
+  <h3>Call 2</h3>
+  <ol class="path" start="9">
+    <li>Agent re-sends the full conversation, now including <code>c1</code>'s assistant turn and the tool results.</li>
+    <li>Model server resolves: the trailing assistant turns fingerprint-match <code>c1</code>'s recorded served fingerprint; the extension check verifies the request extends <code>c1</code>'s conversation; parent = <code>c1</code>, token-in admission — and <b>the input delta is the suffix past the verified prefix</b> (the tool results), extracted as a byproduct of the check that runs anyway.</li>
+    <li>Dispatch to the worker with a parent <em>reference</em> — the staging-key chain — never tokens.</li>
+    <li>Worker splices the exact parent prefix from its local cache (rollout→worker affinity) or TQ, generates, stages delta 2 pre-ack.</li>
+    <li>Worker returns text + coordinates for <code>c2</code>.</li>
+    <li>Model server commits row <code>c2</code> (same single append), returns text to the agent. Any worker serving call 3 resolves <code>c2 → c1</code> from the shared file.</li>
+  </ol>
+  <h3>Lifecycle</h3>
+  <ol class="path" start="15">
+    <li><b>Completion:</b> <code>/run</code> returns; the actor syncs the rollout's file up to the shared filesystem (byte-range from last-synced offset); finalization pulls the token-free manifest, the finalizer fetches and verifies the staged rows and publishes the group's training rows; after the trainer consumes, the actor retires the rollout — staging keys and both file copies deleted, pinned while any live checkpoint references them.</li>
+    <li><b>Cut:</b> the actor syncs every unretired rollout file node-local → shared (incremental, torn tail excluded, fsync'd on the shared side); staged mode runs TQ <code>save_checkpoint</code>; <b>only then</b> does the SingleController write its sidecar <code>{rollout → shared path, synced_len, anchor}</code>.</li>
+    <li><b>Restore:</b> sidecar load; TQ <code>load_checkpoint</code>; the actor re-seeds node-local files from the shared copies (verifying length ≥ <code>synced_len</code>); the model server starts cold and lazily re-reads files on first touch — cursor-reset absorbs the new inodes.</li>
+    <li><b>Resume:</b> for each resumable rollout the actor rebuilds the conversation from the file — walk parent pointers from the anchor, concatenate <code>input_delta · output_items</code>, verify the fingerprint chain, fail closed on mismatch — and re-dispatches the task with the rebuilt conversation as <code>responses_create_params.input</code>. The harness doesn't know it's resuming: its first call arrives and fingerprint-resolves to the anchor exactly as in step 10; the dead attempt's post-anchor staged rows are orphaned and masked.</li>
+  </ol>
+
+  <h3>Extension: tailing to TQ via the NemoGym actor</h3>
+  <p>Build only when a TQ consumer for these rows exists — none does today. The actor is TQ-capable (RL <code>uv.lock</code> venv) and sits on the Gym node; the file remains the single truth and TQ rows are a derived projection; the model server never learns the shipper exists.</p>
+  <ol class="path">
+    <li>The actor runs a tail loop over the capture dir: per unretired rollout file, a cursor <code>{inode, byte offset}</code>. Cursor persistence is an optimization — on restart it can always rebuild by re-reading.</li>
+    <li>Each tick reads complete lines from the cursor to EOF (torn tail excluded, same reader rule) and parses rows.</li>
+    <li>Per new committed row it derives the TQ record and does an <b>idempotent put keyed <code>{rollout_id}/{call_id}</code></b> into a transcript partition. At-least-once delivery + keyed dedup = effectively exactly-once.</li>
+    <li>The cursor advances only after the TQ put is acked. A crash between put and advance re-puts on restart and dedups by key.</li>
+    <li>Backpressure never touches the serving path: if TQ is slow or down, the shipper lags; lag = EOF − cursor, exported as a metric; the file keeps growing on local disk and nothing blocks.</li>
+    <li>Retirement interplay: the actor is also the retiring party, so policy is one comparison — if the TQ copy must complete before deletion, retire waits for cursor = EOF; if best-effort, retire deletes and drops the cursor.</li>
+    <li>Restore interplay: after re-seed the cursors reset with the new inodes; re-shipping from offset zero is safe (keyed dedup), or <code>synced_len</code> bounds where shipping resumes.</li>
+  </ol>
+  <p class="small"><b>Anatomy of one tick</b> (an adaptive poll loop in the actor — sleep the interval only when caught up, re-tick immediately while behind): <b>enumerate</b> the active rollout set from the actor's own dispatch state (no globbing); <b>detect</b> per file via <code>stat()</code> — inode change means re-seed, reset the cursor; <b>snapshot-read</b> the byte range <code>[cursor, size)</code> under shared flock held for the memory copy only, never across a TQ put, then trim at the last newline (a torn tail waits one tick); <b>parse</b> — a mid-stream parse error is corruption: alert and stop that rollout loudly, never skip silently; <b>batched put</b> of all derived records across all files this tick, keyed <code>{rollout}/{call}</code>; <b>advance</b> cursors only after the ack, so a crash between put and advance re-ships once and dedups. The tick interval controls exactly one thing — the staleness of the TQ projection (the lag metric EOF−cursor) — and nothing else: not durability (the commit fsync already happened), not correctness (nothing consumes the projection on a critical path), not the serving path (the flock is held for a copy).</p>
+
+  <h2>The one open fork: does the staged-mode ledger carry token deltas?</h2>
+  <div class="tablewrap"><table>
+    <tr><th></th><th>Token-free ledger (custody only)</th><th>Token-bearing ledger (custody + deltas)</th></tr>
+    <tr><td><b>Tokens' durable home</b></td><td>TQ only — resume across restarts requires the coordinated TQ checkpoint of the staging partition, digest-reconciled</td><td>The ledger — TQ staging becomes a pure projection: clearable, rebuildable, excluded from checkpoints (restore-time re-stager)</td></tr>
+    <tr><td><b>Ledger row size</b></td><td>Small (ids, lengths, digests)</td><td>+ delta ids and logprobs — tens of KB per call; fsync cost to re-measure on the target FS</td></tr>
+    <tr><td><b>Wire change</b></td><td>None</td><td>The worker's commit coordinates must return <code>generation_logprobs_delta</code> alongside the token ids delta (today only the ids ride back; logprobs never reach the model server — without this, a re-staged chain would lack logprobs, which cannot be recomputed)</td></tr>
+    <tr><td><b>Failure surface at restore</b></td><td>TQ checkpoint integrity + key reconciliation + storage liveness</td><td>Read the rollout's file</td></tr>
+    <tr><td><b>Copies during a run</b></td><td>One</td><td>Two — legitimate under one-home-per-fact only if TQ staging is explicitly the derived copy</td></tr>
+  </table></div>
+  <p><b>Recommendation: token-bearing</b>, contingent on the fsync measurement. It makes every rollout's resume self-sufficient in one place the model server can read, removes the staging partition from the checkpoint surface entirely, and the marginal wire cost (logprobs riding the existing coords return) is small. If the target filesystem makes the larger fsync expensive, fall back to token-free and accept the TQ-checkpoint dependency — the load path above works either way; only steps 1 and 6 change flavor.</p>
+
+  <h2>Measurements that decide the remaining knobs</h2>
+  <ul>
+    <li>Cut-time flush cost under tiering: in-flight rollout count × file size, as incremental byte-range copies to the shared filesystem, against the checkpoint grace budget. (The per-call Lustre-fsync measurement is <b>moot</b> under tiering — the hot path fsyncs node-local, where +2.29&nbsp;ms/call is already measured. Token-bearing vs token-free row sizes now matter only for this batch copy, weakening that fork's one cost argument.)</li>
+    <li>TQ <code>save_checkpoint</code>/<code>load_checkpoint</code> wall time for a realistic staging partition — this prices the token-free fork's restore dependency.</li>
+    <li>Manifest-pull latency at cut time for in-flight rollouts (the receipt path O1a wanted to pre-populate) — expected trivial, worth confirming at fleet scale.</li>
+  </ul>
+
+  <div class="footer">v3 · facts verified 2026‑08‑23/24 from NVIDIA-NeMo/RL <code>main</code>, PR #3407, PR #3456, Ascend/TransferQueue @c516143, Gym <code>main</code> and PR #2180 head · terminology: older docs call the model server "the gate" · traceability to the decision registers: durable-before-ack = D1; hard-kill-first = D8; one-home-per-fact = D5/W3; identity at the model server, bytes at the source = W1; coords+Δ return = W2; anchor join = W8; this note's positions extend them as W9 (ledger = spine) and W10 (no in-memory relay queues; file→TQ copies only at restore) · companions: <a href="https://claude.ai/code/artifact/d6aa39a8-fa67-4f12-b12e-e49c265d8da1">Checkpoint Choreography</a> (save/restore step-by-step with diagrams; prepare/commit API) · <a href="https://claude.ai/code/artifact/3702a11d-e1ba-4071-a949-030d9cefaa6b">Unified Plan</a> · <a href="https://claude.ai/code/artifact/eeb36fd8-70a7-41bd-a28f-bd14d21a83d7">Wire Map</a></div>
+</div>

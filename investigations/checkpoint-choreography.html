@@ -1,0 +1,670 @@
+<title>Checkpoint Choreography</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #FAF9F5; --ink: #20261F; --muted: #5C665F;
+    --accent: #0E7565; --accent-ink: #0A5A50; --accent-soft: #E2EFEA;
+    --heavy: #A83A2C; --heavy-soft: #F5E4E0;
+    --amber: #9A6700; --amber-soft: #F5EDD8;
+    --proto: #34547E; --proto-soft: #E4EAF3;
+    --line: #DDE1DA; --card: #F0F2EC; --code-bg: #EAEDE5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #141815; --ink: #E6EAE5; --muted: #97A29A;
+      --accent: #3FB8A2; --accent-ink: #5CC7B4; --accent-soft: #1B2E29;
+      --heavy: #DA7A66; --heavy-soft: #331E19;
+      --amber: #D5A64A; --amber-soft: #2E2716;
+      --proto: #7DA3D4; --proto-soft: #1D2634;
+      --line: #2B332C; --card: #1B211C; --code-bg: #212823;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #141815; --ink: #E6EAE5; --muted: #97A29A;
+    --accent: #3FB8A2; --accent-ink: #5CC7B4; --accent-soft: #1B2E29;
+    --heavy: #DA7A66; --heavy-soft: #331E19;
+    --amber: #D5A64A; --amber-soft: #2E2716;
+    --proto: #7DA3D4; --proto-soft: #1D2634;
+    --line: #2B332C; --card: #1B211C; --code-bg: #212823;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+    font-family: "Source Serif 4", Georgia, serif; font-size: 17px; line-height: 1.62;
+    padding: 3.2rem 1.4rem 6rem; }
+  .page { max-width: 56rem; margin: 0 auto; }
+  h1, h2, h3 { font-family: Archivo, "Helvetica Neue", Arial, sans-serif; line-height: 1.18; text-wrap: balance; margin: 0; }
+  h1 { font-size: 2.15rem; font-weight: 700; letter-spacing: -0.015em; margin: 0.4rem 0 0.6rem; }
+  h2 { font-size: 1.35rem; font-weight: 700; margin: 3rem 0 0.8rem; padding-top: 1.4rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.02rem; font-weight: 600; margin: 1.7rem 0 0.5rem; }
+  p { margin: 0.7rem 0; }
+  a { color: var(--accent-ink); text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: 2px; }
+  .eyebrow { font-family: Archivo, sans-serif; font-size: 0.74rem; font-weight: 600; letter-spacing: 0.13em; text-transform: uppercase; color: var(--accent); }
+  .dateline { font-family: Archivo, sans-serif; font-size: 0.85rem; color: var(--muted); margin-bottom: 1.8rem; }
+  .lede { font-size: 1.06rem; }
+  code { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: 0.83em; background: var(--code-bg); border-radius: 3px; padding: 0.08em 0.3em; }
+  ol.path { padding-left: 1.3rem; margin: 0.6rem 0; }
+  ol.path li { margin: 0.55rem 0; }
+  li::marker { color: var(--accent); }
+  figure.diagram { margin: 1.6rem 0; }
+  figure.diagram svg { display: block; max-width: 100%; height: auto; color: var(--ink); }
+  figure.diagram figcaption { margin-top: 0.55rem; font-family: Archivo, sans-serif; font-size: 0.83rem; color: var(--muted); line-height: 1.5; }
+  .legend { font-family: Archivo, sans-serif; font-size: 0.82rem; color: var(--muted); display: flex; gap: 1.4rem; flex-wrap: wrap; margin: 0.8rem 0 0.2rem; }
+  .legend .sw { display: inline-block; width: 26px; height: 0; border-top: 2.5px solid var(--accent); vertical-align: middle; margin-right: 0.4rem; }
+  .legend .sw.data { border-top: 1.5px dashed var(--proto); }
+  .legend .sw.opt { border-top: 2px dashed var(--amber); }
+  .qa { margin: 1.4rem 0; padding: 1rem 1.2rem; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  .qa h3 { margin: 0 0 0.4rem; }
+  .qa p { font-size: 0.95rem; }
+  .tablewrap { overflow-x: auto; margin: 0.9rem 0 1.3rem; border: 1px solid var(--line); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+  th { font-family: Archivo, sans-serif; font-size: 0.69rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line); background: var(--card); white-space: nowrap; }
+  td { padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.n { font-family: "IBM Plex Mono", monospace; white-space: nowrap; color: var(--accent); font-size: 0.8rem; }
+  .stepper { border: 1px solid var(--line); border-radius: 12px; background: var(--card); padding: 1rem 1.2rem 1.2rem; margin: 1.2rem 0 1.6rem; }
+  .stepper .controls { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; margin: 0.4rem 0 0.6rem; font-family: Archivo, sans-serif; }
+  .stepper button { font-family: Archivo, sans-serif; font-size: 0.85rem; font-weight: 600; color: var(--accent-ink); background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 7px; padding: 0.3rem 0.9rem; cursor: pointer; }
+  .stepper button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .stepper .phase { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .stepper .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 0.5rem 0 0.8rem; }
+  .stepper .chips button { font-family: "IBM Plex Mono", monospace; font-size: 0.72rem; font-weight: 500; padding: 0.15rem 0.45rem; border-radius: 5px; background: var(--paper); border: 1px solid var(--line); color: var(--muted); }
+  .stepper .chips button.on { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+  .stepper .panel { display: grid; grid-template-columns: 10.5rem 1fr; gap: 0.35rem 1rem; font-size: 0.92rem; margin-top: 0.7rem; }
+  .stepper .panel dt { font-family: Archivo, sans-serif; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); padding-top: 0.15rem; }
+  .stepper .panel dd { margin: 0; }
+  @media (max-width: 640px) { .stepper .panel { grid-template-columns: 1fr; } .stepper .panel dt { padding-top: 0.5rem; } }
+  .footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.84rem; font-family: Archivo, sans-serif; }
+</style>
+
+<div class="page">
+  <div class="eyebrow">NeMo Gym × NeMo RL · partial rollout checkpointing · save &amp; restore, step by step</div>
+  <h1>Checkpoint Choreography</h1>
+  <div class="dateline">Who calls what, in what order, with diagrams · Aug 25, 2026 · storage design and rationale live in the companion, <a href="https://claude.ai/code/artifact/a789eb82-0c6c-45a5-b621-9f3724d77a8e">Tokidcap Two Clocks</a></div>
+
+  <p class="lede">This page walks the full checkpoint save and the full restore, process by process, down to individual calls: the complete wire trace lists every request Gym makes or receives, what is durable when it returns, and what a crash immediately afterward means. The stated-assumptions register lists every property the design depends on. Status discipline, enforced after an adversarial audit: a mechanism is marked as existing only when it exists on main or the session-state-prototype branch; everything else belongs to a G-phase or a named PR, and the audit-resolutions section records every finding the review produced. It also answers the recurring implementation questions: how the retry hint is computed, how in-flight requests are counted without races, why model call ids are never reused, why rollouts do not need to return to the same node, why the protocol is two-phase, and how a dispatch is recognized as a resume.</p>
+
+  <h2>The processes and who commands whom</h2>
+  <p>The SingleController is a Ray actor in NeMo RL. It creates one or more NemoGym actors, also Ray actors, one per Gym node. Each NemoGym actor launches the Gym servers — model server, agent server, resources servers — as OS subprocesses on its own node, so the actor and its servers share a filesystem. The model server runs N uvicorn worker processes behind one port. The vLLM generation workers are separate Ray actors owned by the SingleController. TransferQueue is a set of Ray actors holding token data in memory. The rule that keeps the choreography simple: each process commands only the processes it created. The SingleController commands the trainer, TransferQueue, the vLLM workers, and the NemoGym actors. Each NemoGym actor commands its own Gym servers over localhost HTTP. The agent server commands the resources servers, because only the agent knows when a rollout reaches a tool boundary. Nothing else commands anything.</p>
+
+  <figure class="diagram">
+    <svg viewBox="0 0 960 490" role="img" aria-label="Control-flow topology on a grid: the SingleController commands the NeMo RL plane (trainer, TransferQueue, vLLM workers) and the NemoGym actor; the actor commands the Gym node's servers; the agent server drives the resources servers; the model server appends to local disk and dispatches to vLLM; the actor packs to and extracts from the shared filesystem.">
+      <defs>
+        <marker id="ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        <marker id="cd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--proto)"/></marker>
+      </defs>
+      <g font-family="Archivo, sans-serif" font-size="12" fill="currentColor">
+        <rect x="30" y="30" width="180" height="46" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.8"/>
+        <text x="120" y="49" text-anchor="middle">SingleController</text>
+        <text x="120" y="65" text-anchor="middle" font-size="10" fill="var(--muted)">Ray actor · NeMo RL</text>
+
+        <rect x="300" y="20" width="620" height="150" rx="10" fill="none" stroke="var(--line)"/>
+        <text x="310" y="42" font-size="10.5" fill="var(--muted)">NEMO RL PLANE — CREATED AND COMMANDED BY THE SINGLECONTROLLER</text>
+        <rect x="330" y="58" width="150" height="40" rx="6" fill="none" stroke="currentColor"/>
+        <text x="405" y="82" text-anchor="middle">Trainer</text>
+        <rect x="520" y="58" width="170" height="40" rx="6" fill="none" stroke="currentColor"/>
+        <text x="605" y="76" text-anchor="middle">TransferQueue</text>
+        <text x="605" y="91" text-anchor="middle" font-size="10" fill="var(--muted)">in-memory · saved at cuts</text>
+        <rect x="730" y="58" width="160" height="40" rx="6" fill="none" stroke="currentColor"/>
+        <text x="810" y="82" text-anchor="middle">vLLM workers</text>
+
+        <rect x="30" y="250" width="180" height="46" rx="6" fill="none" stroke="var(--accent)" stroke-width="1.8"/>
+        <text x="120" y="269" text-anchor="middle">NemoGym actor</text>
+        <text x="120" y="285" text-anchor="middle" font-size="10" fill="var(--muted)">one per Gym node</text>
+
+        <rect x="300" y="210" width="620" height="170" rx="10" fill="none" stroke="var(--line)"/>
+        <text x="310" y="232" font-size="10.5" fill="var(--muted)">GYM NODE — SUBPROCESSES CREATED AND COMMANDED BY THE ACTOR</text>
+        <rect x="330" y="248" width="160" height="44" rx="6" fill="none" stroke="currentColor"/>
+        <text x="410" y="267" text-anchor="middle">Model server</text>
+        <text x="410" y="283" text-anchor="middle" font-size="10" fill="var(--muted)">×N uvicorn workers</text>
+        <rect x="540" y="248" width="140" height="44" rx="6" fill="none" stroke="currentColor"/>
+        <text x="610" y="274" text-anchor="middle">Agent server</text>
+        <rect x="710" y="248" width="180" height="44" rx="6" fill="none" stroke="currentColor"/>
+        <text x="800" y="267" text-anchor="middle">Resources servers</text>
+        <text x="800" y="283" text-anchor="middle" font-size="10" fill="var(--muted)">sessions · sandboxes</text>
+        <rect x="330" y="330" width="220" height="36" rx="6" fill="none" stroke="var(--proto)"/>
+        <text x="440" y="352" text-anchor="middle" font-size="11" fill="var(--proto)">local NVMe: ledger + session files</text>
+
+        <rect x="560" y="430" width="240" height="42" rx="6" fill="none" stroke="var(--proto)"/>
+        <text x="680" y="448" text-anchor="middle" fill="var(--proto)">shared filesystem</text>
+        <text x="680" y="464" text-anchor="middle" font-size="10" fill="var(--muted)">cut archives · checkpoints</text>
+      </g>
+      <g font-family="Archivo, sans-serif" font-size="10.5">
+        <line x1="210" y1="53" x2="295" y2="53" stroke="var(--accent)" stroke-width="2" marker-end="url(#ca)"/>
+        <text x="252" y="44" text-anchor="middle" fill="var(--accent)">commands</text>
+        <line x1="120" y1="76" x2="120" y2="245" stroke="var(--accent)" stroke-width="2" marker-end="url(#ca)"/>
+        <text x="132" y="150" fill="var(--accent)">Ray: fence · prepare_checkpoint</text>
+        <text x="132" y="166" fill="var(--accent)">commit_checkpoint · restore · resume</text>
+        <line x1="210" y1="273" x2="295" y2="273" stroke="var(--accent)" stroke-width="2" marker-end="url(#ca)"/>
+        <text x="252" y="264" text-anchor="middle" fill="var(--accent)">HTTP: /control/* · /run</text>
+        <line x1="680" y1="270" x2="705" y2="270" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#ca)"/>
+        <text x="695" y="308" text-anchor="middle" fill="var(--accent)">tools · /ng-session</text>
+        <line x1="540" y1="270" x2="495" y2="270" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#cd)"/>
+        <text x="518" y="308" text-anchor="middle" fill="var(--proto)">…/v1/responses</text>
+        <line x1="410" y1="292" x2="410" y2="325" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#cd)"/>
+        <text x="422" y="314" fill="var(--proto)">append per call</text>
+        <line x1="470" y1="248" x2="470" y2="196" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3"/>
+        <line x1="470" y1="196" x2="810" y2="196" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3"/>
+        <line x1="810" y1="196" x2="810" y2="103" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#cd)"/>
+        <text x="640" y="189" text-anchor="middle" fill="var(--proto)">serving path: POST /v1/chat/completions</text>
+        <line x1="730" y1="78" x2="695" y2="78" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#cd)"/>
+        <text x="712" y="112" text-anchor="middle" fill="var(--proto)">stage per call</text>
+        <line x1="120" y1="296" x2="120" y2="451" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3"/>
+        <line x1="120" y1="451" x2="555" y2="451" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#cd)"/>
+        <text x="335" y="443" text-anchor="middle" fill="var(--proto)">pack at cuts · extract at restore</text>
+      </g>
+    </svg>
+    <figcaption>Solid arrows are commands; dashed arrows are data and serving traffic. An arrow ending at a group border means the command applies to everything inside the group. The SingleController never contacts a Gym server; the NemoGym actor never contacts a vLLM worker or a resources server; the agent server is the only caller of the resources servers.</figcaption>
+  </figure>
+
+  <h2>The two planes of the model server</h2>
+  <p>The adversarial audit found the design's largest structural gap here, so it gets its own section. The model server serves two kinds of traffic, and everything earlier in this document was specified for only the first. The <b>policy plane</b> is the agent's own generation — the calls that produce training tokens. The <b>environment plane</b> is model inference made <em>by the environment itself</em>: LLM judges called at verification, user simulators and tool simulators called inside tool execution. Roughly a third of the resources servers call models, and Gym's client plumbing routes their calls through the same capture-prefixed model server the checkpoint pauses. Four correctness failures follow if the planes are not separated:</p>
+  <ol class="path">
+    <li>A rollout that finishes during drain must run <code>verify()</code>; its judge call hits the paused model server, exhausts the internal client's budget, and the judge failsafe converts a completing rollout into a reward-zero failure row — a durable side effect that also falsifies "prepare creates nothing durable". Every checkpoint would silently corrupt completing rollouts.</li>
+    <li>A user or tool simulator calls a model <em>inside</em> tool execution — inside the very step drain waits on — while the sentinel blocks that inner call: drain waits for the tool, the tool waits for unpause. The rollout burns the full deadline, parks mid-tool, and after resume the timed-out inner call surfaces as an error-string tool output the agent feeds to the model as content: checkpoint-injected trajectory corruption.</li>
+    <li>Agents like tau2 and Claude Code interleave policy-chain and simulator/subagent-chain calls under one rollout id. The anchor, masking, and finalization rules are defined over a single chain; sibling-chain rows are neither before nor beyond the anchor, and no rule says whether simulator tokens are masked, retired, or trained on.</li>
+    <li>A turn containing both an agent call and a user-simulator call breaks the boundary record's single <code>model_call_id</code> join, and the simulator's message fits neither "output items" nor "tool results" — rebuild would silently drop the last user turn.</li>
+  </ol>
+  <p><b>The fix is one design element: an actor tag on every model-server request, set at admission.</b> Three values — <code>policy</code>, <code>environment</code>, <code>internal-eval</code> — carried as a request header by Gym's own clients and defaulted by route class for external traffic. Everything then scopes by tag. The pause sentinel gates <code>policy</code> admissions only; <code>environment</code> traffic passes during prepare (a judge finishing a rollout, a simulator inside a draining tool), with an explicit fail-fast policy for it during the brief commit window if the sink barrier is engaged. The hold-versus-503 choice keys on the tag plus route class: capture-prefixed external traffic holds first; marked-internal traffic gets an immediate 503 with Retry-After, and the native client treats it as an implicit drain signal. In-flight counting counts per plane, and "quiet" for the TQ save means the policy plane is quiet. The ledger scopes chains by tag: parent resolution, the anchor, masking, and the finalizer's per-group assembly operate on the <b>policy chain</b>; environment-plane calls are captured (they are still exact tokens someone may want) but never enter a training row, and their staged rows are swept with the rollout. The boundary record's join key is the last <b>policy-plane</b> call of the step, and <code>tool_results</code> is defined to carry every non-policy-authored conversation item of the step — tool outputs, simulator messages, observations. Two further rules ride along: capture-route admission rejects <code>n&gt;1</code>, and requests from in-process library harnesses (tau2, langgraph, aviary — loops in third-party code, HTTP stacks that are not Gym's client) are treated as the blackbox audience: their parked state is quiet-at-the-model-server.</p>
+
+  <h2>Save, phase 1: prepare</h2>
+  <p>The prepare phase brings the system to a quiet, describable state. It creates nothing durable, so it can be aborted at any point by resuming the pumps and the pause flag.</p>
+  <figure class="diagram">
+    <svg viewBox="0 0 960 640" role="img" aria-label="Prepare sequence: the SingleController pauses its pumps and calls prepare on the actor; the actor sets the model-server pause sentinel and the agent-server drain flag together; then, for each active rollout independently and staggered, the in-flight generation finishes, the agent executes pending tools, exports session state, commits the boundary record, and parks at its boundary; the actor polls until every rollout is parked or terminal, then reports.">
+      <defs>
+        <marker id="pa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        <marker id="pm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--amber)"/></marker>
+        <marker id="pn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+        <marker id="pp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--proto)"/></marker>
+      </defs>
+      <g font-family="Archivo, sans-serif" font-size="11.5" fill="currentColor">
+        <rect x="15" y="14" width="110" height="32" rx="5" fill="none" stroke="currentColor"/><text x="70" y="34" text-anchor="middle">SingleController</text>
+        <rect x="180" y="14" width="110" height="32" rx="5" fill="none" stroke="currentColor"/><text x="235" y="34" text-anchor="middle">NemoGym actor</text>
+        <rect x="350" y="14" width="115" height="32" rx="5" fill="none" stroke="currentColor"/><text x="407" y="34" text-anchor="middle">Model server ×N</text>
+        <rect x="500" y="14" width="105" height="32" rx="5" fill="none" stroke="currentColor"/><text x="552" y="34" text-anchor="middle">vLLM worker</text>
+        <rect x="655" y="14" width="105" height="32" rx="5" fill="none" stroke="currentColor"/><text x="707" y="34" text-anchor="middle">Agent server</text>
+        <rect x="805" y="14" width="140" height="32" rx="5" fill="none" stroke="currentColor"/><text x="875" y="34" text-anchor="middle">Resources servers</text>
+      </g>
+      <g stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.45">
+        <line x1="70" y1="46" x2="70" y2="620"/><line x1="235" y1="46" x2="235" y2="620"/><line x1="407" y1="46" x2="407" y2="620"/><line x1="552" y1="46" x2="552" y2="620"/><line x1="707" y1="46" x2="707" y2="620"/><line x1="875" y1="46" x2="875" y2="620"/>
+      </g>
+      <g font-family="Archivo, sans-serif" font-size="11">
+        <rect x="12" y="62" width="116" height="24" rx="4" fill="var(--accent-soft)"/><text x="70" y="78" text-anchor="middle" fill="var(--accent-ink)">① pause pumps</text>
+        <line x1="70" y1="106" x2="230" y2="106" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#pa)"/>
+        <text x="150" y="98" text-anchor="middle" fill="var(--accent)">② prepare_checkpoint(deadline)</text>
+        <line x1="235" y1="134" x2="402" y2="134" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#pa)"/>
+        <text x="318" y="126" text-anchor="middle" fill="var(--accent)">③ pause sentinel</text>
+        <line x1="235" y1="162" x2="702" y2="162" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#pa)"/>
+        <text x="470" y="154" text-anchor="middle" fill="var(--accent)">③ drain flag — both set together; agents check the flag, harnesses hit the sentinel</text>
+        <rect x="330" y="176" width="155" height="36" rx="4" fill="var(--card)" stroke="var(--line)"/>
+        <text x="407" y="191" text-anchor="middle">sentinel written by one</text>
+        <text x="407" y="204" text-anchor="middle">worker; all N see it</text>
+        <rect x="295" y="228" width="655" height="304" rx="8" fill="none" stroke="var(--amber)" stroke-dasharray="6 4"/>
+        <text x="305" y="246" fill="var(--amber)" font-weight="600">for each active rollout — independently, staggered</text>
+        <line x1="552" y1="274" x2="412" y2="274" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#pp)"/>
+        <text x="500" y="266" text-anchor="middle" fill="var(--proto)">④ generation finishes: stage → TQ, commit row</text>
+        <line x1="707" y1="306" x2="870" y2="306" stroke="currentColor" stroke-width="1.4" marker-end="url(#pn)"/>
+        <text x="790" y="298" text-anchor="middle">⑤ execute pending tool calls</text>
+        <line x1="707" y1="338" x2="870" y2="338" stroke="var(--amber)" stroke-width="1.6" marker-end="url(#pm)"/>
+        <text x="790" y="330" text-anchor="middle" fill="var(--amber)">⑥ POST /ng-session/export</text>
+        <line x1="870" y1="360" x2="712" y2="360" stroke="var(--amber)" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#pm)"/>
+        <text x="792" y="376" text-anchor="middle" fill="var(--amber)">snapshot — forced at drain, cadence ignored</text>
+        <rect x="600" y="392" width="215" height="24" rx="4" fill="var(--amber-soft)"/>
+        <text x="707" y="408" text-anchor="middle" fill="var(--amber)">⑦ boundary record committed</text>
+        <rect x="580" y="428" width="255" height="24" rx="4" fill="var(--amber-soft)"/>
+        <text x="707" y="444" text-anchor="middle" fill="var(--amber)">⑧ drain flag seen → parks at its boundary</text>
+        <line x1="707" y1="478" x2="412" y2="478" stroke="currentColor" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#pn)"/>
+        <text x="558" y="470" text-anchor="middle" fill="var(--muted)">blackbox backstop: next call held open (SDK timeouts allow minutes); 503 + Retry-After past the hold budget</text>
+        <text x="305" y="506" fill="var(--muted)" font-size="10.5">no tool calls in the response → the rollout finishes /run instead: complete, unconsumed</text>
+        <text x="305" y="522" fill="var(--muted)" font-size="10.5">blackbox rollouts skip ④–⑧ entirely: quiet-at-the-model-server is their terminal state</text>
+      </g>
+      <g font-family="Archivo, sans-serif" font-size="11">
+        <line x1="235" y1="556" x2="402" y2="556" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#pa)"/>
+        <text x="420" y="548" text-anchor="start" fill="var(--accent)">⑨ status poll: every rollout parked or terminal, or deadline reached</text>
+        <line x1="230" y1="596" x2="75" y2="596" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#pa)"/>
+        <text x="152" y="588" text-anchor="middle" fill="var(--accent)">⑩ report per rollout:</text>
+        <text x="152" y="612" text-anchor="middle" fill="var(--accent)">parked · terminal · mid-tool · non-resumable</text>
+      </g>
+    </svg>
+    <figcaption>The bracketed region is the load-bearing detail: there is no global moment when agent or resources servers checkpoint. Each rollout runs steps ④–⑧ on its own schedule, as its generation and tools happen to finish; the drain flag turns the normal per-boundary save into the checkpoint mechanism. The actor's poll waits for the population, not for a phase. Generations and tool executions that miss the deadline are handled per rollout — see the edge cases below.</figcaption>
+  </figure>
+
+  <h3>What a boundary is, and how its marker is persisted</h3>
+  <p>The agent server's <code>/run</code> loop repeats four steps: send the conversation to the model server; receive the response; execute the response's tool calls against the resources servers; append the tool results to the conversation. A <b>tool boundary</b> is the moment after appending the tool results and before sending the next model call. At that moment, and only at that moment, the conversation and the environment agree: every tool effect that has happened is also written into the conversation. The other moments are not boundaries for concrete reasons — mid-generation, the response is not yet committed anywhere; mid-tools, the environment has changed in ways the conversation does not yet show. Boundary <em>k</em> is this moment after the <em>k</em>-th round of tool execution. Boundary 0 is the moment after seeding, before the first model call — it doubles as the rollout's arrival marker (wire-trace row A4).</p>
+  <p>Before the record's fields, the file layout it lives in — this is the first place the session-state directory appears, so it is defined here. Every rollout owns one directory on the Gym node's local disk, with exactly two writers who never share a file:</p>
+<pre style="background: var(--code-bg); border-radius: 8px; padding: 0.8rem 1rem; font-size: 0.82rem; overflow-x: auto; font-family: 'IBM Plex Mono', monospace;">&lt;gym_state_dir&gt;/&lt;rollout_id&gt;/
+  calls.jsonl        written only by the model server: custody columns + input delta
+                     + output items, one row per committed model call (the B&prime; ledger)
+  boundaries.jsonl   written only by the agent server: thin boundary records
+  snapshots/         written via /ng-session/export: one env snapshot or sandbox
+                     descriptor per (server, boundary), atomic rename</pre>
+<p><b>Status:</b> this is the target layout (G1/G2). Today the capture store writes flat files <code>&lt;root&gt;/&lt;rid&gt;.tokens.jsonl</code> whose rows carry full token arrays, and the session store writes a per-rollout directory with <code>boundaries.jsonl</code> and <code>&lt;server&gt;.snapshot.&lt;idx&gt;.json</code> — separate roots, no shared directory. The prototype's docstrings also place both stores on shared storage; this design deliberately moves them node-local with pack-at-cut, and that is a change, not a description. The two JSONL files are independent — different processes, different flocks — and they are joined by the ledger's primary key, never merged: on capture-prefixed routes the model server echoes its minted <code>model_call_id</code> on the response — a G2 addition; no header echo exists today — and the agent stores it in the boundary record. Commit-before-release makes the dangerous direction impossible by construction — the agent can only ever possess a call id whose ledger row is already durable, so no boundary record can reference a call that does not exist. This resolves a redundancy an earlier draft carried: the boundary record does <b>not</b> store the model's output items, because <code>calls.jsonl</code> already stores them; the record stores only what the ledger cannot yet know. The marker is one JSON line appended to <code>boundaries.jsonl</code>, one fsync per boundary. <b>Status:</b> the table below is the target schema (G2). The prototype record that exists today (<code>ToolBoundaryRecord</code>) carries <code>output_items</code> — including the model outputs — plus <code>usage</code>, <code>env_exported</code>/<code>env_state</code>, and <code>response_id</code>; G2 thins it to these fields:</p>
+  <div class="tablewrap"><table>
+    <tr><th>Field</th><th>Contents</th><th>Why it exists</th></tr>
+    <tr><td><code>rollout_id</code>, <code>boundary_index</code></td><td>Identity; index 0 = post-seed</td><td>Keys the record; readers keep the <em>last</em> record per index, so a crash-replay that appends the same index twice is harmless</td></tr>
+    <tr><td><code>tool_results</code></td><td>The environment-authored items this step produced, in Responses item format</td><td>The one thing the ledger cannot yet know: tool results only reach <code>calls.jsonl</code> inside the <em>next</em> call's input delta. Storing them here closes the one-call freshness window. The model's output items are deliberately absent — they live in the ledger row this record joins to</td></tr>
+    <tr><td><code>agent_state</code></td><td>Opaque agent-loop state beyond the conversation: counters, sampling schedules, harness bookkeeping — whatever the agent needs that the message list does not carry</td><td>The agent's own export slot, restored by resumable <code>/run</code>. The boundary record is self-sufficient <em>by contract</em>, not by assumption: anything an agent needs to resume must be placed here by that agent, and the per-server audit verifies it</td></tr>
+    <tr><td><code>usage</code></td><td>Accumulated usage as of this boundary — a full snapshot, not a delta</td><td>A resumed rollout continues its accounting without summing history</td></tr>
+    <tr><td><code>env_exported</code> + inline state</td><td>Whether environment state was captured; states small enough to inline (≈32&nbsp;KB) ride inside the record itself — one append, one fsync, no second file</td><td>Marks the boundary resumable for stateful servers; <code>false</code> for stateless servers and for servers without export support</td></tr>
+    <tr><td><code>model_call_id</code></td><td>The ledger primary key of the call that produced this step. G2 adds the response-header echo that carries it; the prototype today stores <code>response_id</code> instead. Null at boundary 0, which joins to no call</td><td><b>The join key</b> — exact, dialect-independent, minted once. Commit-before-release guarantees the referenced ledger row exists before this record can be written</td></tr>
+    <tr><td><code>response_id</code> + content fingerprint</td><td>The served response's id and the fingerprint of its output items</td><td>Corroborating witnesses, in the terminal-attribution style: they verify the primary join and fail closed on contradiction; they are never the key</td></tr>
+  </table></div>
+  <p>Large environment states do not inline. For those, the export writes a <b>snapshot file</b>, one per (server, boundary), placed by atomic rename — and the ordering is fixed: snapshot first, boundary record second. A record's existence therefore guarantees its snapshot's existence; a crash between the two writes leaves an orphaned snapshot, which is harmless. Sandbox-backed servers store a reconnect descriptor in place of state. Torn final lines are dropped by readers, the same rule as every append-only file in this design.</p>
+  <p>Persistence location follows the storage tiering: the session-state directory lives on node-local disk beside the capture ledger, and both file families are packed into the same cut archive (wire-trace row E3). A <b>resumable</b> boundary is one whose record exists and whose environment can actually be restored: stateless servers make every boundary resumable; stateful servers require the snapshot (or inline state); sandbox servers additionally require a reconnectable provider and a live sandbox at restore time. Conversation rebuild at resume uses both files: the ledger chain through the anchor call supplies the conversation, and the anchor boundary's <code>tool_results</code> are appended after it. The rollout's <b>anchor</b> — the point restore resumes from — is computed at pack time, after the population parks: the newest resumable boundary whose <code>model_call_id</code> matches a ledger row included in this cut's sync, with the witness fields verified; boundary 0 is anchor-eligible with a null <code>model_call_id</code> and anchors the rollout at its root. The pack syncs <code>calls.jsonl</code> before <code>boundaries.jsonl</code> for each rollout, so the archive preserves the same invariant the live files have: every boundary in the archive has its call in the archive. Only the agent server ever writes boundary records, because only it knows when tools finished; the actor reads them at pack and restore; the model server never touches them.</p>
+
+  <h3>When the agent and resources servers save — the timing rule and its edge cases</h3>
+  <p>The timing rule first, because everything else follows from it. Agent servers and resources servers never checkpoint as processes, and there is no phase in which "the Gym servers save". The boundary record plus environment snapshot is a <em>per-rollout</em> save that already happens during normal operation, every time a rollout finishes a round of tool calls. The drain flag does not introduce a new save path; it stops each rollout at the next point where that existing save has just run. What the checkpoint adds globally is only: set the flags, wait for the population to park, pack the files. The edge cases are what happens to individual rollouts that are not at a convenient point when the flags go up.</p>
+  <ol class="path">
+    <li><b>A rollout is mid-tool-execution and the tools are slow.</b> Example: a swebench rollout starts a four-minute test run, and the drain deadline is sixty seconds. Its boundary record for this step never commits. Its anchor stays at the previous boundary. The model call whose tools were running has a committed row in the ledger, but it lies beyond the anchor, so resume masks it and regenerates that call. For a resources server holding state in memory, this is consistent: restoring the previous snapshot replaces the state wholesale, which rewinds the half-applied tool effects. For a live sandbox it is not consistent: the sandbox's filesystem already contains the partial effects, and the reconnect descriptor points at that same sandbox. Until sandbox filesystem rewind exists, the prepare report must mark such rollouts <b>non-resumable</b>, and restore retries them from the beginning. This is the sharpest edge case in the design, and it is per-rollout, not global.</li>
+    <li><b>Why the drain flag, and not the held connection, is the primary signal for Gym's own agents.</b> Gym's internal HTTP client retries a generic failure three times with fixed half-second sleeps, retries disconnect-class errors without limit, and rides aiohttp's default five-minute total timeout — so a native agent parked on a held connection eventually aborts its rollout via the total timeout, and a middlebox that resets the held connection sends it into unbounded reconnect retries instead. The agent-side drain flag avoids all of this: the agent checks the flag <em>before</em> sending, and parks without ever opening the connection. The model-server path remains for external harnesses that cannot see the flag, for in-process library harnesses (tau2, langgraph, aviary — a third audience whose loops run third-party code and whose HTTP stacks are not Gym's client; their parked state is quiet-at-the-model-server), and for the race window where a native agent checked the flag just before it was set. A raced native request must not be left on the hold: the model server answers marked-internal requests with an immediate 503 and Retry-After, and the native client treats a paused response as an implicit drain signal — park and re-check the flag, never fail the rollout. For that audience the priority inverts: hold the connection first (their SDKs wait minutes for a response but retry errors only about twice), and answer 503 with Retry-After only past the hold budget.</li>
+    <li><b>The drain forces a snapshot even when the cadence knob would skip it.</b> During normal operation, snapshots may run on a cadence (every k-th boundary) because some environments are expensive to export. If the drain honored the cadence, a rollout could park at a boundary whose record exists but whose snapshot does not, and its anchor would silently regress to the last snapshotted boundary. The rule: a boundary reached under the drain flag always exports, cadence ignored.</li>
+    <li><b>A rollout parked before its first tool call has no session to export.</b> Nothing is wrong: there is no environment state yet, the seed is the task row, and its anchor is the root. The export step is skipped, not failed.</li>
+    <li><b>A rollout on a resources server that does not support export</b> (<code>supports_session_state()</code> returns false) parks normally and its conversation is saved normally, but its environment cannot be restored. The prepare report marks it non-resumable and restore retries it from the beginning — a rule the (future) prepare report enforces. The prototype today does something different: it treats such servers as stateless and resumes anyway, which is correct only when the server truly holds no state; the report-enforced demotion is what makes it safe in general. Per-server, recorded per rollout at cut time; one unsupported environment never degrades the deployment.</li>
+    <li><b>A rollout whose model response had no tool calls finishes instead of parking.</b> Its <code>/run</code> returns during prepare, it becomes complete-and-unconsumed, and it appears in the manifest as such. No boundary machinery is involved.</li>
+    <li><b>A periodic checkpoint kills nothing.</b> The parked <code>/run</code> loops stay alive through commit, holding their open HTTP requests, and continue the moment the flags clear. The resumable-<code>/run</code> restore path executes only after a shutdown or a crash, when the processes are actually gone.</li>
+    <li><b>The cut archive packs both file families, and anchors are computed at pack time.</b> The per-rollout ledger files and the session-store records and snapshots travel in the same archive. After the population has parked, the actor computes each rollout's anchor as: the newest boundary record that has its snapshot (or needs none, for stateless servers), whose <code>model_call_id</code> matches a ledger row included in this cut's sync. Computing anchors before the population parks would race the very saves the drain exists to finish.</li>
+  </ol>
+
+  <h2>Save, phase 2: commit</h2>
+  <p>The commit phase writes everything. The trainer save has been running since prepare began, because it touches only trainer state. Three saves run in parallel; they cannot conflict because generation is paused, so nothing writes to TransferQueue, and the rollout files never touch TransferQueue at all. The completeness marker is written last.</p>
+  <figure class="diagram">
+    <svg viewBox="0 0 1000 360" role="img" aria-label="Commit sequence: trainer save continues, the SingleController saves TransferQueue and tells the actor to commit, the actor packs rollout files to the shared filesystem, the SingleController writes the manifest last and renames atomically, then resumes.">
+      <g font-family="Archivo, sans-serif" font-size="12" fill="currentColor">
+        <rect x="15" y="14" width="130" height="32" rx="5" fill="none" stroke="currentColor"/><text x="80" y="34" text-anchor="middle">SingleController</text>
+        <rect x="210" y="14" width="110" height="32" rx="5" fill="none" stroke="currentColor"/><text x="265" y="34" text-anchor="middle">Trainer</text>
+        <rect x="380" y="14" width="140" height="32" rx="5" fill="none" stroke="currentColor"/><text x="450" y="34" text-anchor="middle">TransferQueue</text>
+        <rect x="570" y="14" width="130" height="32" rx="5" fill="none" stroke="currentColor"/><text x="635" y="34" text-anchor="middle">NemoGym actor</text>
+        <rect x="750" y="14" width="120" height="32" rx="5" fill="none" stroke="currentColor"/><text x="810" y="34" text-anchor="middle">Shared FS</text>
+        <rect x="885" y="14" width="110" height="32" rx="5" fill="none" stroke="currentColor"/><text x="940" y="34" text-anchor="middle">vLLM workers</text>
+      </g>
+      <g stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.45">
+        <line x1="80" y1="46" x2="80" y2="340"/><line x1="265" y1="46" x2="265" y2="340"/>
+        <line x1="450" y1="46" x2="450" y2="340"/><line x1="635" y1="46" x2="635" y2="340"/><line x1="810" y1="46" x2="810" y2="340"/><line x1="940" y1="46" x2="940" y2="340"/>
+      </g>
+      <g font-family="Archivo, sans-serif" font-size="11">
+        <line x1="80" y1="70" x2="260" y2="70" stroke="var(--proto)" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#cd)"/>
+        <text x="170" y="62" text-anchor="middle" fill="var(--proto)">① model+optimizer save (running since prepare)</text>
+        <line x1="80" y1="86" x2="935" y2="86" stroke="var(--amber)" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#cm)"/>
+        <text x="505" y="78" text-anchor="middle" fill="var(--amber)">optional sink barrier: hold staging puts while ② runs — the SC commands its own workers, never through Gym</text>
+        <line x1="80" y1="110" x2="445" y2="110" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#ca)"/>
+        <text x="262" y="102" text-anchor="middle" fill="var(--accent)">② save_checkpoint()</text>
+        <line x1="80" y1="140" x2="630" y2="140" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#ca)"/>
+        <text x="355" y="132" text-anchor="middle" fill="var(--accent)">③ commit_checkpoint(gym_dir)</text>
+        <line x1="635" y1="176" x2="805" y2="176" stroke="var(--proto)" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#cd)"/>
+        <text x="720" y="168" text-anchor="middle" fill="var(--proto)">④ pack unretired files → tar.zst + index</text>
+        <line x1="630" y1="210" x2="85" y2="210" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#ca)"/>
+        <text x="355" y="202" text-anchor="middle" fill="var(--accent)">⑤ done — every Gym detail lives inside gym_dir, opaque to the SC</text>
+        <rect x="862" y="216" width="132" height="72" rx="4" fill="var(--card)" stroke="var(--line)"/>
+        <text x="928" y="232" text-anchor="middle" font-size="10.5">idle — nothing to save:</text>
+        <text x="928" y="246" text-anchor="middle" font-size="10.5">weights → trainer ckpt,</text>
+        <text x="928" y="260" text-anchor="middle" font-size="10.5">KV recomputed at restore,</text>
+        <text x="928" y="274" text-anchor="middle" font-size="10.5">tokens already in TQ</text>
+        <line x1="80" y1="252" x2="805" y2="252" stroke="var(--heavy)" stroke-width="2.2" marker-end="url(#ch)"/>
+        <text x="440" y="244" text-anchor="middle" fill="var(--heavy)">⑥ write training_info.json LAST · atomic directory rename — this is the checkpoint</text>
+        <line x1="80" y1="296" x2="630" y2="296" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#ca)"/>
+        <text x="355" y="288" text-anchor="middle" fill="var(--accent)">⑦ resume(): sentinel removed · drain flag cleared · sink barrier released · pumps resume</text>
+      </g>
+      <defs>
+        <marker id="ch" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--heavy)"/>
+        </marker>
+        <marker id="cm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--amber)"/>
+        </marker>
+      </defs>
+    </svg>
+    <figcaption>Steps ②, ③/④, and the ongoing ① run in parallel. Step ⑥ waits for all of them. A crash before ⑥ leaves the previous checkpoint as the newest complete one; a crash after ⑥ leaves this one.</figcaption>
+  </figure>
+
+  <h2>Restore</h2>
+  <figure class="diagram">
+    <svg viewBox="0 0 1080 560" role="img" aria-label="Restore sequence with seven participants: the SingleController finds the newest complete checkpoint, restores TransferQueue, assigns rollouts to the actors that exist now; each actor extracts its assigned rollout files and rebuilds conversations, then re-dispatches runs; the agent server restores session state from resources servers before its first model call, which resolves to the anchor.">
+      <defs>
+        <marker id="ra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        <marker id="rm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--amber)"/></marker>
+        <marker id="rn" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+      </defs>
+      <g font-family="Archivo, sans-serif" font-size="11.5" fill="currentColor">
+        <rect x="15" y="14" width="110" height="32" rx="5" fill="none" stroke="currentColor"/><text x="70" y="34" text-anchor="middle">SingleController</text>
+        <rect x="163" y="14" width="105" height="32" rx="5" fill="none" stroke="currentColor"/><text x="215" y="34" text-anchor="middle">TransferQueue</text>
+        <rect x="318" y="14" width="115" height="32" rx="5" fill="none" stroke="currentColor"/><text x="375" y="34" text-anchor="middle">NemoGym actor</text>
+        <rect x="495" y="14" width="110" height="32" rx="5" fill="none" stroke="currentColor"/><text x="550" y="34" text-anchor="middle">Agent server</text>
+        <rect x="640" y="14" width="140" height="32" rx="5" fill="none" stroke="currentColor"/><text x="710" y="34" text-anchor="middle">Resources servers</text>
+        <rect x="822" y="14" width="115" height="32" rx="5" fill="none" stroke="currentColor"/><text x="880" y="34" text-anchor="middle">Model server</text>
+        <rect x="960" y="14" width="110" height="32" rx="5" fill="none" stroke="currentColor"/><text x="1015" y="34" text-anchor="middle">vLLM worker</text>
+      </g>
+      <g stroke="currentColor" stroke-width="1" stroke-dasharray="3 4" opacity="0.45">
+        <line x1="70" y1="46" x2="70" y2="530"/><line x1="215" y1="46" x2="215" y2="530"/><line x1="375" y1="46" x2="375" y2="530"/><line x1="550" y1="46" x2="550" y2="530"/><line x1="710" y1="46" x2="710" y2="530"/><line x1="880" y1="46" x2="880" y2="530"/><line x1="1015" y1="46" x2="1015" y2="530"/>
+      </g>
+      <g font-family="Archivo, sans-serif" font-size="11">
+        <rect x="12" y="60" width="150" height="38" rx="4" fill="var(--accent-soft)"/>
+        <text x="87" y="75" text-anchor="middle" fill="var(--accent-ink)">① newest dir with</text>
+        <text x="87" y="90" text-anchor="middle" fill="var(--accent-ink)">training_info.json wins</text>
+        <line x1="70" y1="120" x2="210" y2="120" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#ra)"/>
+        <text x="140" y="112" text-anchor="middle" fill="var(--accent)">② load_checkpoint()</text>
+        <line x1="70" y1="140" x2="1010" y2="140" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#ra)"/>
+        <text x="540" y="132" text-anchor="middle" fill="var(--accent)">②a restart vLLM workers with restored weights · reinstall the capture sink</text>
+        <rect x="12" y="152" width="150" height="38" rx="4" fill="var(--accent-soft)"/>
+        <text x="87" y="167" text-anchor="middle" fill="var(--accent-ink)">③ assign rollouts →</text>
+        <text x="87" y="182" text-anchor="middle" fill="var(--accent-ink)">actors that exist now</text>
+        <line x1="70" y1="198" x2="370" y2="198" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#ra)"/>
+        <text x="220" y="190" text-anchor="middle" fill="var(--accent)">④ restore(gym_dir, assigned rollouts)</text>
+        <rect x="285" y="212" width="180" height="38" rx="4" fill="var(--card)" stroke="var(--line)"/>
+        <text x="375" y="227" text-anchor="middle">⑤ extract assigned members</text>
+        <text x="375" y="241" text-anchor="middle">from archives → local disk</text>
+        <rect x="285" y="258" width="180" height="38" rx="4" fill="var(--card)" stroke="var(--line)"/>
+        <text x="375" y="273" text-anchor="middle">⑥ rebuild conversations: walk</text>
+        <text x="375" y="287" text-anchor="middle">parents, verify fingerprints</text>
+        <line x1="375" y1="316" x2="545" y2="316" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#ra)"/>
+        <text x="460" y="308" text-anchor="middle" fill="var(--accent)">⑦ /run, rebuilt conversation as input</text>
+        <line x1="550" y1="344" x2="705" y2="344" stroke="var(--amber)" stroke-width="1.6" marker-end="url(#rm)"/>
+        <text x="628" y="336" text-anchor="middle" fill="var(--amber)">⑦a POST /ng-session/restore</text>
+        <line x1="705" y1="366" x2="555" y2="366" stroke="var(--amber)" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#rm)"/>
+        <text x="628" y="382" text-anchor="middle" fill="var(--amber)">state rebound to the session</text>
+        <line x1="550" y1="410" x2="875" y2="410" stroke="currentColor" stroke-width="1.4" marker-end="url(#rn)"/>
+        <text x="712" y="402" text-anchor="middle">⑧ first model call</text>
+        <rect x="770" y="424" width="180" height="24" rx="4" fill="var(--card)" stroke="var(--line)"/>
+        <text x="860" y="440" text-anchor="middle">⑨ resolves to the anchor call</text>
+        <line x1="885" y1="470" x2="1010" y2="470" stroke="currentColor" stroke-width="1.4" marker-end="url(#rn)"/>
+        <text x="947" y="462" text-anchor="middle">⑩ dispatch, chain ref</text>
+        <rect x="930" y="484" width="145" height="52" rx="4" fill="var(--card)" stroke="var(--line)"/>
+        <text x="1002" y="499" text-anchor="middle">⑪ prefix from restored</text>
+        <text x="1002" y="513" text-anchor="middle">TQ (cache empty) →</text>
+        <text x="1002" y="527" text-anchor="middle">splice · generate · stage</text>
+      </g>
+    </svg>
+    <figcaption>The harness never learns it is resuming: step ⑦ looks like a normal task dispatch with a longer input, and step ⑨ is the same parent resolution that runs on every live call. Rows the dead attempt wrote after the anchor are never referenced and are masked at finalization.</figcaption>
+  </figure>
+
+  <h2>The generation workers during checkpoint and restore</h2>
+  <p>The vLLM generation workers appear thin in these diagrams, and the reason should be stated rather than left implicit: at commit time they have nothing of their own to save. Their weights are saved by the trainer's checkpoint. Their KV cache is recomputed from token ids at restore, so it is discarded on purpose. The token deltas they produced are already inside TransferQueue, which has its own snapshot. Their roles in each phase are therefore small and specific. During prepare they do one thing: finish the generations already running, each of which stages its tokens and returns its coordinates exactly as in normal operation. Nothing needs to cancel the stragglers that miss the deadline — their staged rows become orphans that the resume path masks — though the SingleController may abort them to free GPU time sooner. During commit they are idle; the one optional command they can receive is the sink barrier, where the SingleController tells its own workers to hold staging puts while the TransferQueue snapshot runs and releases them when it completes. Whether that barrier is needed depends on whether TransferQueue's save is safe under concurrent puts, which is an open verification item on the TransferQueue side. At restore, the SingleController restarts the workers with the restored weights and reinstalls the capture sink during setup. On the first resumed call a worker's prefix cache is empty, so it fetches the parent chain from the restored TransferQueue rows once, splices it as the exact prompt prefix, and proceeds as in normal operation. All commands to the workers come from the SingleController; none pass through Gym.</p>
+
+  <h2>The export/restore API</h2>
+  <p>These are the routes and hooks the diagrams reference — step ⑧ of prepare and step ⑦a of restore. They exist today on the <code>session-state-prototype</code> branch, defined on <code>SimpleResourcesServer</code>, so every resources server inherits the routes automatically. A server opts in by overriding the hooks.</p>
+  <ul>
+    <li><code>supports_session_state() → bool</code> — class hook, default <code>False</code>. A server that returns <code>False</code> keeps whole-rollout retry: its rollouts restart from the beginning instead of resuming. Support is a property of each environment server, not of the deployment.</li>
+    <li><code>export_session_state(session_id) → dict | None</code> — class hook. The server returns a JSON-serializable snapshot of one session's state. <code>workplace_assistant</code> serializes the pandas DataFrames it holds in memory; <code>blackjack</code> returns its random-number-generator state; a sandbox-backed server returns a reconnect descriptor such as the sandbox id, not the sandbox contents.</li>
+    <li><code>restore_session_state(session_id, state)</code> — class hook. The server rebinds a previously exported snapshot to the session. A freshly started server process holds no sessions in memory; this call recreates the entry.</li>
+    <li><code>POST /ng-session/export</code> — HTTP route on every resources server, called by the agent server. The route runs the export hook and writes the snapshot into the session store; snapshot before the boundary record that references it, so a record's existence guarantees its snapshot's existence. <b>Cost model, because export can be expensive:</b> the boundary <em>record</em> is thin (ids, tool results, usage) and is written at every boundary — cheap and non-negotiable. The <em>snapshot</em> is the costly part and is cadence-controlled — today an agent-side knob (<code>session_state_snapshot_every_n_steps</code>), per-server override as a G3 refinement: export every boundary (maximum crash freshness), every k-th boundary, or only at drain (zero steady-state cost; environment freshness limited to planned cuts). Drain always forces one final export regardless of cadence — unimplemented today, part of G2/G3. A skip-when-unchanged optimization needs one prerequisite first: in the prototype, a server declining to export causes the agent to skip the <em>entire boundary record</em>, losing that step's conversation delta — the record-without-snapshot path must exist before any skipping is safe.</li>
+    <li><code>POST /ng-session/restore</code> — HTTP route. The agent server calls it during a resumed <code>/run</code>, before re-entering the loop. The route accepts the state in the request body or loads the stored snapshot, then runs the restore hook.</li>
+  </ul>
+  <p>Session identity needs no new plumbing in either direction. The session id travels in the same session cookie the tool calls already use, and it is computed from the rollout id — so a resources server process started fresh after a restore derives the same session id, and the restore lands in the right session.</p>
+  <h3>How boundary markers map to sandbox state</h3>
+  <p>A boundary record never contains sandbox state. For a sandbox-backed server, the snapshot slot holds the output of <code>ConnectableProvider.serialize_handle()</code> — and reconnectability is not a new flag but an <em>existing protocol</em> in <code>nemo_gym/sandbox/providers/base.py</code>: a provider that implements <code>ConnectableProvider</code> can serialize a handle to a descriptor and later <code>connect(descriptor)</code> back to the live sandbox. Today only OpenSandbox implements it, because it has an external control plane a new Gym node can reach. Local providers — Apptainer, Docker, enroot — run the sandbox as a process with no external control plane, do not implement the protocol, and their boundaries are therefore non-resumable: the rollout restarts from scratch, safe and explicit. The resumability rule is mechanical: a boundary on a sandbox-backed server is resumable exactly when the provider implements <code>ConnectableProvider</code> and <code>connect()</code> succeeds at restore. The forward-compatibility seam is the protocol itself: a sandbox-server control plane (the PR&nbsp;2085 direction) makes local providers implement <code>ConnectableProvider</code>, which changes which rollouts are resumable without changing a single interface — the descriptor, the liveness check, and the boundary record schema all stay as they are. Token-level and conversation-level resume never depend on any of this; only environment restoration does.</p>
+
+  <h2>The complete wire trace</h2>
+  <p>Every call Gym makes or receives across a rollout's life and the checkpoint cycle, with what is durable when the call returns, and what a crash immediately afterward means for restore. The crash column is the specification: an implementation is correct exactly when every row's crash consequence holds. Step through it interactively below — arrow keys work — with the reference tables following for lookup. One scoping rule governs every crash cell: restore reads only the last completed cut's archive, never live files, so a cell that says "restore finds X" means "provided a cut packed X"; recovery from live files applies only to a same-node process restart.</p>
+  <div class="stepper" id="wt">
+    <div class="controls">
+      <button id="wt-prev" type="button">&larr; Prev</button>
+      <button id="wt-next" type="button">Next &rarr;</button>
+      <span class="phase" id="wt-phase"></span>
+      <span class="phase" id="wt-count" style="margin-left:auto"></span>
+    </div>
+    <svg id="wt-svg" viewBox="0 0 960 120" role="img" aria-label="Current wire-trace step, drawn between the participating processes.">
+      <defs><marker id="wt-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker></defs>
+      <g id="wt-actors" font-family="Archivo, sans-serif" font-size="11.5"></g>
+      <g id="wt-arrow"></g>
+    </svg>
+    <div class="chips" id="wt-chips" role="tablist" aria-label="Wire-trace steps"></div>
+    <dl class="panel">
+      <dt>Call</dt><dd id="wt-call"></dd>
+      <dt>What travels</dt><dd id="wt-detail"></dd>
+      <dt>Durable when it returns</dt><dd id="wt-durable"></dd>
+      <dt>If we crash right after</dt><dd id="wt-crash"></dd>
+    </dl>
+  </div>
+  <script>
+  (function () {
+    var A = ["SingleController", "NemoGym actor", "Agent server", "Resources", "Model server", "vLLM worker", "TransferQueue", "Shared FS"];
+    var P = { A: "Phase A — dispatch and seed", B: "Phase B — one model call", C: "Phase C — completion and retirement", D: "Phase D — prepare", E: "Phase E — commit", F: "Phase F — restore and resume" };
+    var S = [
+      ["A1",0,1,"SC → actor · Ray dispatch","Task rows with stamped attempt-scoped rollout ids {group}_g{i}_a{n}.","The SC's own ledger and periodic snapshots record the dispatch.","Re-dispatched as a new attempt; nothing existed Gym-side."],
+      ["A2",1,2,"actor → agent · POST /run","Seed input in responses_create_params plus the rollout id; the connection is held open for the rollout's whole life.","Nothing yet.","Same as A1."],
+      ["A3",2,3,"agent → resources · POST /seed_session","Session cookie derived from the rollout id. A sandbox-backed server may allocate its sandbox here through Gym's sandbox API (attribution metadata today: OpenSandbox only; rollout-id stamping is the G4 extension).","In-memory session; possibly a live sandbox.","In-memory state vanishes. An allocated sandbox is reaped by the label-query janitor — never found via our files."],
+      ["A4",2,3,"agent · boundary record 0","POST /ng-session/export, then append {boundary_index: 0, tool_results: [], env state or sandbox descriptor} — snapshot first, record second.","The arrival marker: the rollout now exists Gym-side, and a seed-time sandbox is recorded and cannot leak.","Restore finds boundary 0, reconnects the recorded sandbox, and resumes from the top instead of re-allocating."],
+      ["B1",2,4,"agent → model server · POST …/v1/responses","The full conversation — the stateless protocol re-sends everything on every call.","Nothing.","Request lost; the client retries carrying the same logical request id."],
+      ["B2",4,4,"model server · admission","Visibility count +1 → pause-sentinel check → parent resolution (fingerprint match + extension check; the input delta is the suffix) → mint the call id → append the intent line.","The intent.","Dangling intent → masked; the agent's request errors and the SC retries or resumes the rollout."],
+      ["B3",4,5,"model server → worker · POST /v1/chat/completions","Messages plus ng_capture{rid, call_id, parent_call_id, staging_chain}. No token arrays on this hop.","Nothing.","The client retries; staging is keyed by call id, so the retry re-stages the same key idempotently."],
+      ["B4",5,6,"worker → TQ · put_samples, before acking","Prefix from local cache, else TQ by chain; generate; stage token ids, mask, and logprob deltas at key {rid}/{call_id}, synchronously.","The TQ row — snapshot-durable at cuts.","Orphaned TQ row plus dangling intent: both masked."],
+      ["B5",5,4,"worker → model server · response","Text plus token-free coordinates: staging key, prev/delta/cum lengths, digests, weight version, prefix-verified attestation.","Nothing.","As B3."],
+      ["B6",4,4,"model server · commit","Append the B′ row — custody + input delta + output items — with a self-healing append and fsync per policy; then release the token-stripped response, echoing the minted model_call_id as a header.","The resume record for call k.","The agent never saw the response, but the row is durable; the anchor after restore may include call k."],
+      ["B7",2,3,"agent → resources · POST /{tool}","One call per tool call in the response; environment effects happen now.","Environment effects.","Mid-tool: in-memory environments rewind via the k−1 snapshot; a live sandbox is already dirtied → the rollout is non-resumable."],
+      ["B8",2,3,"agent · boundary k","/ng-session/export (cadence-gated normally, forced under drain) → snapshot → append the thin record {model_call_id, tool_results, usage, agent_state}.","Resumable boundary k.","The anchor stays at k−1; an orphaned snapshot is harmless."],
+      ["C1",2,1,"agent → actor · /run returns","The final Responses payload comes back on the held connection.","Rollout complete, unconsumed.","Re-dispatch resumes from the last boundary; the terminal call's row is already durable."],
+      ["C2",1,4,"actor → model server · GET manifest","Bearer-authed read of the token-free call records.","Nothing — a read.","Re-pull; the ledger file is the truth."],
+      ["C3",0,6,"SC → finalizer → TQ · finalize","The finalizer fetches staged rows by manifest keys, verifies digests, lengths, masks, and weight versions, publishes exactly N train rows per group, clears staging keys.","Canonical rows in TQ.","Finalization re-runs idempotently from receipts plus the ledger."],
+      ["C4",0,1,"SC → actor · retire(rid)","After the trainer consumes: delete local and shared files and the session directory, skipping anything a live checkpoint references.","Space reclaimed.","Deletes are idempotent; the TTL sweep finishes half-retires."],
+      ["D1",0,1,"SC → actor · prepare_checkpoint(deadline)","A Ray call. Prepare creates nothing durable.","Nothing.","Abort = resume(); the previous checkpoint stands."],
+      ["D2",1,4,"actor → model server · POST /control/pause","One worker writes the sentinel file; all N workers see it on their next request.","The pause flag — a file.","Re-send; idempotent."],
+      ["D3",1,2,"actor → agent · POST /control/drain","The drain flag is set; native loops check it before each model call, so they park without opening a connection.","The drain flag.","Re-send; idempotent."],
+      ["D4",2,2,"per rollout · drain to boundary","Each active rollout runs B4–B8 to its boundary, independently and staggered, with the export cadence-exempt. Blackbox rollouts skip this: quiet-at-the-model-server is their terminal state.","Boundary records advance.","Each rollout lands in parked, terminal, or mid-tool — independently."],
+      ["D5",1,4,"actor · status polls","Model server: {paused, in_flight} from per-worker counter files, cross-checked against dangling intents. Agent server: per-rollout loop position {rid: parked | running | mid-tool}.","Nothing — reads.","Re-poll."],
+      ["D6",1,0,"actor → SC · prepare report","Per rollout, {state, resumable} only — dispatch-level facts. Anchors and file details stay inside Gym.","Nothing.","Recomputed from the files on retry."],
+      ["E1",0,6,"SC → TQ · save_checkpoint()","Optionally bracketed by the sink barrier at the workers.","The TQ snapshot on disk.","The previous TQ checkpoint stands; nothing references the new one yet."],
+      ["E2",0,1,"SC → actor · commit_checkpoint(gym_dir)","The SC hands the actor a subdirectory of the checkpoint and learns nothing about its contents.","Nothing.","Re-run; packing is idempotent."],
+      ["E3",1,7,"actor → shared FS · pack","Byte-range sync of both file families (torn tails trimmed) → archive + member index + Gym's own manifest with anchors, segments, and synced lengths — all inside gym_dir; fsync. Returns success or failure, nothing more.","The cut archive and the Gym manifest, opaque to the SC.","Re-pack; append-only sources make every re-copy a valid extension of the previous one."],
+      ["E4",0,7,"SC · training_info.json + rename","Binds the trainer checkpoint, the TQ digest, and the gym_dir path — never Gym's internal state. Written last; atomic directory rename.","The checkpoint exists.","Before the rename the previous checkpoint stands; after it, this one does. There is no third state."],
+      ["F1",0,0,"SC · pick the checkpoint","The newest directory containing training_info.json wins; read the sidecar.","Nothing.","Deterministic re-pick."],
+      ["F2",0,6,"SC → TQ · load_checkpoint()","Restore the partitions; reconcile expected staging keys by counting — partial misses return fewer rows without an error.","TQ repopulated.","Re-run."],
+      ["F3",0,5,"SC → workers · restart","Restored weights loaded; the capture sink reinstalled during setup.","Serving up.","The normal engine startup path; re-run."],
+      ["F4",0,1,"SC → actor · restore(gym_dir, ids)","The path plus a subset of rollout ids — shared vocabulary, because the SC dispatched them. The actor reads its own manifest, extracts its assigned members (no fsync), and rebuilds each conversation: walk parents, verify the fingerprint chain, fail closed.","The local working set.","Re-extract from the same archive."],
+      ["F5",1,2,"actor → agent · POST /run (resume)","The rebuilt conversation as responses_create_params.input, plus the resume marker. The agent must not seed: the decision table on entry checks records against the marker and refuses on any disagreement.","The loop is live.","Re-dispatch under a per-rollout single-flight rule: the agent refuses a second concurrent /run for an attempt whose loop is live, and a dispatch-epoch token lets servers reject stale duplicates. Attempt ids separate fresh retries only."],
+      ["F6",2,3,"agent → resources · POST /ng-session/restore","Stateful servers rebind their exported state. Sandbox servers reconnect by id and verify liveness — a dead or expired sandbox demotes the rollout to non-resumable, and the SC retries it fresh.","Environment rebound.","Re-restore; rebinding is idempotent."],
+      ["F7",2,4,"agent → model server · first resumed call","Fingerprint resolution lands on the anchor; the worker's empty cache fetches the chain prefix from restored TQ once, splices it, generates, stages.","Normal operation.","This is Phase B again — every crash from here is covered by B1–B8."]
+    ];
+    var cx = function (i) { return 62 + i * 120; };
+    var actors = document.getElementById("wt-actors");
+    var html = "";
+    for (var i = 0; i < A.length; i++) {
+      html += '<rect id="wt-a' + i + '" x="' + (cx(i) - 56) + '" y="10" width="112" height="30" rx="6" fill="none" stroke="var(--line)"/>' +
+              '<text x="' + cx(i) + '" y="29" text-anchor="middle" fill="currentColor">' + A[i] + "</text>";
+    }
+    actors.innerHTML = html;
+    var chips = document.getElementById("wt-chips");
+    S.forEach(function (s, i) {
+      var b = document.createElement("button");
+      b.type = "button"; b.textContent = s[0]; b.setAttribute("role", "tab");
+      b.addEventListener("click", function () { go(i); });
+      chips.appendChild(b);
+    });
+    var cur = 0;
+    function go(i) {
+      cur = (i + S.length) % S.length;
+      var s = S[cur], f = s[1], to = s[2];
+      document.getElementById("wt-phase").textContent = P[s[0][0]];
+      document.getElementById("wt-count").textContent = "step " + (cur + 1) + " of " + S.length;
+      document.getElementById("wt-call").textContent = s[0] + " — " + s[3];
+      document.getElementById("wt-detail").textContent = s[4];
+      document.getElementById("wt-durable").textContent = s[5];
+      document.getElementById("wt-crash").textContent = s[6];
+      for (var k = 0; k < A.length; k++) {
+        var r = document.getElementById("wt-a" + k);
+        var on = (k === f || k === to);
+        r.setAttribute("stroke", on ? "var(--accent)" : "var(--line)");
+        r.setAttribute("stroke-width", on ? "2" : "1");
+      }
+      var g = document.getElementById("wt-arrow"), x1 = cx(f), x2 = cx(to);
+      if (f === to) {
+        g.innerHTML = '<path d="M ' + (x1 - 20) + ' 44 C ' + (x1 - 20) + ' 84, ' + (x1 + 20) + ' 84, ' + (x1 + 20) + ' 48" fill="none" stroke="var(--accent)" stroke-width="2.2" marker-end="url(#wt-ah)"/>' +
+          '<text x="' + x1 + '" y="104" text-anchor="middle" font-family="Archivo, sans-serif" font-size="12" fill="var(--accent)">' + s[0] + " (local)</text>";
+      } else {
+        var d = x2 > x1 ? 1 : -1;
+        g.innerHTML = '<line x1="' + (x1 + 58 * d) + '" y1="72" x2="' + (x2 - 62 * d) + '" y2="72" stroke="var(--accent)" stroke-width="2.4" marker-end="url(#wt-ah)"/>' +
+          '<line x1="' + x1 + '" y1="40" x2="' + x1 + '" y2="72" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="3 3"/>' +
+          '<line x1="' + x2 + '" y1="40" x2="' + x2 + '" y2="72" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="3 3"/>' +
+          '<text x="' + ((x1 + x2) / 2) + '" y="94" text-anchor="middle" font-family="Archivo, sans-serif" font-size="12" fill="var(--accent)">' + s[0] + "</text>";
+      }
+      var bs = chips.children;
+      for (var c = 0; c < bs.length; c++) bs[c].className = c === cur ? "on" : "";
+    }
+    document.getElementById("wt-prev").addEventListener("click", function () { go(cur - 1); });
+    document.getElementById("wt-next").addEventListener("click", function () { go(cur + 1); });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowRight") go(cur + 1);
+      if (e.key === "ArrowLeft") go(cur - 1);
+    });
+    go(0);
+  })();
+  </script>
+
+
+  <h3>Phase A — dispatch and seed</h3>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Call</th><th>Durable when it returns</th><th>Crash immediately after</th></tr>
+    <tr><td class="n">A1</td><td>SC → actor (Ray): dispatch task rows with stamped attempt-scoped rollout ids <code>{group}_g{i}_a{n}</code></td><td>The SC's own ledger and periodic snapshots record the dispatch</td><td>Re-dispatched as a new attempt; nothing existed Gym-side</td></tr>
+    <tr><td class="n">A2</td><td>actor → agent server: <code>POST /run</code> — seed input in <code>responses_create_params</code>, rollout id attached; the connection is held open for the rollout's whole life</td><td>Nothing yet</td><td>Same as A1</td></tr>
+    <tr><td class="n">A3</td><td>agent → resources server: <code>POST /seed_session</code> (session cookie derived from the rollout id). A sandbox-backed server may allocate its sandbox here</td><td>In-memory session; possibly a live sandbox</td><td>The in-memory state vanishes; an allocated sandbox survives outside our records — it is reaped by the tag janitor (assumption 6), never found via our files</td></tr>
+    <tr><td class="n">A4</td><td>agent → resources: <code>POST /ng-session/export</code>, then the local write of <b>boundary record 0</b> — <code>{boundary_index: 0, tool_results: [], env state or sandbox descriptor}</code>, snapshot first, record second</td><td><b>The arrival marker.</b> The rollout now exists Gym-side, and a seed-time sandbox is recorded and can no longer leak</td><td>Restore finds boundary 0, reconnects the recorded sandbox, and resumes from the top instead of re-allocating</td></tr>
+  </table></div>
+
+  <h3>Phase B — one model call (call k), the loop body</h3>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Call</th><th>Durable when it returns</th><th>Crash immediately after</th></tr>
+    <tr><td class="n">B1</td><td>agent → model server: <code>POST /ng-rollout/{rid}/training-token-capture/v1/responses</code>, full conversation</td><td>Nothing</td><td>Request lost; the client retries carrying the same logical request id</td></tr>
+    <tr><td class="n">B2</td><td>model server, inside the handler: visibility count +1 → pause-sentinel check → parent resolution (ledger read under shared flock; fingerprint + extension check; input delta = the suffix) → mint <code>model_call_id</code> → append the <b>intent line</b> (PR 2180 machinery: a separate fsynced <code>.intents</code> file, and a dangling intent masks the <em>rollout</em> at freeze — not a row in the ledger)</td><td>The intent</td><td>Dangling intent → masked; the agent's request errors and the SC retries or resumes the rollout</td></tr>
+    <tr><td class="n">B3</td><td>model server → vLLM worker: <code>POST /v1/chat/completions</code> with <code>ng_capture{rid, call_id, parent_call_id, staging_chain}</code></td><td>Nothing</td><td>The model server's client retries; staging is keyed by call id, so a retried request re-stages the same key idempotently</td></tr>
+    <tr><td class="n">B4</td><td>worker, before acking: prefix from local cache, else TQ by chain → generate → synchronous <code>put_samples</code> to <code>rollout_staging</code>, key <code>{rid}/{call_id}</code></td><td>The TQ row (snapshot-durable at cuts)</td><td>Orphaned TQ row plus dangling intent — both masked</td></tr>
+    <tr><td class="n">B5</td><td>worker → model server: text + token-free coordinates <code>{staging_key, prev/delta/cum lengths, digests, weight_version, prefix_verified}</code></td><td>Nothing</td><td>As B3</td></tr>
+    <tr><td class="n">B6</td><td>model server: append the <b>commit row</b> (custody + input delta + output items; self-healing append; fsync per policy) → visibility count −1 → release the token-stripped response, echoing the minted <code>model_call_id</code> as a response header</td><td>The resume record for call k</td><td>The agent never saw the response, but the row is durable; the anchor after restore may include call k</td></tr>
+    <tr><td class="n">B7</td><td>agent → resources: <code>POST /{tool}</code> for each tool call in the response</td><td>Environment effects</td><td>Mid-tool: in-memory environments rewind via the k−1 snapshot at restore; a live sandbox is already dirtied → the rollout is non-resumable (prepare edge case 1)</td></tr>
+    <tr><td class="n">B8</td><td>agent → resources: <code>POST /ng-session/export</code> (cadence-gated normally, forced under drain) → snapshot write → <b>boundary record k</b> append — the thin record: call k's echoed <code>model_call_id</code>, the tool results, usage, and <code>agent_state</code></td><td>Resumable boundary k</td><td>Anchor stays at k−1; an orphaned snapshot is harmless</td></tr>
+  </table></div>
+
+  <h3>Phase C — completion, finalization, retirement</h3>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Call</th><th>Durable when it returns</th><th>Crash immediately after</th></tr>
+    <tr><td class="n">C1</td><td>agent → actor: the held <code>/run</code> connection returns the final Responses payload</td><td>Rollout complete, unconsumed</td><td>Re-dispatch resumes from the last boundary; the terminal call's row is already durable</td></tr>
+    <tr><td class="n">C2</td><td>actor → model server: <code>GET /ng-rollout/{rid}/manifest</code> (bearer) → token-free call records</td><td>Nothing — a read</td><td>Re-pull; the ledger file is the truth</td></tr>
+    <tr><td class="n">C3</td><td>SC → finalizer: metadata-only request; the finalizer fetches staged rows by manifest keys, verifies digests, lengths, masks, and weight versions, publishes exactly N train rows per group, clears staging keys</td><td>Canonical rows in TQ</td><td>Finalization re-runs idempotently from receipts plus the ledger</td></tr>
+    <tr><td class="n">C4</td><td>SC → actor: <code>retire(rid)</code> after the trainer consumes — delete local and shared files and the session directory, skipping anything a live checkpoint references</td><td>Space reclaimed</td><td>Deletes are idempotent; a half-finished retire completes on the next retire or the orphan TTL sweep</td></tr>
+  </table></div>
+
+  <h3>Phase D — prepare</h3>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Call</th><th>Durable when it returns</th><th>Crash immediately after</th></tr>
+    <tr><td class="n">D1</td><td>SC → actor: <code>prepare_checkpoint(deadline)</code></td><td>Nothing</td><td>Abort = <code>resume()</code>; the previous checkpoint stands</td></tr>
+    <tr><td class="n">D2</td><td>actor → model server: <code>POST /control/pause</code> → sentinel file created → <code>{paused: true}</code></td><td>The pause flag</td><td>Re-send; idempotent</td></tr>
+    <tr><td class="n">D3</td><td>actor → agent server: <code>POST /control/drain {deadline}</code> → drain flag set → <code>{draining: true}</code></td><td>The drain flag</td><td>Re-send; idempotent</td></tr>
+    <tr><td class="n">D4</td><td>Per rollout, staggered: rows B4–B8 run to the boundary, with B8's export cadence-exempt</td><td>Boundary records advance</td><td>Each rollout independently lands in one outcome: parked, terminal, or mid-tool</td></tr>
+    <tr><td class="n">D5</td><td>actor polls two status routes: model server <code>GET /control/status</code> → <code>{paused, in_flight}</code> from worker counter files cross-checked against dangling intents; agent server <code>GET /control/status</code> → per-rollout loop position <code>{rid: parked | running | mid-tool}</code></td><td>Nothing — reads</td><td>Re-poll</td></tr>
+    <tr><td class="n">D6</td><td>actor → SC: prepare report, per rollout: <code>{state, resumable}</code> — dispatch-level facts the SC already owns the vocabulary for. Anchors and file details stay inside Gym</td><td>Nothing</td><td>Recomputed from the files on retry</td></tr>
+  </table></div>
+
+  <h3>Phase E — commit</h3>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Call</th><th>Durable when it returns</th><th>Crash immediately after</th></tr>
+    <tr><td class="n">E1</td><td>SC → TQ: <code>save_checkpoint()</code>, optionally bracketed by the sink barrier to the workers</td><td>The TQ snapshot on disk</td><td>The previous TQ checkpoint stands; no sidecar references the new one yet</td></tr>
+    <tr><td class="n">E2</td><td>SC → actor: <code>commit_checkpoint(gym_dir)</code> — the SC hands the actor a subdirectory of the checkpoint and learns nothing about its contents</td><td>Nothing</td><td>Re-run; packing is idempotent</td></tr>
+    <tr><td class="n">E3</td><td>actor: byte-range sync of ledger and session files (torn tails trimmed) → pack the archive + member index → write Gym's own manifest (anchors, segments, synced lengths) → fsync — all of it <em>inside</em> <code>gym_dir</code>. The return value is success or failure, nothing more</td><td>The cut archive and the Gym manifest, opaque to the SC</td><td>Re-pack; append-only sources make every re-copy a valid extension of the previous one</td></tr>
+    <tr><td class="n">E4</td><td>SC: write <code>training_info.json</code> binding the trainer checkpoint, the TQ digest, and the <code>gym_dir</code> <em>path</em> — never Gym's internal state; atomic directory rename last</td><td><b>The checkpoint exists</b></td><td>Before the rename, the previous checkpoint stands; after it, this one does. There is no third state</td></tr>
+  </table></div>
+
+  <h3>Phase F — restore and resume</h3>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Call</th><th>Durable when it returns</th><th>Crash immediately after</th></tr>
+    <tr><td class="n">F1</td><td>SC: pick the newest directory containing <code>training_info.json</code>; read the sidecar</td><td>Nothing</td><td>Deterministic re-pick</td></tr>
+    <tr><td class="n">F2</td><td>SC → TQ: <code>load_checkpoint()</code>; reconcile expected staging keys against <code>list_sample_ids</code> by counting — a partial miss returns fewer rows without an error</td><td>TQ repopulated</td><td>Re-run</td></tr>
+    <tr><td class="n">F3</td><td>SC → workers: restart with restored weights; reinstall the capture sink during setup</td><td>Serving up</td><td>The normal engine startup path; re-run</td></tr>
+    <tr><td class="n">F4</td><td>SC → actor: <code>restore(gym_dir, assigned_rollout_ids)</code> — the path plus a subset of ids, which are shared vocabulary because the SC dispatched them. The actor reads its own manifest from <code>gym_dir</code>, extracts its assigned members to local disk (no fsync), and rebuilds each conversation — walk parents, verify the fingerprint chain, fail closed</td><td>The local working set</td><td>Re-extract from the same archive</td></tr>
+    <tr><td class="n">F5</td><td>actor → agent: <code>POST /run</code> with the rebuilt conversation as <code>responses_create_params.input</code>, resume flag and rollout id. <b>The agent must not call <code>/seed_session</code> on resume</b> — it detects the existing session records and restores instead of seeding</td><td>The loop is live</td><td>Re-dispatch under a per-rollout <b>single-flight rule</b>: the agent refuses a second concurrent <code>/run</code> for an attempt whose loop is live, and a dispatch-epoch token lets servers reject stale duplicates. Attempt-scoped ids separate fresh retries only — they do not cover same-attempt duplication</td></tr>
+    <tr><td class="n">F6</td><td>agent → resources: <code>POST /ng-session/restore</code> per stateful server. A sandbox server reconnects by the recorded id and <b>must verify liveness</b> — a dead or expired sandbox demotes the rollout to non-resumable, and the SC retries it fresh: new attempt, new seed, new sandbox</td><td>Environment rebound</td><td>Re-restore; rebinding is idempotent</td></tr>
+    <tr><td class="n">F7</td><td>agent → model server → worker: the first resumed model call. Fingerprint resolution lands on the anchor; the worker's cache is empty, so it fetches the chain prefix from restored TQ once, splices, generates, stages</td><td>Normal operation</td><td>This row <em>is</em> Phase B — every crash from here is covered by the B rows</td></tr>
+  </table></div>
+
+  <h2>Two custody questions, answered</h2>
+  <p><b>Is a marker needed when Gym receives the rollout, before any model-server record exists?</b> Yes, and it is not a new mechanism: it is <b>boundary record 0</b>, written at row A4, immediately after seeding and before the first model call. Without it, a rollout killed between seeding and its first commit is invisible to Gym-side restore — which is acceptable for the conversation (the SC re-dispatches from the task row) but not for resources: a sandbox allocated during seeding would exist with no record pointing at it. Boundary record 0 closes that window for every crash after A4. The window between A3 and A4 — sandbox allocated, record not yet written — cannot be closed by our own records at all, which is why assumption 6 requires sandboxes to be tagged with <code>{run_id, rollout_id}</code> at allocation and reaped by a tag-based janitor that does not depend on our files.</p>
+  <p><b>Where do sandbox ids live?</b> One custody chain, one owner at each step, and two parties that never see them. The resources server allocates the sandbox through Gym's sandbox API — which today stamps team/user/workload/run attribution on OpenSandbox only; stamping the rollout id everywhere is the G4 extension — and holds the live handle in memory (A3). At every boundary, its export hook returns the reconnect descriptor — the sandbox id and connection details, not the sandbox contents — and the descriptor is written into the session store's snapshot, referenced by the boundary record (A4, B8). The session store's files are packed into the cut archive with everything else (E3). At restore, the descriptor comes back through <code>/ng-session/restore</code>, and the resources server — the only component that ever interprets it — reconnects and verifies liveness (F6). The agent server carries the descriptor as opaque bytes inside records it owns; the actor packs and extracts files it never parses; the SC and the model server never see sandbox ids at all.</p>
+
+  <h2>Stated assumptions</h2>
+  <p>Everything above is sound if and only if these hold. Each is either a property to verify or a rule to enforce; none is optional.</p>
+  <ol class="path">
+    <li><b>Stateless conversation protocol.</b> The harness re-sends the complete message list on every model call. Parent resolution, per-call transcript capture, and resume-by-re-dispatch all stand on this single property.</li>
+    <li><b>Ordering invariants.</b> Stage before commit at the worker; commit before release at the model server; snapshot before boundary record at the agent; files before sidecar at the cut; marker file last at commit. Every crash-consequence cell in the wire trace derives from these five orderings.</li>
+    <li><b>TransferQueue.</b> Puts are idempotent by sample key. <code>save_checkpoint</code>/<code>load_checkpoint</code> round-trips the staging partition. Whether the save is safe under concurrent puts is <b>unverified</b> — the sink barrier exists to make the question moot.</li>
+    <li><b>Filesystem.</b> Atomic rename on local and shared filesystems; fsync durability as configured; flock honored between the model server's worker processes — they share one node, so same-node advisory locking suffices, and no cross-node locking is ever required.</li>
+    <li><b>Identity.</b> Session ids and worker affinity are pure functions of the rollout id. Call-id collisions under uuid4 are ignored as negligible. Internal clients send a logical request id for retry deduplication, and the model server echoes the minted call id on capture-route responses — the boundary join key is the ledger's primary key, not a secondary id. Parent resolution treats candidate rows with identical staging digests as a single candidate — this covers a double-recorded response from an external harness retry, which carries no logical id.</li>
+    <li><b>Sandboxes.</b> Every sandbox is created through Gym's own sandbox API (<code>nemo_gym/sandbox</code>), whose attribution layer resolves team/user/workload/run metadata — wired up today by exactly one provider, OpenSandbox, where it becomes queryable Kubernetes labels; the other providers merge nothing yet. The G4 rule is therefore two keys of work, not one: wire attribution through every provider, and add the attempt-scoped <code>rollout_id</code> to the metadata at allocation. The janitor is then a Gym-side sweep, not an external hope: query the provider by run label, and reap every sandbox whose rollout is neither live nor referenced by a live checkpoint. For providers that cannot list by label, a durable allocation registry — append-only, written by the sandbox API at creation — is the fallback. Sandbox lifetime must exceed the maximum expected restore gap; reconnect-by-id is supported and verified at restore; filesystem rewind is <b>not</b> assumed — which is exactly why mid-tool sandbox rollouts are non-resumable.</li>
+    <li><b>Process management.</b> The NemoGym actor runs with <code>max_restarts=0</code>: every restart is deliberate and SC-driven. The SC is the only dispatcher of rollouts.</li>
+    <li><b>Blackbox harnesses.</b> Capture works for them. Partial resume is not part of the base design, because their loop state lives outside Gym — in the base design their rollouts restart from scratch. There is a harness-specific extension path that requires no architectural change: keep the harness's Gym-provisioned sandbox alive across the gap (its descriptor is in boundary record 0), reconnect at restore, and re-launch the harness using its own persistence — Claude Code and Codex both keep session state on the sandbox filesystem and support native resume. The relaunched harness re-sends its conversation, and fingerprint resolution admits it against the ledger exactly like any continuing call. What makes this an extension rather than the default: it depends on each harness's resume capability and on the wrapper knowing how to invoke it, and the harness's in-flight model call at the kill is always lost and regenerated.</li>
+    <li><b>No clock dependencies.</b> No step relies on synchronized clocks. Ordering comes from write order on single files; correlation comes from ids.</li>
+    <li><b>No derived state in the checkpoint.</b> KV caches, lineage caches, resolver cursors, and worker prefix caches are all rebuilt from the logs. If a piece of state can be recomputed, it is never saved.</li>
+    <li><b>Buffered SSE.</b> Streaming responses are synthesized from a fully buffered backend completion, which is what lets commit-before-release and the header echo survive streaming clients. This is load-bearing: a true token-streaming backend would deliver a prefix the client has seen before any row commits, forking the harness's history from the ledger. Hold budgets are sized from streaming clients' time-to-first-event timeouts, not the ten-minute full-response number.</li>
+    <li><b>One SingleController, leased.</b> Exactly one SC is alive at a time, enforced by a lease; the actor's checkpoint operations serialize.</li>
+    <li><b>Actors die with their owner.</b> NemoGym actors are non-detached and take their subprocess groups down; a new SC tears down survivors before restore.</li>
+    <li><b>Actor tags on model traffic.</b> Every model-server request is tagged policy / environment / internal-eval at admission; pause, counting, chains, anchors, and finalization scope by tag (see the two-planes section).</li>
+  </ol>
+
+  <h2>Rules the adversarial audit added</h2>
+  <p>Four independent reviews (code-grounding, state-schema consistency, mechanism-by-actor-class coverage, crash-and-race interleavings) produced 74 findings. The status corrections and the two-planes section absorb the largest ones; the remaining accepted rules are recorded here so none lives only in a review thread. Each is binding on the implementation.</p>
+  <h3>Checkpoint and restore integrity</h3>
+  <ol class="path">
+    <li>TQ snapshots are content-addressed: each <code>save_checkpoint</code> writes to a fresh path, never mutating bytes an existing <code>training_info.json</code> binds; restore loads by the bound digest, never "latest". A crash mid-save can then never corrupt the previous checkpoint.</li>
+    <li>Checkpoint ordering is by the step number encoded in the directory name — never by mtime, which would be a clock dependency the assumptions register forbids.</li>
+    <li>After the atomic rename, fsync the checkpoint root directory before treating commit as complete; rename makes a directory visible, not durable.</li>
+    <li>The actor packs to temporary names and renames archive, index, and manifest into place; each commit attempt uses a fresh <code>gym_dir</code>, so an abandoned half-pack is never re-entered.</li>
+    <li>The member index drops any boundary row whose <code>model_call_id</code> is not among this cut's synced calls — the anchor filter promoted to an archive filter, closing the window where a call commits between the pack's two file reads.</li>
+    <li>Restore assignments include complete-but-unfinalized rollouts as <em>extraction-only</em> members: their ledger files are extracted so the manifest route can serve finalization, but no <code>/run</code> is dispatched.</li>
+    <li>Retirement is fenced from prepare through commit: in-flight retires are joined before packing begins, and the pack excludes a rollout entirely if any of its files vanishes mid-copy — all files or none.</li>
+    <li>The TTL sweep applies the same checkpoint-pin predicate as retire, re-read from the newest manifest at reap time; the janitor re-checks the newest manifest after selecting victims.</li>
+    <li>Retirement triggers on terminal disposition — consumed, failed-final (judge-failed rows included), or superseded by a new attempt — not on trainer consumption alone; superseded attempts' staged TQ rows are swept by attempt id, closing the orphan accumulation the checkpoint would otherwise re-persist forever.</li>
+    <li>Staging-key reconciliation runs after extraction (or against an expected-count the Gym manifest carries), and every assigned rollout's anchor chain is verified against restored TQ <em>before</em> dispatch, demoting to fresh retry on a miss — never surfacing as a serving error after the environment is already rebound.</li>
+  </ol>
+  <h3>Pause, drain, and quiescence</h3>
+  <ol class="path">
+    <li>Commit's resume step clears all three controls: the model-server sentinel, the agent-server drain flag (a flag file, same idiom), and the worker sink barrier. Barrier release is also unconditional in abort and in SingleController startup, so a crash between engage and release can never wedge generation.</li>
+    <li>Model-server startup clears any stale sentinel and counter files; counter files carry the worker's incarnation (pid + start time), and the status route ignores counters from dead incarnations — a crashed worker can never wedge quiescence.</li>
+    <li>In-process counter updates are atomic with respect to the event loop: no await between read and rename, or a per-worker lock — otherwise concurrent coroutines lose increments and a zero count lies.</li>
+    <li>Prepare must await in-flight <em>finalizations</em>, not only generations, before the TQ save — the sink barrier gates worker staging, not the finalizer — and the finalizer publishes before it clears, so a torn snapshot re-runs instead of stranding a group.</li>
+    <li><code>POST /control/pause</code> carries the deadline; Retry-After is computed from it during drain.</li>
+    <li>Boundary records with empty <code>tool_results</code> are permitted at any model-call edge with no pending tool calls, so chat-only and reasoning-only stretches anchor at their latest call instead of regenerating durably committed work; for gymnasium-style loops the boundary is "after the turn's environment interaction completes", with the observation as the tool-results equivalent.</li>
+    <li>Seeding is idempotent per session key: a retried <code>/seed_session</code> reuses the session's existing sandbox instead of allocating a second one.</li>
+    <li>The resume decision table's refuse-loudly cell is scoped to marker-capable dispatchers; eval dispatch (no SingleController, deterministic rollout ids, legitimate re-runs) clears-and-reseeds as the prototype does, or uses a separate state directory. Drain, status, and the prepare report are scoped to the checkpoint's rollout-id set so mid-training validation traffic neither parks nor pollutes the report.</li>
+  </ol>
+  <h3>Process and topology</h3>
+  <ol class="path">
+    <li>NemoGym actors are non-detached: owner death kills them and their subprocess groups, and a new SingleController tears down any survivors before restoring — two nodes must never extend the same attempt.</li>
+    <li>Exactly one SingleController is alive (a lease, not an assumption); the actor's checkpoint tasks serialize so a second prepare queues rather than interleaving with a running pack.</li>
+    <li>MCP-exposed tools mean blackbox sandboxes call resources servers directly, across the cluster boundary, during pause and pack — the topology diagram's "agent server is the only caller" holds only for non-MCP deployments, and the blackbox-resume extension must re-issue MCP endpoints and tokens at reconnect because the sandbox baked in the dead node's URL.</li>
+    <li>The commit-before-release guarantee is a process-crash argument: under power loss, a durable boundary can outlive a page-cached ledger row. It is harmless because restore reads only packed archives, whose pack does its own synced-range filtering — a dependency now stated rather than accidental.</li>
+  </ol>
+
+  <h2>The changes Gym needs, in sequence</h2>
+  <p>Four phases. Each is independently shippable, each is useful on its own, and no later phase changes an interface an earlier phase introduced — that is the criterion the sequencing was chosen by.</p>
+  <ol class="path">
+    <li><b>G1 — token-level checkpointing, no environment state.</b> Model server: the B&prime; row (input delta + output items merged into the ledger commit), self-healing appends, <code>/control/pause</code>, <code>/control/resume</code>, <code>/control/status</code> with the sentinel file and per-worker counter files. NemoGym actor: <code>fence / prepare_checkpoint / commit_checkpoint(gym_dir) / abort / restore(gym_dir, ids) / resume</code>, the pack-and-extract path, the Gym-internal manifest. SingleController: the two-phase sequence with the marker-last commit. This phase alone makes killed rollouts resumable for stateless environments, and it touches no resources server and no agent beyond re-dispatch.</li>
+    <li><b>G2 — turn-level: boundary records.</b> Model server: echo the minted <code>model_call_id</code> as a response header on capture routes. Agent servers: the thin boundary record (<code>model_call_id</code>, <code>tool_results</code>, <code>usage</code>, <code>agent_state</code>, witness fields) written per boundary into <code>boundaries.jsonl</code>; the drain flag checked before each model call; <code>/control/status</code> reporting per-rollout loop position; the resume decision table on <code>/run</code> entry. This buys back the one-call freshness window and anchors resume at boundaries.</li>
+    <li><b>G3 — environment state.</b> Resources servers: the <code>/ng-session</code> export/restore routes and hooks (already in the session-state prototype), the snapshot cadence knob with forced-export-at-drain, and the per-server audit — incremental and safe by default, because <code>supports_session_state()</code> defaults to false and an unaudited server simply keeps whole-rollout retry. No audit gates G1 or G2.</li>
+    <li><b>G4 — sandboxes.</b> The one-key attribution extension (attempt-scoped rollout id in sandbox metadata), the label-query janitor, the liveness check at restore, and the per-provider <code>reconnectable</code> capability bit. Later, without interface changes: a sandbox-server control plane for local providers (the PR&nbsp;2085 direction) flips capability bits, and harness-native blackbox resume (assumption&nbsp;8's extension) becomes possible per harness.</li>
+  </ol>
+
+  <h2>Implementation specifics</h2>
+
+  <div class="qa"><h3>How is the Retry-After value chosen?</h3>
+  <p>The value is a polling hint, not a promise. A client that retries early receives another 503 with a fresh value. A client that retries late finds the server already resumed. Nothing breaks in either case. The server can therefore use simple estimates: during the drain phase, the time remaining until the deadline the SingleController passed in; during the save phase, a running estimate from the durations of recent checkpoints; absent both, a fixed ten seconds. The deadline bounds how long the model server waits for running generations before they are abandoned. The Retry-After value uses the deadline as an input, but the two are not the same number and do not need to be.</p></div>
+
+  <div class="qa"><h3>How are in-flight requests counted, and is there a race?</h3>
+  <p>There is a race in the obvious design, and an ordering rule removes it. The obvious design has a request check the pause flag first and become visible later, when it writes its intent line to the rollout file. Suppose a request passes the pause check just before the sentinel file appears. The status poll counts intent lines without commit rows, sees zero, and the actor proceeds — while that request is still on its way to vLLM. The fix is publish-then-check: on entry, the worker first makes the request visible, then checks the pause flag, and a request that finds the flag set withdraws. Visibility is a per-worker counter file, updated by atomic rename on entry and exit; the status handler sums the counter files and cross-checks the dangling-intent count from the rollout files. With that ordering, a zero count means no request has passed the entry point. There is also a backstop that makes the count a scheduling aid rather than a safety mechanism: a call that commits before the file pack is included in the checkpoint, and a call that commits after the pack only writes rows the manifest never references, which resume masks. A missed count can waste a little work; it cannot corrupt the checkpoint.</p></div>
+
+  <div class="qa"><h3>Are model call ids ever reused, and does that clash with the middleware minting them?</h3>
+  <p>Ids are never reused, and no clash exists, because the three situations that look like reuse are each handled by a different key. First, client retries: when a network failure hides a response that was actually committed, the retried request would mint a second id and commit a second row. The dedup key for this is the logical request id header the caller supplies; the middleware sees an existing commit for that logical id and returns the recorded response instead of generating again. Second, resume: the continued rollout's next call is a genuinely new call. The middleware mints a fresh id for it, and its parent pointer references the anchor's old id. Old ids are read from the file during resolution; they are never minted again. Third, double dispatch: if a confused restore dispatched the same rollout twice, the two attempts would write under attempt-scoped rollout ids — <code>{group}_g{i}_a1</code> and <code>{group}_g{i}_a2</code> — so their files and staging keys never collide, and the SingleController's ledger decides which attempt counts.</p></div>
+
+  <div class="qa"><h3>With multiple NemoGym actors, must rollouts return to the same node?</h3>
+  <p>No, and the design guarantees the wrong-shard problem cannot occur, because no actor ever "loads a shard". Three properties make location irrelevant. Each rollout's file is self-contained: everything needed to resume that rollout is in its own rows. The archives live on the shared filesystem under an index keyed by rollout id, so any actor can find any rollout's segments regardless of which node packed them. Session identity is computed from the rollout id, so a resources server on a different node derives the same session key, and TransferQueue staging keys are cluster-global. Restore therefore works by assignment: the SingleController assigns each resumable rollout to whichever actor exists now, and each actor extracts exactly its assigned members from whichever archives hold them. A rollout resumed on a different node loses only vLLM cache warmth, which costs one TransferQueue prefix fetch on its first call.</p></div>
+
+  <div class="qa"><h3>Should the protocol be two-phase?</h3>
+  <p>Yes. Phase one, <code>prepare_checkpoint(deadline)</code>: fence the pumps, pause admission, drain or hit the deadline, and collect from each actor only per-rollout status — resumable or not. Everything else Gym knows stays inside Gym. Prepare creates nothing durable, so aborting it costs one <code>resume()</code> call and a deleted temporary directory. Phase two, <code>commit_checkpoint(gym_dir)</code>: each actor writes everything it needs to restore — archives, anchors, its own manifest — into the subdirectory it was handed; the SC binds only the path, runs the parallel saves, writes the marker last, renames atomically, resumes. The SC cannot know the individual states its subsystems save, so the contract never asks it to. This is not classic distributed two-phase commit, and it does not need to be: the commit point is a single atomic rename performed by one process, so no distributed agreement is required. The phases exist for two other reasons. A failed or timed-out prepare aborts cheaply, leaving the previous checkpoint as the newest complete one. And the expensive trainer save overlaps the prepare phase, because it depends on nothing prepare does.</p></div>
+
+  <div class="qa"><h3>How does the pause reach a blackbox harness like Claude Code or Codex, running in a sandbox on a separate CPU cluster?</h3>
+  <p>The drain flag does not reach them, and nothing needs it to. The flag is a check Gym's own agent loop performs before sending its next model call. Claude Code, Codex, and OpenHands run their own loops inside their sandboxes; Gym's wrapper agent server launched the harness and waits for it to finish, but it does not drive the loop and cannot park it. The one point Gym controls is the point every harness must pass through: the model server, which the harness reaches because its base URL was pointed at the capture endpoint when the sandbox was launched.</p>
+  <p>Three things are different for these rollouts, and the first is an inversion of the native-agent rule. <b>For blackbox harnesses, holding the connection is the primary mechanism and 503 is the overflow — the opposite of the rule for Gym's own agents.</b> The arithmetic decides it. The Anthropic and OpenAI SDKs inside these harnesses retry a failed request only about twice, so a 503-based pause tolerates only a short stall before the harness's model call errors and the harness fails inside its sandbox. The same SDKs wait roughly ten minutes by default for a response on an open connection, so a held connection is invisible to the harness for any realistic cut. The model server holds blackbox requests up to a hold budget and answers 503 with Retry-After only beyond it. This adds one deployment assumption: every proxy and load balancer on the cross-cluster path must have idle timeouts longer than the hold budget, or a middlebox resets the held connection and manufactures the very failure the hold exists to avoid.</p>
+  <p>Second, <b>"quiet" replaces "parked".</b> A blackbox rollout has no boundaries, so the prepare poll cannot wait for it to park. Its terminal state for the poll is quiet-at-the-model-server: its last call committed, no new call admitted. The sandbox may keep running tools on the other cluster through the entire pause — the pause gates model calls and nothing else — and the drain deadline never waits for those tools.</p>
+  <p>Third, <b>the cut treats them as capture-only.</b> During a periodic cut nothing dies: the harness keeps computing, its next model call waits, and when the sentinel clears the call proceeds — provided the pause stayed inside the hold budget. In the checkpoint they are marked non-resumable, because their loop state lives outside Gym; a later restore retries them from scratch as new attempts with new sandboxes. On a shutdown, the harness is left calling a dead endpoint: it exhausts its retries and fails inside its sandbox. The sandbox's compute may sit on a separate CPU cluster, but its lifecycle belongs to Gym's own sandbox API — which upgrades cleanup from leak-and-reap to deliberate: the shutdown sequence terminates the sandboxes of non-resumable rollouts during commit, and the label-query janitor (assumption 6) covers whatever a hard kill missed, at the next startup. The sandboxes kept alive across the gap are those of resumable class-C rollouts, whose reconnect descriptors are in the boundary records.</p></div>
+
+  <div class="qa"><h3>How does the agent server know a dispatch is a resume, so it does not call <code>/seed_session</code>?</h3>
+  <p>Two signals, and they must agree. The first is the rollout id itself. Resume re-dispatches the <em>same attempt-scoped id</em> the dead attempt used — that is what makes its files, session key, and fingerprints line up — while a from-scratch retry always gets a fresh attempt id. Since the SingleController is the only dispatcher, an id that already has files can only mean one thing: this dispatch continues that attempt. The second signal is explicit: the resume dispatch carries a resume marker with the anchor boundary index, so intent is stated rather than inferred.</p>
+  <p>On <code>/run</code> entry, before doing anything else, the agent server derives the session-store path from the rollout id — a pure function, so no lookup service is involved — and checks whether boundary records exist. Four combinations, each with a defined outcome:</p>
+  <p><b>No records, no marker</b> → a fresh rollout: call <code>/seed_session</code>, write boundary record 0, run normally. <b>Records and marker both present</b> → a resume: skip seeding entirely, select the latest resumable boundary, verify it agrees with the marker's anchor, call <code>/ng-session/restore</code> on each stateful resources server, and enter the loop at the parked position. The conversation itself arrives already rebuilt: the actor built it from the ledger chain plus the anchor boundary's tool results (F4) and passed it as the run input — the records are used to select and verify the anchor and to restore environment state, never to rebuild the transcript, because the thin records deliberately do not carry the model's output items. (The prototype today does the opposite — it rebuilds from its fat records — which is exactly what the G2 thinning replaces.) <b>Marker present but no records</b> → the extraction failed or the assignment is wrong; re-seeding here would silently turn a continuation into a new root that conflicts with the ledger at finalization, so the agent refuses the run and reports non-resumable — the SingleController retries fresh under a <em>new</em> attempt id. <b>Records present but no marker</b> → an id collision or a dispatcher bug; refuse loudly.</p>
+  <p>One scope note: this machinery belongs to the session tier. In the stripped prototype without boundary records, the environments are stateless by assumption, and re-seeding a stateless session is harmless by definition — the question only becomes load-bearing once <code>/seed_session</code> can allocate real state.</p></div>
+
+  <div class="footer">Companion: <a href="https://claude.ai/code/artifact/a789eb82-0c6c-45a5-b621-9f3724d77a8e">Tokidcap Two Clocks</a> — storage design, the rollout-file lifecycle, scale analysis, and the option record · terminology: older documents call the model server "the gate"</div>
+</div>
