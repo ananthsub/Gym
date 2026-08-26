@@ -718,6 +718,18 @@ _OBSERVED_PATHS = {
     "/v1/messages": "messages",
 }
 
+# Known auxiliary endpoints whose responses cannot carry generated content.
+# Harnesses probe these for discovery, health, and token accounting.
+# Their output can never feed a later prompt.
+# Only an unobserved call that can perform generation marks a rollout incomplete.
+# Unknown paths stay conservative: they may be generation-capable.
+_AUXILIARY_PATHS = frozenset({"/v1/models", "/v1/messages/count_tokens"})
+
+
+def _is_auxiliary_path(path: str) -> bool:
+    return path in _AUXILIARY_PATHS or path.startswith("/v1/models/")
+
+
 _TERMINAL_SSE_LINES: dict[str, dict[bytes, str]] = {
     "responses": {
         b"event: response.completed": "complete",
@@ -1111,18 +1123,28 @@ class _CaptureMiddleware:
         token_sink = self._configured_sink or installed_token_sink() or self._token_store
         capture_wanted = token_capture_requested and (token_sink is not None or self._token_capture_enabled)
         if token_capture_requested and dialect is None and token_sink is not None:
-            # This call cannot produce a capture record.
-            # Its output may still feed a later prompt.
-            # Mark the rollout incomplete before forwarding the request.
-            try:
-                await token_sink.mark_incomplete(rollout_from_path, "")
-            except Exception:
-                logger.warning(
-                    "Could not mark rollout %s incomplete for unobserved path %s.",
-                    rollout_from_path,
+            if _is_auxiliary_path(path):
+                # A discovery or token-count probe cannot produce generated content.
+                # Nothing it returns can enter a later prompt.
+                # Forward without touching capture completeness.
+                logger.debug(
+                    "Forwarding auxiliary request %s for rollout %s without capture.",
                     path,
-                    exc_info=True,
+                    rollout_from_path,
                 )
+            else:
+                # This call cannot produce a capture record.
+                # Its output may still feed a later prompt.
+                # Mark the rollout incomplete before forwarding the request.
+                try:
+                    await token_sink.mark_incomplete(rollout_from_path, "")
+                except Exception:
+                    logger.warning(
+                        "Could not mark rollout %s incomplete for unobserved path %s.",
+                        rollout_from_path,
+                        path,
+                        exc_info=True,
+                    )
         if (self._store is None and not capture_wanted) or rollout_from_path is None or dialect is None:
             await self._app(scope, receive, send)
             return

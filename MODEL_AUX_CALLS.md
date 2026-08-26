@@ -1,10 +1,12 @@
 # Auxiliary model calls the server does not understand
 
-Branch `model-aux-calls`. Tracking doc for one issue: a blackbox harness's utility calls
-to endpoints Gym's model server does not serve currently mask the entire rollout, and
-they should not. This document states the problem with evidence, the two-stage fix, and
-the piece of #2180 worth splitting out early because stage 2 depends on it. Companion to
-the terminal-attribution design doc on `ansubramania/terminal-attribution` (PRs #2675,
+Branch `model-aux-calls`. Fixes **issue #2678** (auxiliary model-server requests poison
+capture completeness; surfaced by Hermes's `/v1/models` discovery/health probes in the
+PR #2742 line, where successful terminal attribution was overridden by the
+`capture_incomplete` flag at finalize). This document states the problem with evidence,
+the two-stage fix — **stage 1 is implemented on this branch (§7)** — and the piece of
+#2180 worth splitting out early because stage 2 depends on it. Companion to the
+terminal-attribution design doc on `ansubramania/terminal-attribution` (PRs #2675,
 #2676).
 
 ## 1. The problem
@@ -123,3 +125,34 @@ follows.
   why it must be stamped. Stated here so the reviewer does not re-derive it.)
 - Interaction with §2.9/§6 of the terminal-attribution design doc: that doc now points
   here; keep the two in sync on the stage-2 gating condition.
+
+## 7. Solution — stage 1, implemented on this branch (issue #2678)
+
+`nemo_gym/base_responses_api_model.py`:
+
+- `_AUXILIARY_PATHS = frozenset({"/v1/models", "/v1/messages/count_tokens"})` plus a
+  `/v1/models/*` prefix match, via `_is_auxiliary_path(path)`. The list is deliberately
+  a tight allow-list of known **non-generative** endpoints — deny-by-default is the
+  fail-closed direction, because an unknown path may be generation-capable (e.g. a
+  direct `/v1/completions` call is generation and must keep marking incomplete).
+- The capture middleware's unobserved-path branch now forwards auxiliary requests
+  **without** calling `mark_incomplete` (debug log only). Everything else is unchanged:
+  unknown unobserved paths still mark the rollout incomplete; observed paths still
+  capture.
+
+Tests (`tests/unit_tests/test_token_id_capture.py`), matching the issue's acceptance
+criteria:
+
+- a prefixed `/v1/models` (and `/v1/models/<id>`) probe interleaved with a real
+  generation call leaves the rollout complete with its one captured entry;
+- a prefixed `/v1/messages/count_tokens` probe leaves the rollout complete;
+- a prefixed `/v1/completions` request (genuinely unsupported, generation-capable)
+  still marks the rollout incomplete.
+
+Notes: `count_tokens` is included proactively for Anthropic-dialect harnesses (the
+Claude Code CLI probes it against its base URL — the smoke-test item in the
+terminal-attribution doc §6.1). PR #2742 does not touch the middleware, so there is no
+conflict; its e2e scripts are where the `/v1/models` probes appear. Extending the list
+is a one-line change; anything generation-shaped must never be added to it. Stage 2
+(typed incompleteness + hole-tolerant delivery, §3) remains gated on the
+continuation-stamping slice (§4).

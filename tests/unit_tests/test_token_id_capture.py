@@ -1306,3 +1306,39 @@ def test_a_newer_record_in_the_store_fails_the_read_rather_than_being_skipped(tm
 
     with pytest.raises(ValidationError):
         store.read_entries("r0")
+
+
+def test_auxiliary_discovery_request_does_not_mark_incomplete(tmp_path):
+    """A /v1/models probe cannot generate; it must not poison capture completeness.
+
+    Harnesses probe discovery and health endpoints against their one base URL,
+    which is the capture-prefixed one. Only an unobserved call that can perform
+    generation marks the rollout incomplete.
+    """
+    client = TestClient(_server(_both_enabled(tmp_path)).setup_webserver())
+    client.post("/ng-rollout/aux0-r0/training-token-capture/v1/responses", json={"input": "hi"})
+    client.get("/ng-rollout/aux0-r0/training-token-capture/v1/models")
+    client.get("/ng-rollout/aux0-r0/training-token-capture/v1/models/some-model")
+    store = TokenCaptureStore(tmp_path)
+    assert not store.is_incomplete("aux0-r0")
+    snapshot = store.freeze_now("aux0-r0")
+    assert snapshot.incomplete is False and len(snapshot.entries) == 1
+
+
+def test_count_tokens_request_does_not_mark_incomplete(tmp_path):
+    client = TestClient(_server(_both_enabled(tmp_path)).setup_webserver())
+    client.post(
+        "/ng-rollout/aux1-r0/training-token-capture/v1/messages/count_tokens",
+        json={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert not TokenCaptureStore(tmp_path).is_incomplete("aux1-r0")
+
+
+def test_unobserved_generation_path_still_marks_incomplete(tmp_path):
+    """An unknown path may be generation-capable; the conservative marking stays."""
+    client = TestClient(_server(_both_enabled(tmp_path)).setup_webserver())
+    client.post(
+        "/ng-rollout/aux2-r0/training-token-capture/v1/completions",
+        json={"model": "m", "prompt": "hi"},
+    )
+    assert TokenCaptureStore(tmp_path).is_incomplete("aux2-r0")
