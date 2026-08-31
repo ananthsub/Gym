@@ -44,7 +44,7 @@ import asyncio
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 from uuid import uuid4
 
 from starlette.responses import JSONResponse
@@ -134,6 +134,24 @@ class AdmissionLimiter:
         self._tombstones: set[tuple[str, int]] = set()
         self._drained = asyncio.Event()
         self._drained.set()
+        self._listeners: list[Callable[[], None]] = []
+
+    # -- change listeners ----------------------------------------------------
+    #
+    # A multi-worker deployment reports each worker's in-flight count to a
+    # service-level coordinator; the listener fires on every count change so
+    # the report is event-driven instead of polled.
+
+    def add_listener(self, listener: Callable[[], None]) -> None:
+        self._listeners.append(listener)
+
+    def remove_listener(self, listener: Callable[[], None]) -> None:
+        if listener in self._listeners:
+            self._listeners.remove(listener)
+
+    def _notify_listeners(self) -> None:
+        for listener in list(self._listeners):
+            listener()
 
     # -- admission -----------------------------------------------------------
 
@@ -173,6 +191,7 @@ class AdmissionLimiter:
             self._root_leases.add(ticket.lease)
         self._inflight[ticket.ticket_id] = ticket
         self._drained.clear()
+        self._notify_listeners()
         return ticket
 
     def release(self, ticket: AdmissionTicket) -> None:
@@ -183,11 +202,11 @@ class AdmissionLimiter:
         self._after_inflight_change()
 
     def _after_inflight_change(self) -> None:
-        if self._inflight:
-            return
-        self._drained.set()
-        if self.state == AdmissionState.DRAINING:
-            self.state = AdmissionState.PAUSED
+        if not self._inflight:
+            self._drained.set()
+            if self.state == AdmissionState.DRAINING:
+                self.state = AdmissionState.PAUSED
+        self._notify_listeners()
 
     # -- control -------------------------------------------------------------
 

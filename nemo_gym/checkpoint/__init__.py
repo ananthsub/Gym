@@ -55,6 +55,12 @@ from nemo_gym.checkpoint.control import (
     install_control_plane,
     multi_process_capability_from_num_workers,
 )
+from nemo_gym.checkpoint.coordinator import (
+    AdmissionCoordinator,
+    MissingWorkersError,
+    WorkerAdmissionAgent,
+    build_coordinator_control_app,
+)
 from nemo_gym.checkpoint.model_admission import (
     MODEL_ADMISSION_URL_PREFIX,
     NotPolicyInstanceError,
@@ -71,9 +77,13 @@ __all__ = [
     "PLANE_HEADER",
     "AdmissionLimiter",
     "AdmissionMiddleware",
+    "AdmissionCoordinator",
     "AdmissionParkedError",
     "AdmissionState",
     "AdmissionTicket",
+    "MissingWorkersError",
+    "WorkerAdmissionAgent",
+    "build_coordinator_control_app",
     "CheckpointConflictError",
     "CheckpointPhase",
     "ControlCapabilities",
