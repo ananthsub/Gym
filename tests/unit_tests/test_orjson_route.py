@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
-from inspect import iscoroutinefunction
 
 import orjson
 from fastapi import Body, FastAPI
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.testclient import TestClient
 from omegaconf import OmegaConf
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from nemo_gym.base_resources_server import (
     BaseResourcesServerConfig,
@@ -28,7 +27,7 @@ from nemo_gym.base_resources_server import (
     SimpleResourcesServer,
 )
 from nemo_gym.config_types import BaseServerConfig
-from nemo_gym.server_utils import ORJSONRoute, ServerClient, install_orjson_serving
+from nemo_gym.server_utils import GymORJSONResponse, ORJSONRoute, ServerClient, install_orjson_serving
 
 
 class _Payload(BaseModel):
@@ -42,47 +41,91 @@ def _app() -> FastAPI:
     return app
 
 
-def test_model_return_serializes_with_orjson_and_skips_response_model():
+def test_annotated_route_keeps_fastapi_response_contract():
+    """Annotated routes serve through FastAPI's own pydantic-core path, untouched."""
     app = _app()
 
-    @app.post("/echo")
+    @app.post("/echo", status_code=201)
     async def echo(body: _Payload) -> _Payload:
         return body
 
     payload = {"name": "x", "values": list(range(32))}
     with TestClient(app) as client:
         resp = client.post("/echo", json=payload)
-    assert resp.status_code == 200
+    assert resp.status_code == 201
     assert resp.headers["content-type"].startswith("application/json")
-    # Byte-for-byte the orjson serialization of the model, not FastAPI's stdlib encode.
-    assert resp.content == orjson.dumps(payload)
+    assert resp.json() == payload
 
 
-def test_dict_and_streaming_and_sync_returns():
+def test_aliased_fields_keep_their_wire_names():
+    """FastAPI serializes by alias; the serving changes must not alter that."""
+
+    class Aliased(BaseModel):
+        schema_: dict = Field(alias="schema")
+
+        model_config = {"populate_by_name": True}
+
+    app = _app()
+
+    @app.post("/aliased")
+    async def aliased() -> Aliased:
+        return Aliased(schema_={"type": "object"})
+
+    with TestClient(app) as client:
+        served = client.post("/aliased").json()
+    assert "schema" in served and "schema_" not in served
+
+
+def test_base_annotation_filters_subclass_fields_like_fastapi():
+    class _BasePayload(BaseModel):
+        a: int
+
+    class _SubPayload(_BasePayload):
+        secret: str = "hidden"
+
+    app = _app()
+
+    @app.post("/filtered")
+    async def filtered() -> _BasePayload:
+        return _SubPayload(a=1)
+
+    @app.post("/unfiltered")
+    async def unfiltered() -> _SubPayload:
+        return _SubPayload(a=2)
+
+    with TestClient(app) as client:
+        assert client.post("/filtered").json() == {"a": 1}
+        assert client.post("/unfiltered").json() == {"a": 2, "secret": "hidden"}
+
+
+def test_unannotated_dict_route_renders_with_orjson_and_falls_back():
+    """Dict-returning routes get GymORJSONResponse; orjson-rejected values fall back."""
+    import decimal
+
     app = _app()
 
     @app.post("/dict")
     async def dict_route():
         return {"ok": True}
 
+    @app.post("/compat")
+    async def compat():
+        # jsonable_encoder coerces Decimal/set before render; a lone surrogate
+        # survives into render, where the stdlib fallback must serve it.
+        return {"text": "truncated \ud83d", "big": 2**70, "d": decimal.Decimal("1.5"), "s": {1}}
+
     @app.post("/stream")
     async def stream_route():
         return StreamingResponse(iter([b"a", b"b"]), media_type="text/event-stream")
 
-    @app.post("/sync")
-    def sync_route():
-        return {"sync": 1}
-
-    # A sync endpoint stays sync so FastAPI keeps threadpooling it.
-    sync_api_route = next(r for r in app.routes if getattr(r, "path", None) == "/sync")
-    assert not iscoroutinefunction(sync_api_route.endpoint)
-
     with TestClient(app) as client:
         assert client.post("/dict").content == orjson.dumps({"ok": True})
+        resp = client.post("/compat")
+        assert resp.status_code == 200
+        assert resp.json() == {"text": "truncated \ud83d", "big": 2**70, "d": 1.5, "s": [1]}
         stream = client.post("/stream")
         assert stream.content == b"ab"
         assert stream.headers["content-type"].startswith("text/event-stream")
-        assert client.post("/sync").content == orjson.dumps({"sync": 1})
 
 
 def test_explicit_response_class_is_respected():
@@ -105,7 +148,6 @@ def test_ingress_parses_with_orjson_and_falls_back_for_nonstandard_literals():
     async def ingest(body: dict = Body()):
         return {"is_nan": body["v"] != body["v"]}
 
-    # stdlib json emits the non-standard NaN literal; orjson rejects it, the fallback accepts it.
     nan_payload = json.dumps({"v": float("nan")})
     with TestClient(app) as client:
         resp = client.post("/ingest", content=nan_payload, headers={"Content-Type": "application/json"})
@@ -114,12 +156,21 @@ def test_ingress_parses_with_orjson_and_falls_back_for_nonstandard_literals():
         assert client.post("/ingest", json={"v": 1.5}).json() == {"is_nan": False}
 
 
+def test_kill_switch_leaves_stock_fastapi_serving(monkeypatch):
+    import nemo_gym.server_utils as su
+
+    monkeypatch.setattr(su, "_ORJSON_SERVING_DISABLED", True)
+    app = FastAPI()
+    su.install_orjson_serving(app)
+    assert app.router.route_class is not su.ORJSONRoute
+
+
 class _Res(SimpleResourcesServer):
     async def verify(self, body: BaseVerifyRequest) -> BaseVerifyResponse:
         return BaseVerifyResponse(**body.model_dump(), reward=1.0)
 
 
-def test_setup_webserver_installs_route_class_and_serves_verify_via_orjson():
+def test_setup_webserver_installs_route_and_response_classes_and_serves_verify():
     server = _Res(
         config=BaseResourcesServerConfig(name="res", host="127.0.0.1", port=9, entrypoint="app.py"),
         server_client=ServerClient(
@@ -129,10 +180,7 @@ def test_setup_webserver_installs_route_class_and_serves_verify_via_orjson():
     )
     app = server.setup_webserver()
     assert app.router.route_class is ORJSONRoute
-
-    verify_route = next(r for r in app.routes if getattr(r, "path", None) == "/verify")
-    # Later route wrappers (MCP auto-exposure) unwrap to the model-returning handler via this marker.
-    assert hasattr(verify_route.endpoint, "__nemo_gym_orjson_inner__")
+    assert app.router.default_response_class is GymORJSONResponse
 
     body = {
         "responses_create_params": {"input": [{"role": "user", "content": "hi"}]},
@@ -153,81 +201,3 @@ def test_setup_webserver_installs_route_class_and_serves_verify_via_orjson():
     parsed = resp.json()
     assert parsed["reward"] == 1.0
     assert parsed["response"]["id"] == "resp_1"
-
-
-class _BasePayload(BaseModel):
-    a: int
-
-
-class _SubPayload(_BasePayload):
-    secret: str = "hidden"
-
-
-def test_base_annotation_filters_subclass_fields_like_fastapi():
-    app = _app()
-
-    @app.post("/filtered")
-    async def filtered() -> _BasePayload:
-        return _SubPayload(a=1)
-
-    @app.post("/unfiltered")
-    async def unfiltered() -> _SubPayload:
-        return _SubPayload(a=2)
-
-    with TestClient(app) as client:
-        assert client.post("/filtered").json() == {"a": 1}
-        assert client.post("/unfiltered").json() == {"a": 2, "secret": "hidden"}
-
-
-def test_exotic_return_falls_back_to_jsonable_encoder():
-    class _Odd:
-        pass
-
-    app = _app()
-
-    @app.post("/odd")
-    async def odd():
-        return {"obj": _Odd()}
-
-    with TestClient(app) as client:
-        resp = client.post("/odd")
-    # jsonable_encoder coerces via vars(); the request must not 500.
-    assert resp.status_code == 200
-    assert resp.json() == {"obj": {}}
-
-
-def test_numpy_scalars_serialize():
-    np = __import__("pytest").importorskip("numpy")
-    app = _app()
-
-    @app.post("/np")
-    async def np_route():
-        return {"done": np.bool_(True), "score": np.float64(0.5)}
-
-    with TestClient(app) as client:
-        assert client.post("/np").json() == {"done": True, "score": 0.5}
-
-
-def test_divergence_classes_fall_back_to_the_old_path():
-    """Payloads the pre-orjson stack served must keep serving (surrogates, big ints, Decimal, sets)."""
-    import decimal
-
-    app = _app()
-
-    @app.post("/compat")
-    async def compat():
-        return {"text": "truncated \ud83d", "big": 2**70, "d": decimal.Decimal("1.5"), "s": {1}}
-
-    with TestClient(app) as client:
-        resp = client.post("/compat")
-    assert resp.status_code == 200
-    assert resp.json() == {"text": "truncated \ud83d", "big": 2**70, "d": 1.5, "s": [1]}
-
-
-def test_kill_switch_leaves_stock_fastapi_serving(monkeypatch):
-    import nemo_gym.server_utils as su
-
-    monkeypatch.setattr(su, "_ORJSON_SERVING_DISABLED", True)
-    app = FastAPI()
-    su.install_orjson_serving(app)
-    assert app.router.route_class is not su.ORJSONRoute

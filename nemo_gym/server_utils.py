@@ -22,13 +22,11 @@ import time
 from abc import abstractmethod
 from asyncio.exceptions import CancelledError
 from contextlib import asynccontextmanager
-from functools import wraps
-from inspect import iscoroutinefunction
 from os import environ, getenv
 from pathlib import Path
 from threading import Thread
 from traceback import format_exc, print_exc
-from typing import Any, List, Literal, NamedTuple, Optional, TextIO, Tuple, Type, Union, Unpack, get_type_hints
+from typing import Any, List, Literal, NamedTuple, Optional, TextIO, Tuple, Type, Union, Unpack
 from uuid import uuid4
 
 import orjson
@@ -47,15 +45,13 @@ from aiohttp import (
 )
 from aiohttp.client import _RequestOptions
 from fastapi import FastAPI, Request, Response
-from fastapi.datastructures import DefaultPlaceholder
-from fastapi.encoders import jsonable_encoder
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from multidict import CIMultiDict
 from omegaconf import DictConfig, OmegaConf, open_dict
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from requests.exceptions import ConnectionError
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -735,41 +731,6 @@ def _telemetry_server_type(server_cls: Type) -> Optional[str]:
     return None
 
 
-def orjson_response_route(handler, response_model: Optional[type] = None):
-    """Wrap a route handler so its result is serialized with orjson.
-
-    Returning a Pydantic model or dict from an endpoint makes FastAPI serialize it through
-    ``jsonable_encoder`` — a pure-Python recursive walk with one function call per element —
-    followed by stdlib ``json.dumps`` (plus a response-model re-validation when the return
-    annotation installs one). On rollout payloads the token-id and logprob arrays make that
-    path the dominant serialization cost. This wrapper builds the response bytes itself
-    (``model_dump(mode="json")`` is exactly the conversion ``jsonable_encoder`` performs first
-    for a model) and hands FastAPI a finished ``Response``, which passes through untouched —
-    response models declared by annotations stay in OpenAPI but are skipped at runtime.
-
-    Request body validation is unaffected — FastAPI still resolves the parameter signature
-    through ``__wrapped__``. Results that are already a ``Response`` (a ``StreamingResponse``,
-    an error path's ``JSONResponse``) pass through unchanged. A sync handler stays sync so
-    FastAPI keeps running it in the threadpool.
-    """
-    if iscoroutinefunction(handler):
-
-        @wraps(handler)
-        async def orjson_response_wrapper(*args: Any, **kwargs: Any) -> Any:
-            return orjson_json_response(await handler(*args, **kwargs), response_model)
-    else:
-
-        @wraps(handler)
-        def orjson_response_wrapper(*args: Any, **kwargs: Any) -> Any:
-            return orjson_json_response(handler(*args, **kwargs), response_model)
-
-    # Route wrappers installed later (e.g. MCP auto-exposure's /verify wrapper) must mutate the
-    # handler's *model* result before it is serialized. This attribute lets them unwrap to the
-    # model-returning handler and re-serialize with ``orjson_json_response`` afterwards.
-    orjson_response_wrapper.__nemo_gym_orjson_inner__ = handler
-    return orjson_response_wrapper
-
-
 class ORJSONRequest(Request):
     """A ``Request`` whose ``.json()`` parses with orjson instead of stdlib ``json``.
 
@@ -789,46 +750,17 @@ class ORJSONRequest(Request):
 
 
 class ORJSONRoute(APIRoute):
-    """The route class every Gym server app uses (installed by ``setup_session_middleware``).
+    """Route class that parses request bodies with orjson (see ``ORJSONRequest``).
 
-    Two changes over FastAPI's default route, both transparent to handler authors:
-
-    - request bodies parse with orjson (``ORJSONRequest``), and
-    - endpoint results are serialized by ``orjson_response_route`` — a model or dict becomes a
-      finished orjson ``Response``; anything already a ``Response`` passes through untouched.
-
-    A route that names an explicit ``response_class`` keeps FastAPI's default behavior — an
-    author who chose ``PlainTextResponse``/``HTMLResponse`` there did so deliberately.
+    Request parsing only. Response handling is deliberately left entirely to FastAPI, which
+    on this FastAPI version already serializes annotated routes to JSON bytes through
+    pydantic-core with the full response contract intact — response-model validation and
+    field filtering, aliases and custom serializers, include/exclude options, status codes,
+    headers/cookies set through an injected ``Response``, background tasks, unions and
+    dataclasses, OpenAPI schemas, and predictable validation failures. The only response
+    change Gym makes is ``GymORJSONResponse`` below, which swaps the final bytes encoder on
+    the un-annotated (``jsonable_encoder``) path and never touches those semantics.
     """
-
-    def __init__(self, path: str, endpoint: Any, **kwargs: Any) -> None:
-        response_class = kwargs.get("response_class")
-        explicit_response_class = response_class is not None and not isinstance(response_class, DefaultPlaceholder)
-        if not explicit_response_class:
-            endpoint = orjson_response_route(endpoint, response_model=self._filter_model(endpoint, kwargs))
-        super().__init__(path, endpoint, **kwargs)
-
-    @staticmethod
-    def _filter_model(endpoint: Any, kwargs: dict) -> Optional[type]:
-        """The model FastAPI would filter the response through, or None.
-
-        An explicit ``response_model=`` wins; otherwise derive from the return annotation the
-        way FastAPI does (``functools.wraps`` copies annotations, so wrapped handlers resolve
-        to the underlying handler's annotation). Only plain BaseModel annotations filter —
-        matching the audited handlers that rely on base-annotation field filtering.
-        """
-        declared = kwargs.get("response_model")
-        if declared is None and "response_model" in kwargs:
-            return None
-        if isinstance(declared, type) and issubclass(declared, BaseModel):
-            return declared
-        try:
-            annotation = get_type_hints(endpoint).get("return")
-        except Exception:
-            return None
-        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-            return annotation
-        return None
 
     def get_route_handler(self):
         original_route_handler = super().get_route_handler()
@@ -839,24 +771,33 @@ class ORJSONRoute(APIRoute):
         return orjson_request_handler
 
 
-def unwrap_orjson_route(endpoint: Any) -> Any:
-    """Return the model-returning handler beneath ``orjson_response_route``, if wrapped.
+class GymORJSONResponse(JSONResponse):
+    """``JSONResponse`` that renders with orjson, falling back to stdlib for parity.
 
-    Code that invokes a route's endpoint directly (MCP tool dispatch, route wrappers that
-    mutate results) must call the raw handler, not the serialized ``Response`` producer.
+    Used as the app's default response class. Annotated routes never reach ``render`` —
+    FastAPI's pydantic-core fast path produces the bytes — so this only accelerates routes
+    that return plain dicts/lists through ``jsonable_encoder``. The fallback preserves the
+    old encoder's behavior for values orjson rejects (e.g. strings with lone surrogates),
+    and stdlib's ``allow_nan`` emission of NaN/Infinity literals on that path.
     """
-    return getattr(endpoint, "__nemo_gym_orjson_inner__", endpoint)
+
+    def render(self, content: Any) -> bytes:
+        try:
+            return orjson.dumps(content, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY)
+        except TypeError:
+            # ensure_ascii (the stdlib default) escapes lone surrogates instead of failing to
+            # encode them — starlette's own render (ensure_ascii=False) 500s on those.
+            return json.dumps(content, separators=(",", ":")).encode("utf-8")
 
 
-# Compatibility kill switch: with NEMO_GYM_DISABLE_ORJSON_SERIALIZATION=1 the route class is
-# never installed and every server serves through stock FastAPI, byte-for-byte the pre-orjson
-# behavior (NaN/Infinity literals, ASCII escaping, jsonable_encoder coercions, stdlib body
-# parsing). For operators diagnosing a serialization compatibility problem, not for authors.
+# Compatibility kill switch: with NEMO_GYM_DISABLE_ORJSON_SERIALIZATION=1 neither the route
+# class nor the response class is installed and every server serves through stock FastAPI,
+# byte-for-byte today's behavior. For operators, not authors.
 _ORJSON_SERVING_DISABLED = environ.get("NEMO_GYM_DISABLE_ORJSON_SERIALIZATION") == "1"
 
 
 def install_orjson_serving(app: FastAPI) -> None:
-    """Make every route registered on ``app`` from this point on use ``ORJSONRoute``.
+    """Install orjson request parsing and the orjson default response class on ``app``.
 
     Idempotent. Must run before route registration — ``setup_session_middleware`` is the one
     call every Gym server makes at the top of its ``setup_webserver``, so it lives there.
@@ -865,53 +806,9 @@ def install_orjson_serving(app: FastAPI) -> None:
     if _ORJSON_SERVING_DISABLED:
         return
     app.router.route_class = ORJSONRoute
-
-
-# TypeAdapters are expensive to build; cache one per response model. Bounded by the number
-# of distinct annotated response models in the process (at most a few hundred).
-_FILTER_ADAPTERS: dict[type, TypeAdapter] = {}
-
-
-def _filtered_dump_json(response_model: type, content: Any) -> bytes:
-    adapter = _FILTER_ADAPTERS.get(response_model)
-    if adapter is None:
-        adapter = _FILTER_ADAPTERS[response_model] = TypeAdapter(response_model)
-    return adapter.dump_json(content)
-
-
-def orjson_json_response(content: Any, response_model: Optional[type] = None) -> Response:
-    """Serialize a finished handler result with orjson into a ready ``Response``.
-
-    ``model_dump(mode="json")`` is exactly the conversion ``jsonable_encoder`` performs first for
-    a model; a result that is already a ``Response`` passes through unchanged.
-
-    ``response_model`` preserves FastAPI's response-model semantics for handlers whose return
-    annotation names a *base* model while they return a subclass (or a dict): FastAPI validates
-    the result through the annotated model, which filters subclass-only fields. Handlers that
-    return exactly their annotated type — every hot path — skip this.
-
-    Serialization falls back to ``jsonable_encoder`` + stdlib ``json`` when orjson rejects a
-    value (third-party objects in tool results, e.g. resources_servers/openenv), preserving
-    FastAPI's coercions at FastAPI's cost for exactly the payloads that need them.
-    ``OPT_SERIALIZE_NUMPY`` covers numpy scalars that untyped ``info: dict`` fields can carry
-    (e.g. the gymnasium servers).
-    """
-    if isinstance(content, Response):
-        return content
-    if response_model is not None and type(content) is not response_model and isinstance(content, (BaseModel, dict)):
-        if isinstance(content, BaseModel):
-            # One pass through the annotated model's Rust serializer: it reads exactly the
-            # base model's fields off the subclass instance, filtering during serialization.
-            # Measured 2x the dump -> re-validate -> dump -> orjson chain on a 2 MB payload.
-            return Response(content=_filtered_dump_json(response_model, content), media_type="application/json")
-        content = response_model.model_validate(content)
-    if isinstance(content, BaseModel):
-        content = content.model_dump(mode="json")
-    try:
-        body = orjson.dumps(content, option=orjson.OPT_SERIALIZE_NUMPY)
-    except TypeError:
-        body = json.dumps(jsonable_encoder(content)).encode()
-    return Response(content=body, media_type="application/json")
+    # A plain class (not Default(...)) so route registration resolves to it. Typed routes then
+    # serialize via field.serialize + this render — full response-model semantics, orjson bytes.
+    app.router.default_response_class = GymORJSONResponse
 
 
 class SimpleServer(BaseServer):
