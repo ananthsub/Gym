@@ -96,7 +96,7 @@ from nemo_gym.base_resources_server import (
     RESERVED_MCP_TOOL_NAMES,
     MCPServerMetadata,
 )
-from nemo_gym.server_utils import SESSION_ID_KEY
+from nemo_gym.server_utils import SESSION_ID_KEY, orjson_json_response, unwrap_orjson_route
 
 
 LOG = logging.getLogger(__name__)
@@ -171,7 +171,9 @@ def bind_route(route: APIRoute) -> BindResult:
     harvest keeps the ``binding`` (``None`` for an undispatchable route) and the ``reasons`` on the
     ``MCPTool``, and ``_validate_tools`` raises with those stored reasons iff such a tool is exposed.
     """
-    endpoint = route.endpoint
+    # MCP dispatch calls the handler directly and maps its raw result itself; the route may hold
+    # the orjson serialization wrapper, so unwrap to the model-returning handler.
+    endpoint = unwrap_orjson_route(route.endpoint)
     reasons: list[str] = []
     try:
         hints = get_type_hints(endpoint)
@@ -563,7 +565,8 @@ def _wrap_seed_session(app: FastAPI, mint_metadata: Callable[[Request, dict], di
     to forward to the real handler (the injected Request, if added, is not among them).
     """
     idx, route = _take_route(app, "/seed_session", "its response carries the MCP session token to the agent")
-    method = route.endpoint
+    # Calls the handler directly and merges metadata into its raw result — unwrap the orjson layer.
+    method = unwrap_orjson_route(route.endpoint)
     signature = inspect.signature(method)
     hints = get_type_hints(method)
     # Does the original handler already declare a Request param? If so, reuse it; the wrapper reads
@@ -626,6 +629,12 @@ def _wrap_verify(app: FastAPI, server: Any) -> None:
     """
     idx, route = _take_route(app, "/verify", "its tool-call names are normalized for scoring")
     endpoint = route.endpoint
+    # The route may be wrapped in the orjson serialization layer, which turns the handler's model
+    # into a finished ``Response``. Name restoration below must mutate the *model*, so unwrap to
+    # the model-returning handler and re-serialize after restoring.
+    orjson_inner = unwrap_orjson_route(endpoint)
+    serialized_route = orjson_inner is not endpoint
+    endpoint = orjson_inner
 
     def _function_calls(container: Any) -> list:
         return [
@@ -646,12 +655,15 @@ def _wrap_verify(app: FastAPI, server: Any) -> None:
                 return name, value
         return None
 
+    def _finish(result: Any) -> Any:
+        return orjson_json_response(result) if serialized_route else result
+
     @functools.wraps(endpoint)
     async def verify_normalized(**kwargs: Any) -> Any:
         located = _locate_trajectory_arg(kwargs)
         if located is None:
             result = endpoint(**kwargs)
-            return await result if inspect.isawaitable(result) else result
+            return _finish(await result if inspect.isawaitable(result) else result)
         key, container = located
 
         emitted = {item.call_id: item.name for item in _function_calls(container)}
@@ -667,7 +679,7 @@ def _wrap_verify(app: FastAPI, server: Any) -> None:
         for item in _function_calls(result):
             if item.call_id in emitted:
                 item.name = emitted[item.call_id]
-        return result
+        return _finish(result)
 
     _swap_route(app, idx, "/verify", verify_normalized)
 

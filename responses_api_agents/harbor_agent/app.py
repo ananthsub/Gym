@@ -43,6 +43,7 @@ from nemo_gym.openai_utils import (
     NeMoGymResponse,
     NeMoGymResponseCreateParamsNonStreaming,
 )
+from nemo_gym.server_utils import install_orjson_serving
 from responses_api_agents.harbor_agent.utils import HarborAgentUtils
 
 
@@ -223,6 +224,9 @@ class HarborAgent(SimpleResponsesAPIAgent):
 
     def setup_webserver(self) -> FastAPI:
         app = FastAPI()
+        # This override replaces SimpleResponsesAPIAgent.setup_webserver (no session middleware),
+        # so install the orjson route class explicitly to keep serving on the fast path.
+        install_orjson_serving(app)
         app.post("/v1/responses")(self.responses)
         app.post("/run")(self.run)
         # Registered explicitly because this override replaces (rather than extends)
