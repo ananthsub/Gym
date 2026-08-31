@@ -37,17 +37,20 @@ import time
 from abc import abstractmethod
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional
 from uuid import uuid4
 
 import orjson
 from fastapi import Body, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, ValidationError, model_validator
 
 from nemo_gym.anthropic_converter import AnthropicConverter
 from nemo_gym.chat_streaming import sanitize_streaming_chat_body, synthesize_chat_completion_sse
+from nemo_gym.checkpoint.admission import GATED_MODEL_ROUTE_SUFFIXES, AdmissionLimiter, AdmissionMiddleware
+from nemo_gym.checkpoint.control import AdmissionState, ControlCapabilities
+from nemo_gym.checkpoint.model_admission import install_model_admission
 from nemo_gym.config_types import ROLLOUT_PATH_PREFIX, TOKEN_CAPTURE_PATH_SEGMENT, ModelServerRef
 from nemo_gym.openai_utils import (
     NeMoGymChatCompletion,
@@ -90,7 +93,12 @@ _ANTHROPIC_CONVERTER = AnthropicConverter()
 
 
 class BaseResponsesAPIModelConfig(BaseRunServerInstanceConfig):
-    pass
+    # Checkpoint role of this instance. 'policy' instances serve the
+    # generations that produce training tokens and gate admission during a
+    # checkpoint. 'auxiliary' instances serve environment traffic (judges,
+    # user or tool simulators) and never pause: accepted operations must be
+    # able to finish their nested calls while the policy instance drains.
+    instance_role: Literal["policy", "auxiliary"] = "policy"
 
 
 class BaseResponsesAPIModel(BaseServer):
@@ -99,6 +107,8 @@ class BaseResponsesAPIModel(BaseServer):
 
 class SimpleResponsesAPIModel(BaseResponsesAPIModel, SimpleServer):
     _CONTROL_COMPONENT = "responses_api_models"
+
+    _admission_limiter: Optional[AdmissionLimiter] = PrivateAttr(default=None)
 
     def setup_webserver(self) -> FastAPI:
         app = FastAPI()
@@ -123,7 +133,48 @@ class SimpleResponsesAPIModel(BaseResponsesAPIModel, SimpleServer):
         # model server directly.
         app.post("/v1/messages")(self.messages)
 
+        self.setup_model_admission(app)
+
         return app
+
+    def admission_limiter(self) -> AdmissionLimiter:
+        if self._admission_limiter is None:
+            self._admission_limiter = AdmissionLimiter()
+        return self._admission_limiter
+
+    def setup_model_admission(self, app: FastAPI) -> None:
+        """Register admission control on this model server.
+
+        The control routes install on every instance (a pause sent to an
+        auxiliary instance is rejected with a clear error instead of a 404),
+        but only policy instances gate their generation routes. Added after
+        the capture middleware so admission is outermost: a request counts as
+        in flight until its response — and the capture middleware's durable
+        custody write, which precedes the terminal response event — completes.
+        """
+        install_model_admission(
+            app,
+            limiter=self.admission_limiter(),
+            fence=self.checkpoint_fence(),
+            instance_role=self.config.instance_role,
+        )
+        if self.config.instance_role == "policy":
+            app.add_middleware(
+                AdmissionMiddleware,
+                limiter=self.admission_limiter(),
+                gated_suffixes=GATED_MODEL_ROUTE_SUFFIXES,
+            )
+
+    def control_capabilities(self) -> ControlCapabilities:
+        capabilities = super().control_capabilities()
+        capabilities.instance_role = self.config.instance_role
+        if self.config.instance_role == "policy":
+            capabilities.admission_states = [
+                AdmissionState.ACCEPTING,
+                AdmissionState.DRAINING,
+                AdmissionState.PAUSED,
+            ]
+        return capabilities
 
     @abstractmethod
     async def chat_completions(

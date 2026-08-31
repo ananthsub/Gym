@@ -41,6 +41,7 @@ from enum import Enum
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -158,6 +159,12 @@ class ControlCapabilities(BaseModel):
     )
     concurrency_contract: Literal["stateless", "serialized_per_session", "transactional_parallel"] = "stateless"
     multi_process: MultiProcessCapability
+    instance_role: Optional[Literal["policy", "auxiliary"]] = Field(
+        default=None,
+        description="Model servers only: 'policy' instances gate generation traffic during a "
+        "checkpoint; 'auxiliary' instances (judges, simulators) never pause so accepted "
+        "operations can finish draining.",
+    )
 
 
 def multi_process_capability_from_num_workers(num_workers: Optional[int]) -> MultiProcessCapability:
@@ -298,3 +305,11 @@ def install_control_plane(app: FastAPI, *, capabilities: ControlCapabilities, fe
     @app.get(f"{CONTROL_URL_PREFIX}/capabilities")
     async def control_capabilities() -> dict[str, Any]:
         return {**capabilities.model_dump(), **fence.snapshot()}
+
+    async def control_error_handler(request: Any, exc: ControlError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "detail": exc.detail}},
+        )
+
+    app.add_exception_handler(ControlError, control_error_handler)

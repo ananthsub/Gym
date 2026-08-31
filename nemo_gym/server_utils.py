@@ -53,6 +53,7 @@ from requests.exceptions import ConnectionError
 from starlette.middleware.sessions import SessionMiddleware
 
 from nemo_gym import WORKING_DIR
+from nemo_gym.checkpoint.admission import ADMISSION_LEASE_HEADER, current_admission_lease
 from nemo_gym.checkpoint.control import (
     ControlCapabilities,
     ControlFence,
@@ -380,6 +381,15 @@ class ServerClient(BaseModel):
             if attempt_index is None:
                 attempt_index = split_transport_rollout_id(rollout_id)[1]
             headers.setdefault(ATTEMPT_INDEX_HEADER, str(attempt_index))
+            kwargs["headers"] = headers
+
+        # A nested call made while handling an admitted operation carries that
+        # operation's admission lease, so it stays admissible while the target
+        # server drains for a checkpoint.
+        admission_lease = current_admission_lease()
+        if admission_lease is not None:
+            headers = dict(kwargs.get("headers") or {})
+            headers.setdefault(ADMISSION_LEASE_HEADER, admission_lease)
             kwargs["headers"] = headers
 
         return await request(method=method, url=f"{base_url}{url_path}", _internal=True, **kwargs)

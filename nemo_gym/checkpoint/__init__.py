@@ -20,8 +20,25 @@ package are the server-side mechanisms that make those control calls safe:
 
 - ``control``: the ``/ng-control/v1`` capability declaration, checkpoint-id
   fencing, phase machine, and deadline plumbing every control route uses.
+- ``admission``: the admission limiter that drains a server's data plane to
+  a quiescent point, with lease propagation for nested calls and
+  ``409 checkpoint_parked`` for callers that can safely re-issue.
+- ``model_admission``: the ``/ng-control/v1/model-admission`` routes a
+  policy model server exposes to the checkpoint coordinator.
 """
 
+from nemo_gym.checkpoint.admission import (
+    ADMISSION_LEASE_HEADER,
+    GATED_MODEL_ROUTE_SUFFIXES,
+    PLANE_HEADER,
+    AdmissionLimiter,
+    AdmissionMiddleware,
+    AdmissionParkedError,
+    AdmissionTicket,
+    StaleAttemptError,
+    admission_lease_context,
+    current_admission_lease,
+)
 from nemo_gym.checkpoint.control import (
     CONTROL_SCHEMA_VERSION,
     CONTROL_URL_PREFIX,
@@ -38,12 +55,25 @@ from nemo_gym.checkpoint.control import (
     install_control_plane,
     multi_process_capability_from_num_workers,
 )
+from nemo_gym.checkpoint.model_admission import (
+    MODEL_ADMISSION_URL_PREFIX,
+    NotPolicyInstanceError,
+    install_model_admission,
+)
 
 
 __all__ = [
+    "ADMISSION_LEASE_HEADER",
     "CONTROL_SCHEMA_VERSION",
     "CONTROL_URL_PREFIX",
+    "GATED_MODEL_ROUTE_SUFFIXES",
+    "MODEL_ADMISSION_URL_PREFIX",
+    "PLANE_HEADER",
+    "AdmissionLimiter",
+    "AdmissionMiddleware",
+    "AdmissionParkedError",
     "AdmissionState",
+    "AdmissionTicket",
     "CheckpointConflictError",
     "CheckpointPhase",
     "ControlCapabilities",
@@ -52,7 +82,12 @@ __all__ = [
     "Deadline",
     "InvalidPhaseError",
     "MultiProcessCapability",
+    "NotPolicyInstanceError",
+    "StaleAttemptError",
     "StaleCheckpointError",
+    "admission_lease_context",
+    "current_admission_lease",
     "install_control_plane",
+    "install_model_admission",
     "multi_process_capability_from_num_workers",
 ]
