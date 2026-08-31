@@ -41,6 +41,7 @@ completion; a future custody hook can extend the window explicitly.
 """
 
 import asyncio
+import re
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -50,7 +51,13 @@ from uuid import uuid4
 from starlette.responses import JSONResponse
 
 from nemo_gym.checkpoint.control import AdmissionState, ControlError
-from nemo_gym.rollout_correlation import ATTEMPT_INDEX_HEADER, ROLLOUT_ID_HEADER, split_transport_rollout_id
+from nemo_gym.config_types import ROLLOUT_PATH_PREFIX
+from nemo_gym.rollout_correlation import (
+    ATTEMPT_INDEX_HEADER,
+    ROLLOUT_ID_HEADER,
+    ROLLOUT_ID_PATTERN,
+    split_transport_rollout_id,
+)
 
 
 ADMISSION_LEASE_HEADER = "x-ng-admission-lease"
@@ -314,11 +321,24 @@ class AdmissionMiddleware:
         self._limiter = limiter
         self._gated_suffixes = tuple(gated_suffixes)
 
+    # The transport rollout id as it appears in a capture path
+    # (``/ng-rollout/<id>/...``), the identity channel for callers whose HTTP
+    # client Gym does not control.
+    _PATH_IDENTITY = re.compile(rf"^/{re.escape(ROLLOUT_PATH_PREFIX)}/(?P<rollout_id>[^/]+)(?:/|$)")
+
     def _gated(self, scope: dict[str, Any]) -> bool:
         if scope.get("type") != "http":
             return False
         path = scope.get("path", "")
         return path.endswith(self._gated_suffixes)
+
+    @classmethod
+    def _rollout_id_from_path(cls, path: str) -> Optional[str]:
+        match = cls._PATH_IDENTITY.match(path)
+        if match is None:
+            return None
+        candidate = match.group("rollout_id")
+        return candidate if ROLLOUT_ID_PATTERN.match(candidate) else None
 
     @staticmethod
     def _headers(scope: dict[str, Any]) -> dict[str, str]:
@@ -342,9 +362,16 @@ class AdmissionMiddleware:
         except ValueError:
             attempt_index = None
 
+        rollout_id = headers.get(ROLLOUT_ID_HEADER)
+        if rollout_id is None:
+            # A blackbox harness's SDK sets no Gym headers: its identity rides
+            # the base-URL path prefix the agent server launched it with. The
+            # attempt index then derives from the id's -a{n} suffix.
+            rollout_id = self._rollout_id_from_path(scope.get("path", ""))
+
         try:
             ticket = self._limiter.admit(
-                rollout_id=headers.get(ROLLOUT_ID_HEADER),
+                rollout_id=rollout_id,
                 attempt_index=attempt_index,
                 lease=headers.get(ADMISSION_LEASE_HEADER),
                 plane=headers.get(PLANE_HEADER),

@@ -44,7 +44,7 @@ from nemo_gym.checkpoint import (
     current_admission_lease,
 )
 from nemo_gym.openai_utils import NeMoGymResponse, NeMoGymResponseCreateParamsNonStreaming
-from nemo_gym.rollout_correlation import ROLLOUT_ID_HEADER
+from nemo_gym.rollout_correlation import ATTEMPT_INDEX_HEADER, ROLLOUT_ID_HEADER
 from nemo_gym.server_utils import ServerClient
 
 
@@ -226,6 +226,70 @@ def test_middleware_leaves_ungated_paths_open_while_paused() -> None:
     client = _gated_app(limiter)
     limiter.close()
     assert client.get("/other").json() == {"ok": True}
+
+
+# A blackbox harness (Claude Code, Codex CLI, ...) calls through its own SDK:
+# no Gym headers, identity only in the base-URL path prefix the agent server
+# launched it with. Admission must resolve identity from that path.
+
+
+def _blackbox_app(limiter: AdmissionLimiter) -> TestClient:
+    app = FastAPI()
+
+    @app.post("/ng-rollout/{rollout_id}/training-token-capture/v1/messages")
+    async def messages(rollout_id: str) -> dict:
+        inflight = limiter.counts()["inflight"]
+        return {"identity_seen": [(row["rollout_id"], row["attempt_index"]) for row in inflight]}
+
+    app.add_middleware(AdmissionMiddleware, limiter=limiter, gated_suffixes=GATED_MODEL_ROUTE_SUFFIXES)
+    return TestClient(app)
+
+
+def test_middleware_resolves_identity_from_path_for_blackbox_calls() -> None:
+    limiter = AdmissionLimiter()
+    body = _blackbox_app(limiter).post("/ng-rollout/7-1-a2/training-token-capture/v1/messages").json()
+    # The in-flight ticket carries the path-derived identity, so
+    # abort_inflight can find it and status can name it during a drain.
+    assert body["identity_seen"] == [["7-1-a2", None]]
+
+
+def test_middleware_fences_tombstoned_blackbox_attempt_by_path() -> None:
+    limiter = AdmissionLimiter()
+    client = _blackbox_app(limiter)
+    limiter.close()
+    limiter.abort_inflight("7-1-a2", 2)
+    limiter.resume()
+
+    stale = client.post("/ng-rollout/7-1-a2/training-token-capture/v1/messages")
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "stale_attempt"
+
+    # The replacement attempt's base URL carries -a3: admissible.
+    fresh = client.post("/ng-rollout/7-1-a3/training-token-capture/v1/messages")
+    assert fresh.status_code == 200
+
+
+def test_middleware_abort_force_closes_path_admitted_ticket() -> None:
+    limiter = AdmissionLimiter()
+    ticket = limiter.admit(rollout_id="7-1-a2")
+    limiter.close()
+    # The stuck blackbox call is matched by its path-derived identity and no
+    # longer blocks the drain.
+    assert limiter.abort_inflight("7-1-a2", 2) == [ticket.ticket_id]
+    assert limiter.state == AdmissionState.PAUSED
+
+
+def test_middleware_identity_header_wins_over_path() -> None:
+    limiter = AdmissionLimiter()
+    body = (
+        _blackbox_app(limiter)
+        .post(
+            "/ng-rollout/7-1-a2/training-token-capture/v1/messages",
+            headers={ROLLOUT_ID_HEADER: "9-9", ATTEMPT_INDEX_HEADER: "4"},
+        )
+        .json()
+    )
+    assert body["identity_seen"] == [["9-9", 4]]
 
 
 # --- model server routes ---
