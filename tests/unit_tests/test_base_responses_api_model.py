@@ -1676,3 +1676,41 @@ def test_observed_dialect_under_capture_prefix_is_not_marked_incomplete(tmp_path
 
     assert forwarded == ["/v1/chat/completions"]
     assert not token_store.is_incomplete("hole-2")
+
+
+class TestOrjsonDispatchCompatibility:
+    """The orjson dispatch must never 500 on payloads the pre-orjson path served."""
+
+    def _serve(self, payload):
+        from nemo_gym.base_responses_api_model import _orjson_dispatch_response
+
+        return _orjson_dispatch_response(payload)
+
+    def test_kill_switch_returns_content_to_fastapi_untouched(self, monkeypatch):
+        import nemo_gym.base_responses_api_model as m
+
+        monkeypatch.setattr(m, "_ORJSON_SERIALIZATION_DISABLED", True)
+        payload = {"reward": float("nan")}
+        assert m._orjson_dispatch_response(payload) is payload
+
+    def test_aliased_fields_keep_their_wire_names(self):
+        import json
+
+        from nemo_gym.openai_utils import NeMoGymResponse
+
+        resp = NeMoGymResponse.model_validate(
+            {
+                "id": "r1",
+                "created_at": 1.0,
+                "model": "m",
+                "object": "response",
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+                "output": [],
+                "text": {"format": {"type": "json_schema", "name": "answer", "schema": {"type": "object"}}},
+            }
+        )
+        served = json.loads(self._serve(resp).body)
+        assert "schema" in served["text"]["format"] and "schema_" not in served["text"]["format"]
+        NeMoGymResponse.model_validate(served)

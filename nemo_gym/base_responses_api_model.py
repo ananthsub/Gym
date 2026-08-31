@@ -155,20 +155,37 @@ def _plain(value: Any) -> Any:
     return value
 
 
+# Compatibility kill switch: restores the pre-orjson serving path byte-for-byte
+# (jsonable_encoder + stdlib json), including its NaN/Infinity literals, ASCII escaping,
+# and coercions of exotic values. For operators, not authors.
+_ORJSON_SERIALIZATION_DISABLED = os.environ.get("NEMO_GYM_DISABLE_ORJSON_SERIALIZATION") == "1"
+
+
 def _orjson_dispatch_response(content: Any) -> Any:
     """Serialize a completed non-streaming model response with orjson.
 
     FastAPI serializes a bare dictionary or Pydantic model with ``jsonable_encoder``.
     That function recursively visits every token ID and log probability before standard-library ``json.dumps`` runs.
 
-    Convert Pydantic models to JSON-compatible values before encoding the result.
-    Return the encoded bytes as a ``Response`` so FastAPI does not encode them again.
-    Preserve ``Response`` objects created by model-server overrides.
+    Convert Pydantic models to JSON-compatible values before encoding the result, serializing
+    by alias exactly as ``jsonable_encoder`` does (the OpenAI schemas alias reserved names such
+    as ``schema_`` -> ``"schema"``; emitting attribute names corrupts structured-output wire
+    traffic and fails Gym's own revalidation). Return the encoded bytes as a ``Response`` so
+    FastAPI does not encode them again. Preserve ``Response`` objects created by model-server
+    overrides.
+
+    The content contract is JSON-native values, which ``model_dump(mode="json")`` guarantees
+    for models and which every request body Gym sends already meets (``server_utils.request``
+    has always encoded with orjson, with no fallback). The one theoretical hole is an integer
+    beyond 64 bits, which orjson rejects; no response model carries one.
+    ``NEMO_GYM_DISABLE_ORJSON_SERIALIZATION=1`` returns to stock FastAPI serialization.
     """
     if isinstance(content, Response):
         return content
+    if _ORJSON_SERIALIZATION_DISABLED:
+        return content
     if isinstance(content, BaseModel):
-        content = content.model_dump(mode="json")
+        content = content.model_dump(mode="json", by_alias=True)
     return Response(content=orjson.dumps(content), media_type="application/json")
 
 
