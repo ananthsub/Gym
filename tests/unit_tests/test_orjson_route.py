@@ -206,3 +206,28 @@ def test_numpy_scalars_serialize():
 
     with TestClient(app) as client:
         assert client.post("/np").json() == {"done": True, "score": 0.5}
+
+
+def test_divergence_classes_fall_back_to_the_old_path():
+    """Payloads the pre-orjson stack served must keep serving (surrogates, big ints, Decimal, sets)."""
+    import decimal
+
+    app = _app()
+
+    @app.post("/compat")
+    async def compat():
+        return {"text": "truncated \ud83d", "big": 2**70, "d": decimal.Decimal("1.5"), "s": {1}}
+
+    with TestClient(app) as client:
+        resp = client.post("/compat")
+    assert resp.status_code == 200
+    assert resp.json() == {"text": "truncated \ud83d", "big": 2**70, "d": 1.5, "s": [1]}
+
+
+def test_kill_switch_leaves_stock_fastapi_serving(monkeypatch):
+    import nemo_gym.server_utils as su
+
+    monkeypatch.setattr(su, "_ORJSON_SERVING_DISABLED", True)
+    app = FastAPI()
+    su.install_orjson_serving(app)
+    assert app.router.route_class is not su.ORJSONRoute

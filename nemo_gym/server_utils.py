@@ -848,12 +848,22 @@ def unwrap_orjson_route(endpoint: Any) -> Any:
     return getattr(endpoint, "__nemo_gym_orjson_inner__", endpoint)
 
 
+# Compatibility kill switch: with NEMO_GYM_DISABLE_ORJSON_SERIALIZATION=1 the route class is
+# never installed and every server serves through stock FastAPI, byte-for-byte the pre-orjson
+# behavior (NaN/Infinity literals, ASCII escaping, jsonable_encoder coercions, stdlib body
+# parsing). For operators diagnosing a serialization compatibility problem, not for authors.
+_ORJSON_SERVING_DISABLED = environ.get("NEMO_GYM_DISABLE_ORJSON_SERIALIZATION") == "1"
+
+
 def install_orjson_serving(app: FastAPI) -> None:
     """Make every route registered on ``app`` from this point on use ``ORJSONRoute``.
 
     Idempotent. Must run before route registration — ``setup_session_middleware`` is the one
     call every Gym server makes at the top of its ``setup_webserver``, so it lives there.
+    Honors the ``NEMO_GYM_DISABLE_ORJSON_SERIALIZATION`` kill switch.
     """
+    if _ORJSON_SERVING_DISABLED:
+        return
     app.router.route_class = ORJSONRoute
 
 
