@@ -69,10 +69,13 @@ class BaseResponsesAPIAgent(BaseServer):
 class SimpleResponsesAPIAgent(BaseResponsesAPIAgent, AggregateMetricsMixin, SimpleServer):
     config: BaseResponsesAPIAgentConfig
 
+    _CONTROL_COMPONENT = "responses_api_agents"
+
     def setup_webserver(self) -> FastAPI:
         app = FastAPI()
 
         self.setup_session_middleware(app)
+        self.setup_control_plane(app)
 
         app.post("/v1/responses")(self.responses)
         # A self-call made with ``url_path_for_run`` lands on a prefixed twin.

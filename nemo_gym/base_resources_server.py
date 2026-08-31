@@ -30,6 +30,7 @@ from time import time
 
 from fastapi import HTTPException, Request
 
+from nemo_gym.checkpoint.control import ControlCapabilities
 from nemo_gym.config_types import AggregateMetrics, AggregateMetricsRequest
 from nemo_gym.judge import judge_failsafe
 from nemo_gym.openai_utils import (
@@ -189,6 +190,8 @@ class MCPServerMetadata(BaseModel):
 class SimpleResourcesServer(BaseResourcesServer, AggregateMetricsMixin, SimpleServer):
     config: BaseResourcesServerConfig
 
+    _CONTROL_COMPONENT = "resources_servers"
+
     def setup_webserver(self) -> FastAPI:
         app = FastAPI()
 
@@ -200,8 +203,16 @@ class SimpleResourcesServer(BaseResourcesServer, AggregateMetricsMixin, SimpleSe
         app.post("/aggregate_metrics")(self.aggregate_metrics)
         app.get("/reverify_mode")(self.get_reverify_mode)
         self.setup_session_state_routes(app)
+        self.setup_control_plane(app)
 
         return app
+
+    def control_capabilities(self) -> ControlCapabilities:
+        capabilities = super().control_capabilities()
+        if self.supports_session_state():
+            capabilities.checkpoint_mode = "export_restore"
+            capabilities.concurrency_contract = "serialized_per_session"
+        return capabilities
 
     def setup_session_state_routes(self, app: FastAPI) -> None:
         """Register the session-checkpointing framework routes.
