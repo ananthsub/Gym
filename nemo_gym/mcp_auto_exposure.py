@@ -655,8 +655,14 @@ def _wrap_verify(app: FastAPI, server: Any) -> None:
                 return name, value
         return None
 
+    verify_response_model = route.response_model
+    if not (isinstance(verify_response_model, type) and issubclass(verify_response_model, BaseModel)):
+        verify_response_model = None
+
     def _finish(result: Any) -> Any:
-        return orjson_json_response(result) if serialized_route else result
+        # Pass the route's response model so base-annotated verify handlers keep their
+        # subclass-field filtering on the MCP-wrapped path too.
+        return orjson_json_response(result, verify_response_model) if serialized_route else result
 
     @functools.wraps(endpoint)
     async def verify_normalized(**kwargs: Any) -> Any:
