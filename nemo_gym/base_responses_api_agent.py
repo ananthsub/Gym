@@ -37,7 +37,11 @@ from nemo_gym.openai_utils import (
     NeMoGymResponseCreateParamsNonStreaming,
 )
 from nemo_gym.reward_profile import AggregateMetricsMixin, compute_aggregate_metrics
-from nemo_gym.rollout_correlation import maybe_rollout_id_from_run_body, rollout_context
+from nemo_gym.rollout_correlation import (
+    execution_identity_from_run_body,
+    maybe_rollout_id_from_run_body,
+    rollout_context,
+)
 from nemo_gym.server_utils import (
     BaseRunServerInstanceConfig,
     BaseServer,
@@ -84,7 +88,12 @@ class SimpleResponsesAPIAgent(BaseResponsesAPIAgent, AggregateMetricsMixin, Simp
             body = kwargs.get("body")
             if body is None:
                 body = next((arg for arg in args if isinstance(arg, BaseRunRequest)), None)
-            with rollout_context(self.rollout_id_from_run(body)):
+            # Execution identity is unconditional: a run that names its rollout
+            # establishes the context even with observability and token capture
+            # off, so downstream calls always carry the identity headers.
+            # Capture URL prefixing stays gated via ``rollout_id_from_run``.
+            rollout_id, attempt_index = execution_identity_from_run_body(body)
+            with rollout_context(rollout_id, attempt_index=attempt_index):
                 return await run(*args, **kwargs)
 
         app.post("/run")(run_with_rollout_context)

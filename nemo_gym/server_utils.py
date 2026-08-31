@@ -72,7 +72,14 @@ from nemo_gym.global_config import (
     get_global_config_dict,
 )
 from nemo_gym.profiling import Profiler
-from nemo_gym.rollout_correlation import current_rollout_id, maybe_rollout_id_from_run_body
+from nemo_gym.rollout_correlation import (
+    ATTEMPT_INDEX_HEADER,
+    ROLLOUT_ID_HEADER,
+    current_attempt_index,
+    current_rollout_id,
+    maybe_rollout_id_from_run_body,
+    split_transport_rollout_id,
+)
 
 
 _GLOBAL_AIOHTTP_CLIENT: Union[None, ClientSession] = None
@@ -356,6 +363,18 @@ class ServerClient(BaseModel):
             and not url_path.startswith(f"/{ROLLOUT_PATH_PREFIX}/")
         ):
             url_path = f"{rollout_path_prefix(rollout_id)}{url_path}"
+
+        # Execution identity travels on every downstream Gym call, independent
+        # of observability and token capture (the path prefix above stays
+        # capture-gated; these headers do not).
+        if rollout_id is not None:
+            headers = dict(kwargs.get("headers") or {})
+            headers.setdefault(ROLLOUT_ID_HEADER, rollout_id)
+            attempt_index = current_attempt_index()
+            if attempt_index is None:
+                attempt_index = split_transport_rollout_id(rollout_id)[1]
+            headers.setdefault(ATTEMPT_INDEX_HEADER, str(attempt_index))
+            kwargs["headers"] = headers
 
         return await request(method=method, url=f"{base_url}{url_path}", _internal=True, **kwargs)
 
