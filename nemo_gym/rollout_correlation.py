@@ -41,6 +41,11 @@ _ATTEMPT_INDEX: ContextVar[Optional[int]] = ContextVar("nemo_gym_attempt_index",
 ROLLOUT_ID_HEADER = "x-ng-rollout-id"
 ATTEMPT_INDEX_HEADER = "x-ng-attempt-index"
 
+# Echoed by the model server on capture routes with the call id it minted for
+# the request. The caller records it as the join key between its own state
+# (an agent boundary, a custody row) and the model server's ledger.
+MODEL_CALL_ID_HEADER = "x-ng-model-call-id"
+
 # The transport id appends ``-a{n}`` for re-dispatch attempts. The suffix is a
 # capture and routing key, never the logical identity. This pattern recovers
 # the split when only the transport id is available; header-carried values are

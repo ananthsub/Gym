@@ -50,6 +50,7 @@ from nemo_gym.anthropic_converter import AnthropicConverter
 from nemo_gym.chat_streaming import sanitize_streaming_chat_body, synthesize_chat_completion_sse
 from nemo_gym.checkpoint.admission import GATED_MODEL_ROUTE_SUFFIXES, AdmissionLimiter, AdmissionMiddleware
 from nemo_gym.checkpoint.control import AdmissionState, ControlCapabilities
+from nemo_gym.checkpoint.ledger import install_model_checkpoint
 from nemo_gym.checkpoint.model_admission import install_model_admission
 from nemo_gym.config_types import ROLLOUT_PATH_PREFIX, TOKEN_CAPTURE_PATH_SEGMENT, ModelServerRef
 from nemo_gym.openai_utils import (
@@ -64,7 +65,7 @@ from nemo_gym.responses_streaming import (
     synthesize_responses_sse,
     validate_streaming_responses_params,
 )
-from nemo_gym.rollout_correlation import maybe_rollout_id_from_run_body
+from nemo_gym.rollout_correlation import MODEL_CALL_ID_HEADER, maybe_rollout_id_from_run_body
 from nemo_gym.rollout_observability import AgentObservationBundle, ObservationGap, join_model_call_observations
 from nemo_gym.server_utils import (
     BaseRunServerInstanceConfig,
@@ -142,6 +143,10 @@ class SimpleResponsesAPIModel(BaseResponsesAPIModel, SimpleServer):
             self._admission_limiter = AdmissionLimiter()
         return self._admission_limiter
 
+    def _token_store_root(self) -> Optional[Path]:
+        store = make_token_store(self.server_client.global_config_dict)
+        return store.root if store is not None else None
+
     def setup_model_admission(self, app: FastAPI) -> None:
         """Register admission control on this model server.
 
@@ -156,6 +161,13 @@ class SimpleResponsesAPIModel(BaseResponsesAPIModel, SimpleServer):
             app,
             limiter=self.admission_limiter(),
             fence=self.checkpoint_fence(),
+            instance_role=self.config.instance_role,
+        )
+        install_model_checkpoint(
+            app,
+            fence=self.checkpoint_fence(),
+            limiter=self.admission_limiter(),
+            store_root_provider=self._token_store_root,
             instance_role=self.config.instance_role,
         )
         if self.config.instance_role == "policy":
@@ -1217,6 +1229,16 @@ class _CaptureMiddleware:
                 state["status"] = message.get("status")
                 content_type = _headers_content_type(message.get("headers") or [])
                 state["streaming"] = content_type.startswith(b"text/event-stream")
+                # Echo the minted call id: the join key between the caller's
+                # records (an agent boundary, a custody row) and this call's
+                # ledger entry.
+                message = {
+                    **message,
+                    "headers": [
+                        *(message.get("headers") or []),
+                        (MODEL_CALL_ID_HEADER.encode("latin-1"), model_call_id.encode("latin-1")),
+                    ],
+                }
             elif message_type == "http.response.body":
                 chunk = message.get("body", b"") or b""
                 if chunk and state["ttft_ms"] is None:

@@ -63,6 +63,22 @@ GATED_MODEL_ROUTE_SUFFIXES = ("/v1/responses", "/v1/chat/completions", "/v1/mess
 _ADMISSION_LEASE: ContextVar[Optional[str]] = ContextVar("nemo_gym_admission_lease", default=None)
 
 
+def _resolve_identity(rollout_id: str, attempt_index: Optional[int]) -> tuple[str, int]:
+    """``(logical_id, attempt)`` for a transport rollout id and optional explicit attempt.
+
+    The ``-a{n}`` suffix is stripped only when it agrees with the explicit
+    attempt (or no explicit attempt was given): a logical id that itself ends
+    in ``-a{n}`` arrives with an explicit attempt that does not match its
+    suffix, and stripping it would fence the wrong identity.
+    """
+    logical, derived = split_transport_rollout_id(rollout_id)
+    if attempt_index is None:
+        return logical, derived
+    if derived != attempt_index:
+        return rollout_id, attempt_index
+    return logical, attempt_index
+
+
 def current_admission_lease() -> Optional[str]:
     return _ADMISSION_LEASE.get()
 
@@ -164,8 +180,7 @@ class AdmissionLimiter:
         plane: Optional[str] = None,
     ) -> AdmissionTicket:
         if rollout_id is not None:
-            logical, derived_attempt = split_transport_rollout_id(rollout_id)
-            attempt = attempt_index if attempt_index is not None else derived_attempt
+            logical, attempt = _resolve_identity(rollout_id, attempt_index)
             if (logical, attempt) in self._tombstones:
                 raise StaleAttemptError(
                     f"rollout {logical!r} attempt {attempt} was force-closed at a checkpoint "
@@ -227,19 +242,13 @@ class AdmissionLimiter:
         to completion; their writes are attributed to a tombstoned attempt
         and excluded from the checkpoint by the ledger.
         """
-        logical = split_transport_rollout_id(rollout_id)[0]
-        self._tombstones.add((logical, attempt_index))
+        logical, attempt = _resolve_identity(rollout_id, attempt_index)
+        self._tombstones.add((logical, attempt))
         aborted = [
             ticket.ticket_id
             for ticket in self._inflight.values()
             if ticket.rollout_id is not None
-            and split_transport_rollout_id(ticket.rollout_id)[0] == logical
-            and (
-                ticket.attempt_index
-                if ticket.attempt_index is not None
-                else split_transport_rollout_id(ticket.rollout_id)[1]
-            )
-            == attempt_index
+            and _resolve_identity(ticket.rollout_id, ticket.attempt_index) == (logical, attempt)
         ]
         for ticket_id in aborted:
             ticket = self._inflight.pop(ticket_id)
@@ -247,6 +256,15 @@ class AdmissionLimiter:
                 self._root_leases.discard(ticket.lease)
         self._after_inflight_change()
         return aborted
+
+    def install_tombstone(self, logical_rollout_id: str, attempt_index: int) -> None:
+        """Install a fence for an already-logical identity (checkpoint restore).
+
+        Unlike ``abort_inflight`` this never strips an ``-a{n}`` suffix: the
+        manifest records logical ids, and re-splitting one that legitimately
+        ends in ``-a{n}`` would fence the wrong identity.
+        """
+        self._tombstones.add((logical_rollout_id, attempt_index))
 
     def tombstones(self) -> list[tuple[str, int]]:
         return sorted(self._tombstones)
