@@ -1,0 +1,120 @@
+---
+title: "Reproducible Environment Images"
+description: "Lock, build, and run NeMo Gym environments without runtime installation or data preparation"
+position: 3
+---
+# Reproducible Environment Images
+
+NeMo Gym can turn a resolved environment configuration into immutable build inputs and OCI images. The workflow separates authored configuration, dependency resolution, image construction, and runtime configuration so that credentials and deployment addresses do not become part of an image.
+
+<Warning>The runtime can operate without package installation or dataset downloads, but an environment may still require network access to model APIs, external tools, or other Gym servers. Inspect the selected components before applying an egress policy.</Warning>
+
+## Create the environment lock
+
+Resolve the same environment, agent, resources server, and model configuration that you plan to deploy. Strict locking rejects dependency index directives, mutable VCS references, credentials in URLs, and generated requirements without hashes.
+
+```bash
+gym env lock \
+  --environment my-environment \
+  --model-type openai_model \
+  --platform linux/amd64 \
+  --strict \
+  --output build/lock
+```
+
+The command writes `build/lock/environment.lock.json`. The lock records the resolved configuration digest after secret-shaped values are masked, the Gym source identity, exact Python and `uv` versions, component source digests, and hash-complete requirements for every component.
+
+Changing a component file after locking causes image construction to fail. Generate a new lock for every intentional source or dependency change.
+
+## Build one packed image
+
+The packed image contains the Gym CLI and every component environment in the lock.
+
+```bash
+gym env build-image \
+  --lock build/lock/environment.lock.json \
+  --source-root "$PWD" \
+  --base-image registry.example.com/gym-base@sha256:<digest> \
+  --tag registry.example.com/gym/my-environment:<tag> \
+  --platform linux/amd64 \
+  --load
+```
+
+The base image must contain the exact Python version recorded in the lock and a compatible `uv` executable. Pin the base image by OCI digest when the registry supports it. Image construction may access the configured package registry to populate a temporary wheelhouse; package installation into component environments then uses only that wheelhouse with hash checking.
+
+The final image runs as numeric user `65532`. It sets `NEMO_GYM_RUNTIME_INSTALL_POLICY=require-existing`, so `gym env start` refuses to create a missing virtual environment and never invokes `uv` or `pip` at runtime.
+
+## Prepare immutable task data
+
+Collate or otherwise prepare the input JSONL before creating its artifact. The artifact command canonicalizes each row, assigns a stable `task_id` when one is absent, and writes a digest-addressed directory.
+
+```bash
+gym eval prepare-artifact \
+  --input build/prepared/benchmark.jsonl \
+  --output-dir build/artifacts \
+  --split benchmark \
+  --environment-lock build/lock/environment.lock.json
+```
+
+Mount the resulting digest directory into the runtime and pass it to evaluation:
+
+```bash
+gym eval run \
+  --environment my-environment \
+  --model-type openai_model \
+  --split benchmark \
+  --prepared-artifact /artifacts/<artifact-digest> \
+  --output /results/rollouts.jsonl
+```
+
+Gym verifies the manifest identity, data digest, canonical row encoding, row count, and split before starting servers. When `--prepared-artifact` is set, the end-to-end path does not download or collate task data.
+
+## Inject runtime configuration
+
+Do not add API keys, tokens, service addresses, or prepared data to the build context. Write the fully resolved runtime configuration to a read-only mounted file and point Gym at it:
+
+```bash
+docker run --rm \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=4g \
+  --mount type=bind,src="$PWD/runtime.yaml",dst=/run/nemo-gym/runtime.yaml,readonly \
+  --mount type=bind,src="$PWD/results",dst=/results \
+  --mount type=bind,src="$PWD/artifacts",dst=/artifacts,readonly \
+  --env NEMO_GYM_CONFIG_FILE=/run/nemo-gym/runtime.yaml \
+  registry.example.com/gym/my-environment:<tag>
+```
+
+The packed runtime needs writable locations for temporary files, Ray state, caches, and result artifacts. The image defaults these temporary paths under `/tmp`; mount a bounded `tmpfs` or writable volume there. Mount output locations separately when results must persist.
+
+`NEMO_GYM_CONFIG_DICT` takes precedence over `NEMO_GYM_CONFIG_FILE` when both are set. Prefer the file form in orchestrated deployments because secret managers can project it as a read-only volume.
+
+## Build split server images
+
+Split mode publishes one foreground head-server image and one foreground image for each locked component. Because the command records registry digests, it always pushes the generated images.
+
+```bash
+gym env build-images \
+  --lock build/lock/environment.lock.json \
+  --source-root "$PWD" \
+  --base-image registry.example.com/gym-base@sha256:<digest> \
+  --repository registry.example.com/gym/my-environment \
+  --platform linux/amd64 \
+  --output build/composition.bom.json
+```
+
+`composition.bom.json` maps every configured server instance to an image reference containing an OCI `sha256` digest. It does not contain service addresses or credentials. A deployment controller supplies the same runtime configuration file to each container, starts the head image with `gym env start-head`, and starts each component image with `gym env start-server --instance <configured-name>`.
+
+## Compatibility contract
+
+Run `gym env capabilities` to inspect the protocol and schema versions implemented by the installed Gym build.
+
+The initial contract has these guarantees:
+
+- `nemo-gym/runtime/v1` identifies the runtime startup, file-based configuration, immutable-install policy, and image-label contract.
+- `nemo-gym/environment-lock/v1`, `nemo-gym/prepared-artifact/v1`, and `nemo-gym/composition-bom/v1` identify their JSON document shapes. Consumers must reject an unknown schema version instead of guessing.
+- The Python version in an image must exactly match the environment lock. An external Ray cluster must also use the exact Ray and Python versions recorded by the lock.
+- An image is compatible with a lock only when its `io.nvidia.nemo-gym.lock.digest` label equals the lock identity. Split images additionally identify their component and source content digest through the composition BOM.
+- Secrets and resolved deployment addresses are runtime inputs. They are intentionally excluded from lock identity, image contents, and the composition BOM.
+- Package installation and prepared-data generation are forbidden in strict image runtimes. Network behavior inside the selected agent, model, resources server, verifier, or sandbox remains environment-specific.
+
+An incompatible behavior or document-shape change requires a new protocol or schema version. Additive implementation fixes that preserve the documented behavior remain within version 1.

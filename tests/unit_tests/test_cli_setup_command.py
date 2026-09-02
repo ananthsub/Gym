@@ -27,7 +27,12 @@ from nemo_gym.cli.setup_command import (
     run_command,
     setup_env_command,
 )
-from nemo_gym.global_config import UV_VENV_DIR_KEY_NAME
+from nemo_gym.config_types import ConfigError
+from nemo_gym.global_config import (
+    NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME,
+    NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME,
+    UV_VENV_DIR_KEY_NAME,
+)
 from tests.unit_tests.test_global_config import TestGlobalConfig as _TestGlobalConfig
 
 
@@ -98,6 +103,49 @@ class TestCLISetupCommandSetupEnvCommand:
 
         expected_command = f"cd {server_dir} && uv venv --seed --allow-existing --python test python version {server_dir}/.venv > >(sed 's/^/(my server name) /') 2> >(sed 's/^/(my server name) /' >&2) && source {server_dir}/.venv/bin/activate && uv pip install -r requirements.txt ray[default]==test ray version openai==test openai version > >(sed 's/^/(my server name) /') 2> >(sed 's/^/(my server name) /' >&2)"
         assert expected_command == actual_command
+
+    def test_require_existing_policy_uses_prebuilt_venv(self, tmp_path: Path) -> None:
+        server_dir = self._setup_server_dir(tmp_path)
+        (server_dir / ".venv/bin").mkdir(parents=True)
+        (server_dir / ".venv/bin/python").write_text("")
+        (server_dir / ".venv/bin/activate").write_text("")
+
+        actual_command = setup_env_command(
+            dir_path=server_dir,
+            global_config_dict=self._debug_global_config_dict(tmp_path)
+            | {"runtime_install_policy": "require-existing"},
+            prefix="my server name",
+        )
+
+        assert actual_command == f"cd {server_dir} && source {server_dir}/.venv/bin/activate"
+        assert "uv " not in actual_command
+
+    def test_require_existing_policy_does_not_read_dependency_inputs(self, tmp_path: Path) -> None:
+        server_dir = self._setup_server_dir(tmp_path)
+        (server_dir / "requirements.txt").unlink()
+        (server_dir / ".venv/bin").mkdir(parents=True)
+        (server_dir / ".venv/bin/python").write_text("")
+        (server_dir / ".venv/bin/activate").write_text("")
+
+        actual_command = setup_env_command(
+            dir_path=server_dir,
+            global_config_dict=self._debug_global_config_dict(tmp_path)
+            | {"runtime_install_policy": "require-existing"},
+            prefix="my server name",
+        )
+
+        assert actual_command == f"cd {server_dir} && source {server_dir}/.venv/bin/activate"
+
+    def test_require_existing_policy_rejects_missing_venv(self, tmp_path: Path) -> None:
+        server_dir = self._setup_server_dir(tmp_path)
+
+        with raises(ConfigError, match="Packed-image runtime requires the prebuilt component environment"):
+            setup_env_command(
+                dir_path=server_dir,
+                global_config_dict=self._debug_global_config_dict(tmp_path)
+                | {"runtime_install_policy": "require-existing"},
+                prefix="my server name",
+            )
 
     def test_head_server_deps(self, tmp_path: Path) -> None:
         server_dir = self._setup_server_dir(tmp_path)
@@ -377,6 +425,25 @@ class TestCLISetupCommandRunCommand:
         assert popen.call_args.kwargs["env"]["UV_CACHE_DIR"] == "isolated cache"
         assert popen.call_args.kwargs["stdout"] == "isolated stdout"
         assert popen.call_args.kwargs["stderr"] == "isolated stderr"
+
+    def test_extra_env_is_not_added_to_child_argv(self, monkeypatch: MonkeyPatch) -> None:
+        popen, _ = self._setup(monkeypatch)
+        sentinel = "sentinel-secret-value"
+
+        run_command(
+            command="python app.py",
+            working_dir_path=Path("/my path"),
+            extra_env={
+                NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME: f"api_key: {sentinel}",
+                NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME: "selected_server",
+            },
+        )
+
+        assert sentinel not in popen.call_args.args[0]
+        assert NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME not in popen.call_args.args[0]
+        assert NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME not in popen.call_args.args[0]
+        assert popen.call_args.kwargs["env"][NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME] == f"api_key: {sentinel}"
+        assert popen.call_args.kwargs["env"][NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME] == "selected_server"
 
 
 class TestGetNemoGymInstallFlags:

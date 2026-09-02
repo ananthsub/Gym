@@ -68,7 +68,9 @@ from nemo_gym.telemetry.setup import (
 
 _GLOBAL_CONFIG_DICT = None
 NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME = "NEMO_GYM_CONFIG_DICT"
+NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME = "NEMO_GYM_CONFIG_FILE"
 NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME = "NEMO_GYM_CONFIG_PATH"
+NEMO_GYM_RUNTIME_INSTALL_POLICY_ENV_VAR_NAME = "NEMO_GYM_RUNTIME_INSTALL_POLICY"
 CONFIG_PATHS_KEY_NAME = "config_paths"
 ENTRYPOINT_KEY_NAME = "entrypoint"
 DEFAULT_HOST_KEY_NAME = "default_host"
@@ -92,6 +94,9 @@ UV_CACHE_DIR_KEY_NAME = "uv_cache_dir"
 UV_VENV_DIR_KEY_NAME = "uv_venv_dir"
 RESULTS_DIR_KEY_NAME = "results_dir"
 CACHE_DIR_KEY_NAME = "cache_dir"
+RUNTIME_INSTALL_POLICY_KEY_NAME = "runtime_install_policy"
+SERVER_INSTANCE_KEY_NAME = "server_instance"
+SERVER_INSTANCES_KEY_NAME = "server_instances"
 INHERIT_FROM_KEY_NAME = "_inherit_from"
 COPY_KEY_NAME = "_copy"
 DELETE_KEY_KEY_NAME = "_delete_key"
@@ -137,6 +142,9 @@ NEMO_GYM_RESERVED_TOP_LEVEL_KEYS = [
     UV_VENV_DIR_KEY_NAME,
     RESULTS_DIR_KEY_NAME,
     CACHE_DIR_KEY_NAME,
+    RUNTIME_INSTALL_POLICY_KEY_NAME,
+    SERVER_INSTANCE_KEY_NAME,
+    SERVER_INSTANCES_KEY_NAME,
     INHERIT_FROM_KEY_NAME,
     COPY_KEY_NAME,
     NEMO_GYM_LOG_DIR_KEY_NAME,
@@ -1305,6 +1313,10 @@ Found global config dict yaml:
 
             # Skip venv setup is opt-in and defaults to False.
             global_config_dict.setdefault(SKIP_VENV_IF_PRESENT_KEY_NAME, False)
+            global_config_dict.setdefault(
+                RUNTIME_INSTALL_POLICY_KEY_NAME,
+                getenv(NEMO_GYM_RUNTIME_INSTALL_POLICY_ENV_VAR_NAME, "allow-install"),
+            )
 
             global_config_dict.setdefault(DRY_RUN_KEY_NAME, False)
 
@@ -1391,8 +1403,9 @@ Found global config dict yaml:
 def maybe_get_global_config_dict() -> Optional[DictConfig]:
     """The global config dict when this process already has one; never triggers a CLI parse.
 
-    Returns the cached dict, or the one the parent injected via
-    NEMO_GYM_CONFIG_DICT (caching it), or None in a bare process. Library code
+    Returns the cached dict, the one injected via NEMO_GYM_CONFIG_DICT, or the
+    one loaded from the read-only path in NEMO_GYM_CONFIG_FILE, in that order.
+    Injected configs are cached. Returns None in a bare process. Library code
     that only wants to *consult* the config should use this instead of
     `get_global_config_dict`, which falls through to a full CLI/hydra parse.
     """
@@ -1403,6 +1416,21 @@ def maybe_get_global_config_dict() -> Optional[DictConfig]:
     nemo_gym_config_dict_str_from_env = getenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME)
     if nemo_gym_config_dict_str_from_env:
         global_config_dict = OmegaConf.create(nemo_gym_config_dict_str_from_env)
+
+        _GLOBAL_CONFIG_DICT = global_config_dict
+
+        _apply_verbosity(global_config_dict)
+        return global_config_dict
+
+    nemo_gym_config_file_from_env = getenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME)
+    if nemo_gym_config_file_from_env:
+        try:
+            global_config_dict = _load_config_yaml(Path(nemo_gym_config_file_from_env))
+        except FileNotFoundError as e:
+            raise ConfigError(
+                f"{NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME} points to a missing config file: "
+                f"'{nemo_gym_config_file_from_env}'."
+            ) from e
 
         _GLOBAL_CONFIG_DICT = global_config_dict
 
@@ -1431,7 +1459,7 @@ def get_global_config_dict(
 
     Then, the global config dict will be cached and reused.
 
-    If this function is run by a child server of the main proc, that child will have been spun up with an environment variable with key NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME. The config dict will be read directly off this variable, cached, and returned with no additional validation.
+    If this function is run by a child server of the main proc, that child will have been spun up with an environment variable with key NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME. The config dict will be read directly off this variable, cached, and returned with no additional validation. NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME is also supported as a read-only file-based alternative when NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME is absent.
     """
     existing_global_config_dict = maybe_get_global_config_dict()
     if existing_global_config_dict is not None:

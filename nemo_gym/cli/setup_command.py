@@ -14,20 +14,24 @@
 # limitations under the License.
 import importlib.metadata
 import os
+from dataclasses import dataclass
 from os import environ
 from pathlib import Path
 from subprocess import Popen
 from sys import stderr, stdout
-from typing import IO, Any
+from typing import IO, Any, Literal, Mapping
 
 from omegaconf import DictConfig
 
 from nemo_gym import PARENT_DIR
+from nemo_gym.config_types import ConfigError
 from nemo_gym.global_config import (
     HEAD_SERVER_DEPS_KEY_NAME,
     NEMO_GYM_LOG_DIR_KEY_NAME,
+    NEMO_GYM_RUNTIME_INSTALL_POLICY_ENV_VAR_NAME,
     PIP_INSTALL_VERBOSE_KEY_NAME,
     PYTHON_VERSION_KEY_NAME,
+    RUNTIME_INSTALL_POLICY_KEY_NAME,
     SKIP_VENV_IF_PRESENT_KEY_NAME,
     UV_CACHE_DIR_KEY_NAME,
     UV_PIP_SET_PYTHON_KEY_NAME,
@@ -109,74 +113,157 @@ def get_venv_path(dir_path: Path, global_config_dict: DictConfig) -> Path:
     return (dir_path / ".venv").absolute()
 
 
-def setup_env_command(dir_path: Path, global_config_dict: DictConfig, prefix: str) -> str:
-    head_server_deps = global_config_dict[HEAD_SERVER_DEPS_KEY_NAME]
+@dataclass(frozen=True)
+class ComponentInstallPlan:
+    """Dependency and source decisions for one component venv.
 
-    venv_path = get_venv_path(dir_path, global_config_dict)
+    Constructing a plan only inspects local metadata. It does not create a venv,
+    install packages, or mutate process state.
+    """
 
-    uv_venv_cmd = f"uv venv --seed --allow-existing --python {global_config_dict[PYTHON_VERSION_KEY_NAME]} {venv_path}"
+    component_dir: Path
+    venv_path: Path
+    python_version: str
+    dependency_source: Literal["pyproject", "requirements"] | None
+    head_server_dependencies: tuple[str, ...]
+    is_editable_gym_install: bool
+    skip_venv_setup: bool
+    use_python_flag: bool
+    verbose: bool
+    has_overrides: bool
+    nemo_gym_install_flags: str
+    nemo_gym_version_spec: str
 
-    venv_python_fpath = venv_path / "bin/python"
-    venv_activate_fpath = venv_path / "bin/activate"
-    skip_venv_if_present = global_config_dict[SKIP_VENV_IF_PRESENT_KEY_NAME]
-    should_skip_venv_setup = bool(skip_venv_if_present) and venv_python_fpath.exists() and venv_activate_fpath.exists()
+    @property
+    def dependency_file(self) -> Path | None:
+        if self.dependency_source == "pyproject":
+            return self.component_dir / "pyproject.toml"
+        if self.dependency_source == "requirements":
+            return self.component_dir / "requirements.txt"
+        return None
 
-    # explicitly set python path if specified. In Google colab, gym env start fails due to uv pip install falls back to system python (/usr) without this and errors.
-    # not needed for most clusters. should be safe in all scenarios, but only minimally tested outside of colab.
-    # see discussion and examples here: https://github.com/NVIDIA-NeMo/Gym/pull/526#issuecomment-3676230383
-    uv_pip_set_python = global_config_dict.get(UV_PIP_SET_PYTHON_KEY_NAME, False)
-    uv_pip_python_flag = f"--python {venv_python_fpath} " if uv_pip_set_python else ""
 
-    verbose_flag = "-v " if global_config_dict.get(PIP_INSTALL_VERBOSE_KEY_NAME) else ""
+def component_install_plan(
+    dir_path: Path,
+    global_config_dict: DictConfig,
+    *,
+    respect_existing_venv: bool = True,
+) -> ComponentInstallPlan:
+    """Return the install decisions shared by venv setup and lock generation."""
+    component_dir = dir_path.absolute()
+    venv_path = get_venv_path(component_dir, global_config_dict)
+    skip_requested = bool(global_config_dict[SKIP_VENV_IF_PRESENT_KEY_NAME])
+    venv_is_ready = (venv_path / "bin/python").exists() and (venv_path / "bin/activate").exists()
+    skip_venv_setup = respect_existing_venv and skip_requested and venv_is_ready
 
-    is_editable_install = (dir_path.resolve() / "../../pyproject.toml").exists()
+    dependency_source: Literal["pyproject", "requirements"] | None = None
+    has_overrides = False
+    is_editable_install = (component_dir.resolve() / "../../pyproject.toml").exists()
+    install_flags = ""
+    version_spec = ""
 
-    if should_skip_venv_setup:
-        env_setup_cmd = f"source {venv_activate_fpath}"
-    else:
-        has_pyproject_toml = (dir_path / "pyproject.toml").exists()
-        has_requirements_txt = (dir_path / "requirements.txt").exists()
+    if not skip_venv_setup:
+        has_pyproject_toml = (component_dir / "pyproject.toml").exists()
+        has_requirements_txt = (component_dir / "requirements.txt").exists()
         if has_pyproject_toml and has_requirements_txt:
             raise RuntimeError(
-                f"Found both pyproject.toml and requirements.txt for uv venv setup in server dir: {dir_path}. Please only use one or the other!"
+                f"Found both pyproject.toml and requirements.txt for uv venv setup in server dir: "
+                f"{component_dir}. Please only use one or the other!"
             )
-        elif has_pyproject_toml:
-            if is_editable_install:
-                install_cmd = (
-                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}'-e .' {" ".join(head_server_deps)}"""
-                )
-            else:
-                # install nemo-gym from pypi instead of relative path in pyproject.toml
-                # with support for pre-releases, custom indexes, and version pinning
-                install_flags = _get_nemo_gym_install_flags()
-                version_spec = _get_nemo_gym_version_spec(is_editable_install)
-                install_cmd = (
-                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}{install_flags}nemo-gym{version_spec} && """
-                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}--no-sources '-e .' {" ".join(head_server_deps)}"""
-                )
+        if has_pyproject_toml:
+            dependency_source = "pyproject"
         elif has_requirements_txt:
-            has_overrides_txt = (dir_path / "overrides.txt").exists()
-            override_flag = "--override overrides.txt " if has_overrides_txt else ""
-            if is_editable_install:
-                install_cmd = f"""uv pip install {verbose_flag}{uv_pip_python_flag}{override_flag}-r requirements.txt {" ".join(head_server_deps)}"""
-            else:
-                # install nemo-gym from pypi instead of relative path in requirements.txt
-                # with support for pre-releases, custom indexes, and version pinning
-                install_flags = _get_nemo_gym_install_flags()
-                version_spec = _get_nemo_gym_version_spec(is_editable_install)
-                install_cmd = (
-                    f"""(echo 'nemo-gym{version_spec}' && grep -v -F '../..' requirements.txt) | """
-                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}{install_flags}{override_flag}-r /dev/stdin {" ".join(head_server_deps)}"""
-                )
+            dependency_source = "requirements"
+            has_overrides = (component_dir / "overrides.txt").exists()
         else:
             raise RuntimeError(
-                f"Missing pyproject.toml or requirements.txt for uv venv setup in server dir: {dir_path}"
+                f"Missing pyproject.toml or requirements.txt for uv venv setup in server dir: {component_dir}"
             )
 
+        if not is_editable_install:
+            install_flags = _get_nemo_gym_install_flags()
+            version_spec = _get_nemo_gym_version_spec(is_editable_install)
+
+    return ComponentInstallPlan(
+        component_dir=component_dir,
+        venv_path=venv_path,
+        python_version=str(global_config_dict[PYTHON_VERSION_KEY_NAME]),
+        dependency_source=dependency_source,
+        head_server_dependencies=tuple(global_config_dict[HEAD_SERVER_DEPS_KEY_NAME]),
+        is_editable_gym_install=is_editable_install,
+        skip_venv_setup=skip_venv_setup,
+        use_python_flag=bool(global_config_dict.get(UV_PIP_SET_PYTHON_KEY_NAME, False)),
+        verbose=bool(global_config_dict.get(PIP_INSTALL_VERBOSE_KEY_NAME)),
+        has_overrides=has_overrides,
+        nemo_gym_install_flags=install_flags,
+        nemo_gym_version_spec=version_spec,
+    )
+
+
+def _install_command(plan: ComponentInstallPlan) -> str:
+    """Render the existing uv install command from a component plan."""
+    verbose_flag = "-v " if plan.verbose else ""
+    uv_pip_python_flag = f"--python {plan.venv_path / 'bin/python'} " if plan.use_python_flag else ""
+    head_server_deps = " ".join(plan.head_server_dependencies)
+
+    if plan.dependency_source == "pyproject":
+        if plan.is_editable_gym_install:
+            return f"""uv pip install {verbose_flag}{uv_pip_python_flag}'-e .' {head_server_deps}"""
+        return (
+            f"""uv pip install {verbose_flag}{uv_pip_python_flag}{plan.nemo_gym_install_flags}"""
+            f"""nemo-gym{plan.nemo_gym_version_spec} && """
+            f"""uv pip install {verbose_flag}{uv_pip_python_flag}--no-sources '-e .' {head_server_deps}"""
+        )
+
+    if plan.dependency_source == "requirements":
+        override_flag = "--override overrides.txt " if plan.has_overrides else ""
+        if plan.is_editable_gym_install:
+            return (
+                f"""uv pip install {verbose_flag}{uv_pip_python_flag}{override_flag}"""
+                f"""-r requirements.txt {head_server_deps}"""
+            )
+        return (
+            f"""(echo 'nemo-gym{plan.nemo_gym_version_spec}' && grep -v -F '../..' requirements.txt) | """
+            f"""uv pip install {verbose_flag}{uv_pip_python_flag}{plan.nemo_gym_install_flags}"""
+            f"""{override_flag}-r /dev/stdin {head_server_deps}"""
+        )
+
+    raise RuntimeError(f"Component install plan for {plan.component_dir} has no dependency source")
+
+
+def setup_env_command(dir_path: Path, global_config_dict: DictConfig, prefix: str) -> str:
+    runtime_install_policy = global_config_dict.get(
+        RUNTIME_INSTALL_POLICY_KEY_NAME,
+        os.getenv(NEMO_GYM_RUNTIME_INSTALL_POLICY_ENV_VAR_NAME, "allow-install"),
+    )
+    if runtime_install_policy not in ("allow-install", "require-existing"):
+        raise ConfigError(
+            f"{RUNTIME_INSTALL_POLICY_KEY_NAME} must be 'allow-install' or 'require-existing', "
+            f"got {runtime_install_policy!r}"
+        )
+    if runtime_install_policy == "require-existing":
+        component_dir = dir_path.absolute()
+        venv_path = get_venv_path(component_dir, global_config_dict)
+        venv_activate_fpath = venv_path / "bin/activate"
+        missing = [path for path in (venv_path / "bin/python", venv_activate_fpath) if not path.is_file()]
+        if missing:
+            raise ConfigError(
+                f"Packed-image runtime requires the prebuilt component environment at {venv_path}; "
+                f"missing {', '.join(str(path) for path in missing)}. Rebuild the image from the current lock."
+            )
+        return f"cd {component_dir} && source {venv_activate_fpath}"
+
+    plan = component_install_plan(dir_path, global_config_dict)
+    venv_activate_fpath = plan.venv_path / "bin/activate"
+    if plan.skip_venv_setup:
+        env_setup_cmd = f"source {venv_activate_fpath}"
+    else:
+        uv_venv_cmd = f"uv venv --seed --allow-existing --python {plan.python_version} {plan.venv_path}"
+        install_cmd = _install_command(plan)
         prefix_cmd = f" > >(sed 's/^/({prefix}) /') 2> >(sed 's/^/({prefix}) /' >&2)"
         env_setup_cmd = f"{uv_venv_cmd}{prefix_cmd} && source {venv_activate_fpath} && {install_cmd}{prefix_cmd}"
 
-    return f"cd {dir_path} && {env_setup_cmd}"
+    return f"cd {plan.component_dir} && {env_setup_cmd}"
 
 
 def run_command(
@@ -186,6 +273,7 @@ def run_command(
     project_root: Path | None = None,
     *,
     global_config_dict: DictConfig | None = None,
+    extra_env: Mapping[str, str] | None = None,
     stdout_target: IO[Any] | None = None,
     stderr_target: IO[Any] | None = None,
 ) -> Popen:
@@ -207,6 +295,8 @@ def run_command(
     custom_env["PYTHONPATH"] = ":".join(py_path_entries)
 
     custom_env["UV_CACHE_DIR"] = global_config_dict[UV_CACHE_DIR_KEY_NAME]
+    if extra_env is not None:
+        custom_env.update(extra_env)
 
     log_dir = global_config_dict.get(NEMO_GYM_LOG_DIR_KEY_NAME)
     if log_dir:

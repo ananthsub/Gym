@@ -1,0 +1,74 @@
+# syntax=docker/dockerfile:1.7
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE} AS build
+
+ARG COMPONENT_SELECTOR
+ARG PYTHON_VERSION
+
+USER root
+RUN rm -rf /opt/nemo-gym && mkdir -p /opt/nemo-gym
+WORKDIR /opt/nemo-gym
+COPY . .
+RUN python_prefix="$(python -c 'import sys; print(sys.base_prefix)')" \
+    && cp -a "${python_prefix}" /opt/python \
+    && chmod -R a+rX /opt/python
+ENV UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/.venv-root
+
+RUN command -v uv >/dev/null \
+    && python -c 'import platform, sys; expected = sys.argv[1]; actual = platform.python_version(); assert actual == expected, f"Python {actual} != locked {expected}"' "${PYTHON_VERSION}"
+RUN uv sync --locked --no-dev --python /opt/python/bin/python
+ENV PATH="/opt/nemo-gym/.venv-root/bin:/opt/python/bin:${PATH}"
+ENV SOURCE_DATE_EPOCH=0
+RUN uv build --wheel --out-dir /tmp/nemo-gym-wheel
+RUN if [ -n "${COMPONENT_SELECTOR}" ]; then \
+      python -m nemo_gym.environment.image \
+        --lock /opt/nemo-gym/environment.lock.json \
+        --source-root /opt/nemo-gym \
+        --venv-root /opt/nemo-gym \
+        --gym-wheel-dir /tmp/nemo-gym-wheel \
+        --component "${COMPONENT_SELECTOR}"; \
+    fi
+
+FROM ${BASE_IMAGE} AS runtime
+
+ARG LOCK_IDENTITY
+ARG LOCK_SCHEMA
+ARG GYM_VERSION
+ARG PYTHON_VERSION
+ARG RUNTIME_PROTOCOL
+ARG TARGET_KIND
+ARG COMPONENT_SELECTOR
+
+LABEL org.opencontainers.image.version="${GYM_VERSION}"
+LABEL io.nvidia.nemo-gym.target.kind="${TARGET_KIND}"
+LABEL io.nvidia.nemo-gym.target.component="${COMPONENT_SELECTOR}"
+LABEL io.nvidia.nemo-gym.lock.digest="${LOCK_IDENTITY}"
+LABEL io.nvidia.nemo-gym.lock.schema="${LOCK_SCHEMA}"
+LABEL io.nvidia.nemo-gym.core.version="${GYM_VERSION}"
+LABEL io.nvidia.nemo-gym.python.version="${PYTHON_VERSION}"
+LABEL io.nvidia.nemo-gym.runtime.protocol="${RUNTIME_PROTOCOL}"
+
+USER root
+RUN rm -rf /opt/nemo-gym \
+    && mkdir -p /opt/nemo-gym /tmp/nemo-gym-work \
+    && chown 65532:65532 /tmp/nemo-gym-work
+COPY --from=build --chown=65532:65532 /opt/python /opt/python
+COPY --from=build --chown=65532:65532 /opt/nemo-gym /opt/nemo-gym
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/.venv-root
+ENV PATH="/opt/nemo-gym/.venv-root/bin:/opt/python/bin:${PATH}"
+ENV NEMO_GYM_RUNTIME_INSTALL_POLICY=require-existing
+ENV HOME=/tmp/nemo-gym-home
+ENV XDG_CACHE_HOME=/tmp/nemo-gym-cache
+ENV UV_CACHE_DIR=/tmp/nemo-gym-cache/uv
+ENV RAY_TMPDIR=/tmp/ray
+
+WORKDIR /tmp/nemo-gym-work
+USER 65532:65532
+
+FROM runtime AS component
+ENTRYPOINT ["gym", "env", "start-server"]
+
+FROM runtime AS head
+ENTRYPOINT ["gym", "env", "start-head"]

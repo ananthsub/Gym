@@ -66,6 +66,7 @@ def _split_overrides(overrides: list[str]) -> tuple[set[str], set[str]]:
 CONFIG_COMMANDS = [
     (["env", "start"], "nemo_gym.cli.env:run"),
     (["env", "resolve"], "nemo_gym.cli.env:dump_config"),
+    (["env", "lock"], "nemo_gym.environment.lock:lock_environment"),
     (["env", "validate"], "nemo_gym.cli.env:validate"),
     (["eval", "prepare"], "nemo_gym.cli.eval:prepare_benchmark"),
     (["eval", "aggregate"], "nemo_gym.cli.eval:aggregate_rollouts"),
@@ -73,6 +74,97 @@ CONFIG_COMMANDS = [
     (["eval", "reverify"], "nemo_gym.cli.eval:reverify_rollouts"),
     (["dataset", "collate"], "nemo_gym.cli.dataset:prepare_data"),
 ]
+
+
+def test_env_build_image_dispatches_reproducible_build_flags(monkeypatch: MonkeyPatch) -> None:
+    target, overrides = _dispatch_for(
+        monkeypatch,
+        [
+            "env",
+            "build-image",
+            "--lock",
+            "locks/environment.lock.json",
+            "--source-root",
+            "/src/Gym",
+            "--base-image",
+            "registry.example/gym@sha256:abc",
+            "--tag",
+            "registry.example/example:locked",
+            "--platform",
+            "linux/amd64",
+            "--load",
+        ],
+    )
+
+    assert target == "nemo_gym.environment.image:build_image_cli"
+    assert set(overrides) == {
+        '+lock="locks/environment.lock.json"',
+        '+source_root="/src/Gym"',
+        '+base_image="registry.example/gym@sha256:abc"',
+        '+tag="registry.example/example:locked"',
+        '+platform="linux/amd64"',
+        "+load=true",
+    }
+
+
+def test_eval_prepare_artifact_dispatches_content_addressed_inputs(monkeypatch: MonkeyPatch) -> None:
+    target, overrides = _dispatch_for(
+        monkeypatch,
+        [
+            "eval",
+            "prepare-artifact",
+            "--input",
+            "prepared.jsonl",
+            "--output-dir",
+            "artifacts",
+            "--split",
+            "benchmark",
+            "--environment-lock",
+            "environment.lock.json",
+        ],
+    )
+
+    assert target == "nemo_gym.environment.artifact:prepare_artifact_cli"
+    assert set(overrides) == {
+        '+input_jsonl_fpath="prepared.jsonl"',
+        '+output_dirpath="artifacts"',
+        '+split="benchmark"',
+        '+environment_lock="environment.lock.json"',
+    }
+
+
+def test_split_image_and_standalone_commands_dispatch(monkeypatch: MonkeyPatch) -> None:
+    target, overrides = _dispatch_for(
+        monkeypatch,
+        [
+            "env",
+            "build-images",
+            "--base-image",
+            "registry.example/base@sha256:abc",
+            "--repository",
+            "registry.example/gym/demo",
+            "--output",
+            "composition.bom.json",
+        ],
+    )
+    assert target == "nemo_gym.environment.image:build_split_images_cli"
+    assert set(overrides) == {
+        '+base_image="registry.example/base@sha256:abc"',
+        '+repository="registry.example/gym/demo"',
+        '+output="composition.bom.json"',
+    }
+
+    target, overrides = _dispatch_for(monkeypatch, ["env", "start-server", "--instance", "example_server"])
+    assert target == "nemo_gym.cli.env:start_standalone_server"
+    assert overrides == ['+server_instance="example_server"']
+
+    target, overrides = _dispatch_for(monkeypatch, ["env", "start-head"])
+    assert target == "nemo_gym.cli.env:start_standalone_head_server"
+    assert overrides == []
+
+    target, overrides = _dispatch_for(monkeypatch, ["env", "capabilities"])
+    assert target == "nemo_gym.environment.protocol:show_runtime_capabilities"
+    assert overrides == []
 
 
 class TestConfigFlag:
@@ -110,6 +202,48 @@ class TestConfigFlag:
         monkeypatch.setattr(sys, "argv", ["gym", "dataset", "rm", "--config", "x.yaml"])
         with pytest.raises(SystemExit):
             main()
+
+
+class TestEnvLockFlags:
+    def test_lock_selectors_and_options_translate_to_hydra(self, monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+        component_dir = tmp_path / "resources_servers" / "demo" / "configs"
+        component_dir.mkdir(parents=True)
+        config_path = component_dir / "demo.yaml"
+        config_path.write_text("{}\n", encoding="utf-8")
+
+        _, overrides = _dispatch_for(
+            monkeypatch,
+            [
+                "env",
+                "lock",
+                "--search-dir",
+                str(tmp_path),
+                "--resources-server",
+                "demo",
+                "--model",
+                "provider/model",
+                "--model-url",
+                "http://model.example/v1",
+                "--model-api-key",
+                "test-key",
+                "--platform",
+                "x86_64-unknown-linux-gnu",
+                "--output",
+                "locks",
+                "--strict",
+            ],
+        )
+
+        config_paths, others = _split_overrides(overrides)
+        assert config_paths == {str(config_path.resolve())}
+        assert others == {
+            '+platform="x86_64-unknown-linux-gnu"',
+            '+output="locks"',
+            "+strict=true",
+            "+policy_model_name=provider/model",
+            "+policy_base_url=http://model.example/v1",
+            "+policy_api_key=test-key",
+        }
 
 
 class TestStorageFlag:

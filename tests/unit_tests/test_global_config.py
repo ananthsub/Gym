@@ -44,6 +44,7 @@ from nemo_gym.global_config import (
     ALLOW_UNSUPPORTED_PAIRING_KEY_NAME,
     DEFAULT_HEAD_SERVER_PORT,
     NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME,
+    NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME,
     USE_ABSOLUTE_IP,
     GlobalConfigDictParser,
     GlobalConfigDictParserConfig,
@@ -78,6 +79,7 @@ class TestGlobalConfig:
             "head_server_deps": ["ray[default]==test ray version", "openai==test openai version"],
             "python_version": "test python version",
             "skip_venv_if_present": False,
+            "runtime_install_policy": "allow-install",
             "dry_run": False,
             "model_endpoint_readiness_timeout_seconds": 600,
             "allow_openai_version_skew": False,
@@ -250,6 +252,46 @@ class TestGlobalConfig:
 
         global_config_dict = get_global_config_dict()
         assert {"a": 2} == global_config_dict
+
+    def test_get_global_config_dict_file_env_var(self, monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+        config_file = tmp_path / "child-config.yaml"
+        config_file.write_text("a: 2\n", encoding="utf-8")
+        monkeypatch.delenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME, raising=False)
+        monkeypatch.setenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME, str(config_file))
+        monkeypatch.setattr(nemo_gym.global_config, "_GLOBAL_CONFIG_DICT", None)
+
+        global_config_dict = get_global_config_dict()
+
+        assert {"a": 2} == global_config_dict
+        assert config_file.read_text(encoding="utf-8") == "a: 2\n"
+
+    def test_config_dict_env_var_takes_precedence_over_file(self, monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+        config_file = tmp_path / "child-config.yaml"
+        config_file.write_text("source: file\n", encoding="utf-8")
+        monkeypatch.setenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME, "source: environment")
+        monkeypatch.setenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME, str(config_file))
+        monkeypatch.setattr(nemo_gym.global_config, "_GLOBAL_CONFIG_DICT", None)
+
+        assert {"source": "environment"} == get_global_config_dict()
+
+    def test_config_file_env_var_reports_missing_file(self, monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+        missing_file = tmp_path / "missing.yaml"
+        monkeypatch.delenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME, raising=False)
+        monkeypatch.setenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME, str(missing_file))
+        monkeypatch.setattr(nemo_gym.global_config, "_GLOBAL_CONFIG_DICT", None)
+
+        with raises(ConfigError, match=r"NEMO_GYM_CONFIG_FILE.*missing config file"):
+            get_global_config_dict()
+
+    def test_config_file_env_var_reports_malformed_yaml(self, monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+        config_file = tmp_path / "malformed.yaml"
+        config_file.write_text("broken: [\n", encoding="utf-8")
+        monkeypatch.delenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME, raising=False)
+        monkeypatch.setenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME, str(config_file))
+        monkeypatch.setattr(nemo_gym.global_config, "_GLOBAL_CONFIG_DICT", None)
+
+        with raises(ConfigError, match=r"Malformed YAML.*malformed\.yaml"):
+            get_global_config_dict()
 
     def test_get_global_config_dict_config_paths_sanity(self, monkeypatch: MonkeyPatch) -> None:
         self._mock_versions_for_testing(monkeypatch)

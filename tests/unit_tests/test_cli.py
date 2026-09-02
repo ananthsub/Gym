@@ -310,6 +310,66 @@ class TestRunHelperDryRunSpinup:
         with raises(RuntimeError, match="1 server"):
             runner.wait_for_dry_run_spinup()
 
+    @pytest.mark.parametrize("use_config_file", [False, True])
+    def test_child_config_and_selection_are_passed_only_in_environment(
+        self, monkeypatch: MonkeyPatch, use_config_file: bool
+    ) -> None:
+        sentinel = "sentinel-secret-value"
+        global_config = OmegaConf.create(
+            {
+                "dry_run": True,
+                "api_key": sentinel,
+                "selected_server": {
+                    "resources_servers": {
+                        "example": {
+                            "entrypoint": "app.py",
+                            "host": "127.0.0.1",
+                            "port": 1234,
+                            "domain": "other",
+                        }
+                    }
+                },
+            }
+        )
+        process = MagicMock(pid=42)
+        run_command_mock = MagicMock(return_value=process)
+        head_server = MagicMock()
+        client = MagicMock()
+        client.poll_for_status.return_value = "success"
+        server_client_cls = MagicMock(return_value=client)
+        server_client_cls.load_head_server_config.return_value = MagicMock()
+
+        monkeypatch.setattr(nemo_gym.cli.env, "get_global_config_dict", MagicMock(return_value=global_config))
+        monkeypatch.setattr(nemo_gym.cli.env, "configure_telemetry_env", MagicMock())
+        monkeypatch.setattr(nemo_gym.cli.env, "init_telemetry", MagicMock())
+        monkeypatch.setattr(nemo_gym.cli.env, "initialize_ray", MagicMock())
+        monkeypatch.setattr(
+            nemo_gym.cli.env.HeadServer,
+            "run_webserver",
+            MagicMock(return_value=(MagicMock(), MagicMock(), head_server)),
+        )
+        monkeypatch.setattr(nemo_gym.cli.env, "setup_env_command", MagicMock(return_value="setup"))
+        monkeypatch.setattr(nemo_gym.cli.env, "run_command", run_command_mock)
+        monkeypatch.setattr(nemo_gym.cli.env, "record_active_servers", MagicMock())
+        monkeypatch.setattr(nemo_gym.cli.env, "ServerClient", server_client_cls)
+        monkeypatch.setattr(RunHelper, "wait_for_dry_run_spinup", MagicMock())
+        if use_config_file:
+            monkeypatch.setenv("NEMO_GYM_CONFIG_FILE", "/run/secrets/runtime.yaml")
+
+        RunHelper().start(nemo_gym.global_config.GlobalConfigDictParserConfig())
+
+        command = run_command_mock.call_args.args[0]
+        child_env = run_command_mock.call_args.kwargs["extra_env"]
+        assert command == "setup && python app.py"
+        assert sentinel not in command
+        assert "NEMO_GYM_CONFIG_DICT" not in command
+        assert "NEMO_GYM_CONFIG_PATH" not in command
+        if use_config_file:
+            assert "NEMO_GYM_CONFIG_DICT" not in child_env
+        else:
+            assert sentinel in child_env["NEMO_GYM_CONFIG_DICT"]
+        assert child_env["NEMO_GYM_CONFIG_PATH"] == "selected_server"
+
 
 class TestRunHelperShutdownReap:
     """RunHelper.shutdown must reap every server subprocess on every exit path."""

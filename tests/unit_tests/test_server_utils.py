@@ -15,6 +15,7 @@
 import multiprocessing
 import socket
 from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 from aiohttp import ClientOSError, ClientResponseError, RequestInfo
@@ -27,6 +28,7 @@ import nemo_gym.global_config
 import nemo_gym.server_utils
 from nemo_gym.global_config import (
     NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME,
+    NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME,
     NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME,
 )
 from nemo_gym.server_utils import (
@@ -156,6 +158,7 @@ class TestServerUtils:
 
         monkeypatch.setattr(nemo_gym.global_config, "_GLOBAL_CONFIG_DICT", None)
         monkeypatch.delenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME, raising=False)
+        monkeypatch.delenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME, raising=False)
 
         httpx_client_mock = MagicMock()
         httpx_response_mock = MagicMock()
@@ -183,6 +186,7 @@ class TestServerUtils:
         # It must still fetch the full config from the running head server.
         monkeypatch.setattr(nemo_gym.global_config, "_GLOBAL_CONFIG_DICT", global_config_dict)
         monkeypatch.delenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME, raising=False)
+        monkeypatch.delenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME, raising=False)
 
         response = MagicMock(content=b'"remote_server: {host: remote, port: 1234}"')
         get_mock = MagicMock(return_value=response)
@@ -209,6 +213,24 @@ class TestServerUtils:
         client = ServerClient.load_from_global_config()
         assert client.global_config_dict is global_config_dict
 
+    def test_ServerClient_load_from_global_config_fast_path_via_file(self, monkeypatch: MonkeyPatch) -> None:
+        global_config_dict = DictConfig({"head_server": {"host": "", "port": 0}})
+        monkeypatch.setattr(
+            nemo_gym.server_utils,
+            "get_global_config_dict",
+            MagicMock(return_value=global_config_dict),
+        )
+        monkeypatch.delenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME, raising=False)
+        monkeypatch.setenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME, "child-config.yaml")
+
+        def boom(*args, **kwargs):
+            raise AssertionError("requests.get should not be called on the fast path")
+
+        monkeypatch.setattr(nemo_gym.server_utils.requests, "get", boom)
+
+        client = ServerClient.load_from_global_config()
+        assert client.global_config_dict is global_config_dict
+
     def test_ServerClient_load_from_global_config_propogate_ConnectionError(self, monkeypatch: MonkeyPatch) -> None:
         global_config_dict = DictConfig(
             {
@@ -224,6 +246,7 @@ class TestServerUtils:
 
         monkeypatch.setattr(nemo_gym.global_config, "_GLOBAL_CONFIG_DICT", None)
         monkeypatch.delenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME, raising=False)
+        monkeypatch.delenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME, raising=False)
 
         httpx_client_mock = MagicMock()
         httpx_client_mock.side_effect = ConnectionError
@@ -282,6 +305,29 @@ class TestServerUtils:
         assert "" == actual_config.host
         assert 0 == actual_config.port
         assert "my entrypoint" == actual_config.entrypoint
+
+    def test_BaseServer_selects_config_from_injected_file(self, monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+        config_file = tmp_path / "child-config.yaml"
+        config_file.write_text(
+            "my_server:\n"
+            "  resources_servers:\n"
+            "    example:\n"
+            "      host: 127.0.0.1\n"
+            "      port: 4321\n"
+            "      entrypoint: app.py\n",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME, raising=False)
+        monkeypatch.setenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME, str(config_file))
+        monkeypatch.setenv(NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME, "my_server")
+        monkeypatch.setattr(nemo_gym.global_config, "_GLOBAL_CONFIG_DICT", None)
+
+        actual_config = BaseServer.load_config_from_global_config()
+
+        assert actual_config.host == "127.0.0.1"
+        assert actual_config.port == 4321
+        assert actual_config.entrypoint == "app.py"
+        assert actual_config.name == "my_server"
 
     def test_HeadServer_setup_webserver_sanity(self) -> None:
         head_server = HeadServer(config=BaseServerConfig(host="", port=0))

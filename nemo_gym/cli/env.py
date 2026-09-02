@@ -63,8 +63,10 @@ from nemo_gym.global_config import (
     JSON_OUTPUT_KEY_NAME,
     MODEL_ENDPOINT_READINESS_TIMEOUT_KEY_NAME,
     NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME,
+    NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME,
     NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME,
     NEMO_GYM_RESERVED_TOP_LEVEL_KEYS,
+    NEMO_GYM_RUNTIME_INSTALL_POLICY_ENV_VAR_NAME,
     QUERY_KEY_NAME,
     GlobalConfigDictParser,
     GlobalConfigDictParserConfig,
@@ -364,6 +366,60 @@ class TestConfig(RunConfig):
         return _resolve_server_dir(self._dir_path)
 
 
+def _standalone_server_spec(global_config_dict: DictConfig, instance_name: str) -> tuple[Path, Path]:
+    server = global_config_dict.get(instance_name)
+    if not isinstance(server, DictConfig) or len(server) != 1:
+        raise ConfigError(f"Server instance {instance_name!r} is not present in the resolved config")
+    server_type = next(iter(server))
+    implementations = server[server_type]
+    if not isinstance(implementations, DictConfig) or len(implementations) != 1:
+        raise ConfigError(f"Server instance {instance_name!r} must select exactly one implementation")
+    implementation = next(iter(implementations))
+    server_config = implementations[implementation]
+    if not isinstance(server_config, DictConfig) or "entrypoint" not in server_config:
+        raise ConfigError(f"Server instance {instance_name!r} has no entrypoint")
+
+    entrypoint = Path(server_config.entrypoint)
+    if entrypoint.is_absolute() or ".." in entrypoint.parts:
+        raise ConfigError(f"Server instance {instance_name!r} has an unsafe entrypoint: {entrypoint}")
+    return _resolve_server_dir(Path(server_type, implementation)), entrypoint
+
+
+@exit_cleanly_on_config_error
+def start_standalone_server() -> None:  # pragma: no cover
+    """Replace this process with one prebuilt server selected from runtime config."""
+    global_config_dict = get_global_config_dict()
+    instance_name = global_config_dict.get("server_instance")
+    if not isinstance(instance_name, str) or not instance_name:
+        raise ConfigError("gym env start-server requires --instance NAME")
+    server_dir, entrypoint = _standalone_server_spec(global_config_dict, instance_name)
+    venv_path = get_venv_path(server_dir, global_config_dict)
+    python = venv_path / "bin/python"
+    if not python.is_file():
+        raise ConfigError(
+            f"Standalone startup requires the prebuilt component environment at {venv_path}. "
+            "Build and run the matching locked server image."
+        )
+
+    child_env = os.environ.copy()
+    if NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME not in child_env:
+        child_env[NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME] = OmegaConf.to_yaml(global_config_dict)
+    child_env[NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME] = instance_name
+    child_env[NEMO_GYM_RUNTIME_INSTALL_POLICY_ENV_VAR_NAME] = "require-existing"
+    os.chdir(server_dir)
+    os.execve(str(python), [str(python), str(entrypoint)], child_env)
+
+
+@exit_cleanly_on_config_error
+def start_standalone_head_server() -> None:  # pragma: no cover
+    """Run only the config-discovery head server in the foreground."""
+    global_config_dict = get_global_config_dict()
+    config = ServerClient.load_head_server_config()
+    server = HeadServer(config=config)
+    server.set_server_instances(list(global_config_dict.get("server_instances", [])))
+    uvicorn.run(server.setup_webserver(), host=config.host, port=config.port)
+
+
 class RunHelper:  # pragma: no cover
     _head_server: uvicorn.Server
     _head_server_thread: Thread
@@ -391,8 +447,7 @@ class RunHelper:  # pragma: no cover
         # Note: This function will modify the global config dict - update `ray_head_node_address`
         initialize_ray()
 
-        # Assume Nemo Gym Run is for a single agent.
-        escaped_config_dict_yaml_str = shlex.quote(OmegaConf.to_yaml(global_config_dict))
+        child_config_yaml = OmegaConf.to_yaml(global_config_dict)
 
         # We always run the head server in this `run` command.
         self._head_server, self._head_server_thread, self._head_server_instance = HeadServer.run_webserver()
@@ -429,12 +484,17 @@ class RunHelper:  # pragma: no cover
             # Resolve cwd-first (a local server), else the install location for built-ins.
             dir_path = _resolve_server_dir(Path(first_key, second_key))
 
-            command = f"""{setup_env_command(dir_path, global_config_dict, top_level_path)} \\
-    && {NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME}={escaped_config_dict_yaml_str} \\
-    {NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME}={shlex.quote(top_level_path)} \\
-    python {str(entrypoint_fpath)}"""
+            command = f"{setup_env_command(dir_path, global_config_dict, top_level_path)} && python {entrypoint_fpath}"
 
-            process = run_command(command, dir_path, server_name=top_level_path)
+            child_env = {NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME: top_level_path}
+            if NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME not in os.environ:
+                child_env[NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME] = child_config_yaml
+            process = run_command(
+                command,
+                dir_path,
+                server_name=top_level_path,
+                extra_env=child_env,
+            )
             self._processes[top_level_path] = process
             # In dry run mode, wait for each setup command to finish before starting the next.
             # This installs uv virtual environments serially, which significantly reduces uv

@@ -640,6 +640,13 @@ class E2ERolloutCollectionConfig(SharedRolloutCollectionConfig):
 
     split: Union[Literal["train"], Literal["validation"], Literal["benchmark"]]
     reuse_existing_data_preparation: bool = False
+    prepared_artifact: Optional[str] = Field(
+        default=None,
+        description=(
+            "Digest-addressed prepared artifact directory or manifest. When set, Gym verifies and uses "
+            "the immutable artifact instead of downloading or collating data at runtime."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

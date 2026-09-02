@@ -65,6 +65,7 @@ from nemo_gym.global_config import (
     DRY_RUN_KEY_NAME,
     HEAD_SERVER_KEY_NAME,
     NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME,
+    NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME,
     NEMO_GYM_CONFIG_PATH_ENV_VAR_NAME,
     OBSERVABILITY_ENABLED_KEY_NAME,
     RAY_HEAD_NODE_ADDRESS_KEY_NAME,
@@ -586,7 +587,9 @@ class ServerClient(BaseModel):
 
 
 def _has_injected_global_config_env() -> bool:
-    return getenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME) is not None
+    return (
+        getenv(NEMO_GYM_CONFIG_DICT_ENV_VAR_NAME) is not None or getenv(NEMO_GYM_CONFIG_FILE_ENV_VAR_NAME) is not None
+    )
 
 
 SESSION_ID_KEY = "session_id"
