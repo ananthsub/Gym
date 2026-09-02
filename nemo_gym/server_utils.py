@@ -772,22 +772,20 @@ class ORJSONRoute(APIRoute):
 
 
 class GymORJSONResponse(JSONResponse):
-    """``JSONResponse`` that renders with orjson, falling back to stdlib for parity.
+    """``JSONResponse`` that renders with orjson.
 
-    Used as the app's default response class. Annotated routes never reach ``render`` —
-    FastAPI's pydantic-core fast path produces the bytes — so this only accelerates routes
-    that return plain dicts/lists through ``jsonable_encoder``. The fallback preserves the
-    old encoder's behavior for values orjson rejects (e.g. strings with lone surrogates),
-    and stdlib's ``allow_nan`` emission of NaN/Infinity literals on that path.
+    Used as the app's default response class: typed routes serialize through FastAPI's own
+    ``field.serialize`` (full response-model semantics) and un-annotated routes through
+    ``jsonable_encoder``; only the final bytes encoding changes. The kill switch in
+    ``install_orjson_serving`` returns to stock ``JSONResponse``.
     """
 
     def render(self, content: Any) -> bytes:
-        try:
-            return orjson.dumps(content, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY)
-        except TypeError:
-            # ensure_ascii (the stdlib default) escapes lone surrogates instead of failing to
-            # encode them — starlette's own render (ensure_ascii=False) 500s on those.
-            return json.dumps(content, separators=(",", ":")).encode("utf-8")
+        # Content here is already JSON-native (FastAPI's field.serialize or jsonable_encoder ran
+        # first). OPT_NON_STR_KEYS keeps stdlib's stringification of non-string dict keys; no
+        # further fallback — the one value orjson rejects that stdlib served is an integer beyond
+        # 64 bits, and lone surrogates failed the stock render (ensure_ascii=False) as well.
+        return orjson.dumps(content, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY)
 
 
 # Compatibility kill switch: with NEMO_GYM_DISABLE_ORJSON_SERIALIZATION=1 neither the route

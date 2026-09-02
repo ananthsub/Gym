@@ -98,8 +98,8 @@ def test_base_annotation_filters_subclass_fields_like_fastapi():
         assert client.post("/unfiltered").json() == {"a": 2, "secret": "hidden"}
 
 
-def test_unannotated_dict_route_renders_with_orjson_and_falls_back():
-    """Dict-returning routes get GymORJSONResponse; orjson-rejected values fall back."""
+def test_unannotated_dict_route_renders_with_orjson():
+    """Dict-returning routes get GymORJSONResponse after jsonable_encoder's coercions."""
     import decimal
 
     app = _app()
@@ -110,9 +110,8 @@ def test_unannotated_dict_route_renders_with_orjson_and_falls_back():
 
     @app.post("/compat")
     async def compat():
-        # jsonable_encoder coerces Decimal/set before render; a lone surrogate
-        # survives into render, where the stdlib fallback must serve it.
-        return {"text": "truncated \ud83d", "big": 2**70, "d": decimal.Decimal("1.5"), "s": {1}}
+        # jsonable_encoder coerces Decimal/set (and stringifies int keys) before render.
+        return {"d": decimal.Decimal("1.5"), "s": {1}, 1: "a"}
 
     @app.post("/stream")
     async def stream_route():
@@ -122,7 +121,7 @@ def test_unannotated_dict_route_renders_with_orjson_and_falls_back():
         assert client.post("/dict").content == orjson.dumps({"ok": True})
         resp = client.post("/compat")
         assert resp.status_code == 200
-        assert resp.json() == {"text": "truncated \ud83d", "big": 2**70, "d": 1.5, "s": [1]}
+        assert resp.json() == {"d": 1.5, "s": [1], "1": "a"}
         stream = client.post("/stream")
         assert stream.content == b"ab"
         assert stream.headers["content-type"].startswith("text/event-stream")
