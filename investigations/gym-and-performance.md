@@ -76,7 +76,7 @@ single sentence that explains most of the numbers in this report.
 | Per-hop floor for a tool call, and the cost at depth 512 | 8 ms → 181 ms | conversation re-accumulation makes total rollout work quadratic in hops |
 | Offered concurrency of 131,072 on one host | 0 failures | the consumer throttles; offered ≠ resident. The system slows, it does not break |
 | Bookkeeping cost of 131,072 in-flight tasks on one loop | 17.6K completions/s, 184 MB | asyncio itself is not the bottleneck at today's payload costs |
-| Ray boundary per 8,192-rollout step | 9.3 GB / direction | every result is pickled through the object store and retained |
+| Ray boundary per 8,192-rollout step | one object-store object per rollout | NeMo RL main streams `run_rollouts` results one object per rollout, each carrying the training tensors plus the full `/run` result; on the async path every prompt group is re-pickled into the replay-buffer actor (up to 1,024 groups retained) and the trainer fetches the step as one object |
 
 ### 1.3 Assumptions the stack makes
 
@@ -85,11 +85,11 @@ single sentence that explains most of the numbers in this report.
 | Every server distrusts every peer: ingress always re-validates | explicit design | ~10 full validations per rollout; making each cheaper is an optimization, removing one is a trust-model change |
 | The verify echo *is* the rollout record, and the verifier may rewrite it | implicit, load-bearing | slimming the echo needs the agent to re-attach its own copy and an explicit patch channel; terminal model-call attribution reads this record's id and content |
 | Session cookies round-trip through the agent to correlate per-rollout state | explicit | the cookie layer cannot go; the self-call removal (#1439) must thread cookies by hand |
-| Capture and token-id recording observe values before any wire encoding | explicit contract | the envelope encodes only after `capture_tokens` |
+| Token-id recording observes values before any wire encoding | explicit contract on the envelope branch | the envelope encodes only after `capture_tokens`; the model-call observability capture records the wire body, so with the envelope on it stores the encoded strings |
 | Handlers' return annotations drive OpenAPI, serialization, aliases, and field filtering | explicit in FastAPI, implicit in Gym | bypassing FastAPI's response path breaks these — the lesson of §3.3 |
 | Config is immutable after startup | explicit since #1404 | per-request config reads are bugs |
 | JSON is the only wire encoding; bodies are fully buffered, never streamed | implicit | every optimization makes a stage cheaper; only streaming would remove one |
-| There is no admission control anywhere in the stack | implicit | uvicorn accepts everything; the only backpressure is the caller's connection pool and the engine's queue — bound in-flight at the driver |
+| There is no admission control anywhere in the stack | implicit | uvicorn accepts everything; the only backpressure is the caller's connection pool and the engine's queue — bound in-flight at the driver. NeMo RL's async collector submits a whole 8,192-row batch in one `run_rollouts` call with no per-rollout semaphore; its bounds are need-based dispatch per target step, a 1,024-group replay-buffer backoff, and a four-attempt whole-batch re-dispatch |
 
 ## 2. Inside one server: what happens to a request
 
@@ -141,13 +141,13 @@ Starlette 1.3.1, FastAPI 0.135.2. "Body" means the 2 MB training-shaped payload.
 |---|---|---|
 | 1 · accept | uvicorn's listening socket accepts a connection and creates one protocol object for it; the connection is reused for many requests by the caller's pool. uvicorn never refuses work (`limit_concurrency` unset), and by default wraps the app in a proxy-headers layer that parses `x-forwarded-*` headers. | Amortized; connections are long-lived. No server-side admission control exists at all. |
 | 2 · read + parse HTTP | Bytes arrive from the socket; the parser splits the request line and headers, builds a plain-dict description of the request (the ASGI *scope*), and creates **one asyncio task per request**. Body bytes are appended to a buffer; after 64 KB accumulates unread, uvicorn pauses the socket until the app consumes what is there. | A 2 MB body arrives through ~32 pause/resume windows, each an event-loop round trip. With h11 the body was copied through a pure-Python buffer first; httptools delivers it from C. |
-| 3 · middleware descent | Starlette calls the outermost middleware, which calls the next, down to the router: server-error guard → Gym's exception middleware → the per-server-type layer → cookie-session (HMAC verify) → session-id → Starlette's HTTPException handler → router. | A `BaseHTTPMiddleware` costs a task group, a memory-stream pair, and a byte relay per request (~15–20% of a big-body hop, ~45% of a small one); a pure-ASGI layer costs a function call. |
-| 4 · routing | The router tries each registered path pattern in order until one matches. | 5–10 routes per Gym server; negligible. |
+| 3 · middleware descent | Starlette calls the outermost middleware, which calls the next, down to the router. On main, outermost first: uvicorn's proxy-headers layer → server-error guard → Gym's exception middleware → the per-server-type layer (capture on model servers, rollout-context on resources servers; both pure ASGI) → cookie-session (HMAC verify when a request carries a cookie) → session-id → Starlette's HTTPException handler → FastAPI's exit-stack layer → router. With telemetry exporting, the OpenTelemetry middleware sits just inside the server-error guard. | Gym's three middlewares together cost 16% of a big-body hop and 45% of a small one in the loopback ladder, most of it from the two `BaseHTTPMiddleware` layers (each a task group, a memory-stream pair, and a byte relay per request); a pure-ASGI layer costs a function call. |
+| 4 · routing | The router tries each registered path pattern in order until one matches; FastAPI's four documentation routes are registered first. | 8–10 route entries on a bare base-class server (4–6 Gym routes plus the 4 doc routes), plus one per tool on resources servers; negligible. |
 | 5 · read body + parse JSON | FastAPI collects the body chunks into one bytes object, then parses the JSON into Python dicts and lists. | Second copy of the bytes plus the parsed object graph. Parse at 2 MB: stdlib 14.5 ms, orjson 3.9 ms. |
 | 6 · validate parameters | FastAPI matches the parsed body to the handler's declared parameter type and runs Pydantic validation over the entire graph — every field, every list element. | The dominant Pydantic cost; the unions rework (§3) takes per-item cost from 41.9 to 2.3 µs. A handler declaring `body: dict` skips this and validates explicitly inside. |
 | 7 · call the handler | An `async def` handler runs on the event loop; a plain `def` handler is sent to a thread pool (§2.4). Gym's wrappers run here: telemetry (a cheap enabled-check when off), `judge_failsafe` on `/verify`, rollout-context on `/run`. | Whatever your handler does. Anything CPU-bound done inline here stalls every other request on this worker. |
-| 8 · build the response | If the handler returned a ready `Response`, it passes through. Otherwise FastAPI validates the return value against the declared return type (an instance of exactly that class passes through untouched; a subclass instance is filtered to the declared fields), serializes it — by alias, honoring custom serializers and include/exclude options — and encodes the bytes with the route's response class. Un-annotated handlers go through a slow generic Python walk instead. | Stock encoding is stdlib `json.dumps`: 24 ms at 2 MB. The parity branch swaps only the encoder to orjson. |
-| 9 · send | Headers go first, then one write of the whole body; the cookie middleware re-signs the session and adds `Set-Cookie` on the way out. uvicorn writes into the socket buffer and pauses if it fills. | One copy into the kernel. Nothing streams: the full body exists before the first byte leaves. |
+| 8 · build the response | If the handler returned a ready `Response`, it passes through. Otherwise FastAPI validates the return value against the declared return type (an instance of that class, or of a subclass, passes through untouched), serializes it — by alias, honoring custom serializers and include/exclude options, and dropping subclass-only fields at this step — and encodes the bytes with the route's response class. Un-annotated handlers go through a slow generic Python walk instead. | For annotated handlers with the default response class, FastAPI 0.135 serializes straight to bytes with pydantic-core; stdlib `json.dumps` (24 ms at 2 MB) is the path only for un-annotated handlers, which is what the model server had before #2867. The parity branch routes typed returns through field serialization plus orjson, measured faster on array-heavy bodies (§3.1). |
+| 9 · send | Headers go first, then one write of the whole body; the cookie middleware re-signs the session and adds `Set-Cookie` on every response, because the session-id layer marks the session modified on every request. uvicorn writes into the socket buffer and pauses if it fills. | One copy into the kernel. Nothing streams: the full body exists before the first byte leaves. |
 | 10 · failures | A body that fails validation returns 422 — after Gym's handler **pretty-prints the entire request body to stdout**; when the body is not JSON, that print itself raises and the 422 becomes a 500. Unhandled exceptions become JSON 500s with the exception text. | A 2 MB pretty-print per failed validation: harmless in dev, self-inflicted load in a schema-mismatch storm at 8K in flight. |
 
 Two things fall out of laying it end to end. The payload is materialized **four
@@ -235,9 +235,9 @@ usable by default).
 
 | Client → destination | Shape | Sizing rule (per-worker share = value ÷ num_workers) |
 |---|---|---|
-| driver → agent | all rollouts funnel to one host:port | `limit_per_host ≥` intended in-flight (8,192 at Lightning scale → 16,384 for headroom) |
+| driver → agent | all rollouts funnel to one host:port | `limit_per_host ≥` intended in-flight: 8,192 at Lightning scale, so 16,384 for headroom. Lightning's recipe sets 4,096 and NeMo RL passes it through unchanged, so half of a step's `/run` posts wait inside the driver's connector |
 | agent → model server | all model calls to one host:port (workers share the port) | same rule on the agent |
-| model proxy → engines | spread over K engine hosts | the *total* limit binds, and it is divided by `num_workers`: a 4,096 total across 16 workers is 256 per worker, so ~512 engine calls in flight per worker queue 2:1 inside the client. Those figures are from the Lightning recipe on the NeMo RL side, not a config in this tree; here, the nemotron_3.5_super configs run `vllm_model` with 16 workers |
+| model proxy → engines | spread over K engine hosts | the *total* limit binds, and it is divided by `num_workers`: the Lightning recipe (`rlvr.yaml` in NeMo RL) sets both connector limits to 4,096 and runs the policy `vllm_model` with `num_workers: 16`, so each worker's share is 256, and ~512 engine calls in flight per worker queue 2:1 inside the client. In this tree, the nemotron_3.5_super configs also run `vllm_model` with 16 workers |
 | agent → resources | one verify + tool calls per rollout | per-host ≥ in-flight rollouts; verifies bunch at step end |
 
 > **Rule of thumb:** the limits are a destination-protection and descriptor
@@ -269,11 +269,17 @@ concurrency 32.
 | Pure-ASGI session and exception middlewares | **rewritten by maintainer** | e2e +23–35% at small bodies; big-body c=1 within noise |
 | Alias fix for #2867 (`orjson-dispatch-fallback`) | **pushed** | correctness, see §3.3 |
 
-The composition rules that later work must respect: new middleware must be pure
-ASGI and registered in MCP's recognition list; new union members need a `Tag`,
-and a colliding `type` literal needs discriminator awareness; the envelope
-encodes only after capture. The former "unwrap marker" rule from the abandoned
-wrapper design no longer exists.
+The composition rules that later work must respect: new middleware must be
+added to MCP's direct-dispatch allowlist (an explicit class list on the ASGI
+branch; recognition by module and class name on main) or MCP-exposed servers
+refuse to start, and it should be pure ASGI for the reasons in §2.2; new union
+members need a `Tag` (a member without one fails at import, an unknown wire
+`type` fails validation, and the `mcp_list_tools` fallback applies only to
+typeless input items), and a colliding `type` literal needs discriminator
+awareness; the envelope encodes only after `capture_tokens`. The former "unwrap
+marker" rule from the abandoned wrapper design no longer exists. The three
+maintainer branches are based on late-August heads (`1a12168c0` and
+`44181d3e4`), 26–30 commits behind `6992a96de`.
 
 ### 3.2 The serialization ledger — what is still done twice
 
@@ -334,7 +340,10 @@ head and ready. A fallback encoder was tried alongside it and removed: after
 an integer beyond 64 bits, lone surrogates already failed the stock render, and
 Gym's egress has always been orjson with no fallback — so the contract is simply
 JSON-native content, with a `NEMO_GYM_DISABLE_ORJSON_SERIALIZATION=1` kill
-switch for operators.
+switch for operators. Two behavior changes ride along with #2867 and are worth
+knowing: a NaN float, which the stock render refused with a 500, is now served
+silently as `null`; and an integer outside signed 64-bit, which the stock render
+accepted, now fails.
 
 ### 3.4 What is still open in the base classes, by stage
 
@@ -344,10 +353,10 @@ switch for operators.
 | middleware | a repo test forbidding new `@app.middleware("http")` registrations — the silent path back to per-request task groups | middleware authors write raw ASGI |
 | validation | the trust model: every hop revalidates because every peer is untrusted | removing any one validation is a policy decision, not an optimization |
 | handler | ledger #5, #7, #12: the near-trivial duplicate dumps and re-validations | none; ~5–20 lines each |
-| response | token metadata out of the response entirely on the NeMo RL path (capture store → TokenSource → actor-side rebuild; the machinery exists, the config plumbing does not); the envelope for every other framework | token fields stop being readable in artifacts when the envelope is on; readers need the decode helper |
+| response | token metadata off the wire on the NeMo RL path: NeMo RL main trains from the token fields in `response.output` of the `/run` result, and Gym's capture-store path (plumbed on the maintainer's tokcap branch of NeMo RL, absent on NeMo RL main) refills those fields from the store, so the model server could stop serving them to the agent once the trainer reads the store directly — `token_source_factory` is wired for that and has no production caller; the envelope for every other framework | token fields stop being readable in artifacts when the envelope is on; readers need the decode helper |
 | failures | **cap the 422 handler's body print** to a bounded prefix and the size, and make it tolerate non-JSON bodies (today the print raises and the 422 becomes a 500) | none; do it before any high-concurrency run |
 | client | the shared aiohttp session has an all-`None` `ClientTimeout`, and internal calls retry every exception forever, so a hung judge or GenRM generation never returns and `judge_failsafe` never fires; a default deadline and a retry cap on `ServerClient` would bound every such call at once | a deadline turns a hung call into a failed row, which the failsafe already handles; long verifier generations need a generous default |
-| driver | bounded task admission (all 128K tasks are created up front today), stream results to disk instead of retaining every row and result, move the capture-file parse and fsync off the loop | `run_from_config`'s in-memory return shape is the compat surface |
+| driver | bounded task admission (every task becomes an asyncio Task up front; `num_samples_in_parallel` bounds only the in-flight posts and defaults to unbounded), stop retaining every row and result in memory (they already stream to the output JSONL as they complete), and move the capture-file parse and record serialization off the loop (terminal attribution already runs in a pool thread; the fsync happens only when token capture retires a rollout) | the retained lists feed `/aggregate_metrics` and export at run end; the returned results list has no in-tree consumer |
 | leave alone | `limit_concurrency` (a 503 becomes a failed rollout); the 64 KB read window (a uvicorn constant, dwarfed by later stages); the cookie-session layer (it is the correlation mechanism) | — |
 
 ## 4. Opportunities for optimization in resources server implementations
@@ -408,31 +417,46 @@ wrapper.
 
 ### 4.4 How to profile a resources server
 
-The landed nemo-lens telemetry (#2647) is the right attribution layer: one
-rollout produces one distributed trace across driver, agent, model, and
-resources processes, with spans on exactly the hot endpoints and per-server
-service names, so "which server, which endpoint, which hop dominates p50 and p99
-under load" is a query. A specifically useful derived signal: the gap between an
-outbound-client span and its child ingress span is connection-queue-plus-network
-time, which makes the silent pool queueing of §2.5 visible. It costs ~nothing
-when off and has sampled export for high concurrency. What it cannot do: it
-measures wall time, not CPU — when a trace indicts `math_with_judge`, py-spy on
-that process says fork-vs-SymPy-vs-await; a sync verifier blocking the loop
-smears into *other requests'* spans, so add a per-process event-loop-lag gauge;
-and tail-based sampling for straggler analysis is not built in. The loop:
-telemetry-on harness run → rank servers by span self-time → py-spy the top three
-→ fix → re-run.
+The landed nemo-lens telemetry (#2647) is the right attribution layer. Trace
+context rides the `traceparent` header that `server_utils.request` injects on
+every outbound call and the FastAPI instrumentor extracts on ingress, so one
+trace spans agent, model, and resources processes; the driver joins it only when
+started through `RunHelper` (`gym env start`, end-to-end `gym eval run`), not
+when NeMo RL drives rollouts in-trainer. Under the `default` span-group preset
+the run-long job span is the root, so a whole run is one trace; the
+`per_rollout` preset gives one trace per rollout and is also what turns on the
+semantic spans for `/verify`, `/run`, `/v1/responses`, and the three model
+endpoints, each named `<service>/<server config name>`. With that on, "which
+server, which endpoint, which hop dominates p50 and p99 under load" is a query.
+A specifically useful derived signal: the client span opens before the
+connection pool is acquired and closes at response headers, and the server span
+opens when uvicorn has parsed the request headers, so the gap between them is
+pool queue plus connect plus header transmission plus parse — which makes the
+silent pool queueing of §2.5 visible. It costs ~nothing when off (one constant
+check per endpoint and per outbound call). What it cannot do: there is no
+per-request or per-trace sampling — the only volume controls are span groups
+and a process-level export switch, so at 8K in flight the choice is all
+rollouts or none per process; it measures wall time, not CPU — when a trace
+indicts `math_with_judge`, py-spy on that process says fork-vs-SymPy-vs-await;
+a sync verifier blocking the loop smears into *other requests'* spans, so add a
+per-process event-loop-lag gauge; and tail-based sampling for straggler
+analysis is not built in. The loop: telemetry-on harness run → rank servers by
+span self-time → py-spy the top three → fix → re-run.
 
 ## 5. Opportunities for optimization in agent server implementations
 
 Of 45 agent servers, 39 inherit the base `setup_webserver` unchanged;
 `simple_agent` is the production harness for the training configs, so its hot
-loop is where the per-rollout cost concentrates. Agents are structurally
-different from resources servers in one way that matters: **they hold no
-per-rollout state of their own** — the rollout's state lives in the resources
-server, correlated by the session cookie the agent forwards — which makes them
-the easiest servers in the system to scale horizontally, and the least scaled
-today.
+loop is where the per-rollout cost concentrates. It is structurally different
+from a resources server in one way that matters: **it holds no per-rollout
+state of its own** — the rollout's state lives in the resources server,
+correlated by the session cookie the agent forwards — which makes it the
+easiest server in the system to scale horizontally, and one of the least scaled
+today. That does not generalize to every agent: three sandboxed agents
+(`terminus_2_sandboxed_agent`, `opencode_sandboxed_agent`, `vibench_agent`)
+keep session-keyed sandbox handles on the server instance and expose them
+through `/v1/responses`, and 23 agents hold a per-process concurrency semaphore
+whose effective limit multiplies under workers.
 
 ### 5.1 The simple_agent hot loop, hop by hop
 
@@ -440,7 +464,7 @@ today.
 |---|---|---|
 | ingress: `SimpleAgentRunRequest` validation | full validation of the task row | cheapened by unions; stays (trust model) |
 | `/seed_session` with `body.model_dump()` | the entire task payload dumped, serialized, shipped, and parsed; the base receiver declares no fields and discards it (17 servers override `seed_session` to read parts of it) | send only what the resources server declares it needs — a base-class contract (§4.2), not an agent change alone |
-| self-call `POST /v1/responses` to its own server | a real loopback socket: serialize, parse, validate, two middleware traversals, in the same process | draft PR #1439 replaces it with a direct call: +7.5% on `simple_agent`, +13.3% on `proof_refinement_agent` (which self-calls repeatedly); the open review question is cookie propagation, which today rides on the HTTP layer |
+| self-call `POST /v1/responses` to its own server | a real loopback socket, resolved from the agent's own host:port: serialize, parse, validate, two middleware traversals, in the same process | open PR #1439 replaces it with an in-process call in every agent that self-calls (`proof_refinement_agent` does so once per refinement turn): +7.5% on `simple_agent`, +13.3% on `proof_refinement_agent` per the PR's own measurements with a real OpenAI model; the PR states it preserves cookies, rollout-scoped paths, and trajectory capture |
 | `model_copy(deep=True)` at the top of every `/v1/responses` | a full deep copy of the request per call; the loop only appends to the input list | copy the list, not the world — audit for mutation first |
 | per step: `model_copy(update=…)`, dump, serialize the whole conversation | request size grows linearly with steps; total work quadratically (§1.2: 8 ms per hop at depth 1, 181 ms at depth 512) | inherent to the stateless Responses API; the compaction agent variant is the existing mitigation for long trajectories |
 | per step: `NeMoGymResponse.model_validate` on the model's reply | a full re-validation of a 2 MB response each step | stays (trust model); made cheap by unions and, when enabled, the envelope |
@@ -451,20 +475,28 @@ today.
 
 - **Scale agents out first.** Every rollout funnels through one agent process's
   event loop (~15 rollouts/s at training bodies per loop, §1.2), and the
-  driver→agent hop is a single host:port. Because agents are stateless per
-  request, `num_workers` on the agent is safe today with no lifecycle work — yet
+  driver→agent hop is a single host:port. Because `simple_agent` keeps no
+  cross-request state, `num_workers` on it needs no lifecycle work, only the
+  two-line worker bootstrap that exposes a module-level `app` — which today
   only four agents (`tau2`, `opencode_sandboxed_agent`,
-  `terminus_2_sandboxed_agent`, `vibench_agent`) carry the entrypoint guard that
-  makes it possible, and `simple_agent` is not one of them. Making that guard
-  automatic (or unnecessary) is the
+  `terminus_2_sandboxed_agent`, `vibench_agent`) carry, and `simple_agent` is
+  not one of them (without it, uvicorn's importer fails on `app`). Making that
+  bootstrap automatic (or unnecessary) is the
   cheapest capacity in the system, and the harness fan-out experiment (knee at
   N≈4 behind a shared producer) tells you where the next wall is.
-- **The echo and the record.** The agent returns the verifier's echo verbatim as
-  the training record, and terminal model-call attribution reads that record's
-  response id and content. Any future slimming of the verify echo must have the
-  agent re-attach its own copy of the response (it has one in hand) and give
-  verifiers an explicit patch channel — otherwise token capture and NeMo RL both
-  lose the response.
+- **The echo and the record.** The agent returns the verifier's echo,
+  field-preserving, as the `/run` reply, and the driver persists it after
+  attaching indices, capture, and trajectory data. Token capture takes token ids
+  from the capture store, not from this reply, but it reads the reply's
+  `response` id and output content as the terminal witness that picks the right
+  model call; with no witness, multi-chain rollouts fall back to the
+  single-chain policy and are masked. NeMo RL main trains on the token ids,
+  log-probabilities, and routed-experts fields it reads from `response.output`
+  of the `/run` result, and takes reward, mask, and text from the same echo.
+  Any future slimming of the verify echo must therefore have the agent
+  re-attach its own copy of the response (it has one in hand) and give
+  verifiers an explicit patch channel; without that, training on NeMo RL main
+  breaks outright.
 - **Envelope readiness.** Seven agent harnesses read token fields off model
   responses directly (`harbor_agent`, `terminus_2`, `hermes`, `verifiers`,
   `mini_swe_agent`, `swe_agents`, `simple_agent_with_compaction`); no resources

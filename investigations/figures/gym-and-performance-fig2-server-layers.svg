@@ -37,9 +37,9 @@
     <text x="46" y="254">model servers: capture middleware — records request/response bytes when observability</text>
     <text x="46" y="270">is on, a cheap check when off. resources servers: rollout-context middleware — reads</text>
     <text x="46" y="286">the rollout id prefix off the URL, cheap.</text>
-    <text x="46" y="358">verifies the HMAC signature on the session cookie coming in; re-signs and re-sends it</text>
-    <text x="46" y="374">going out. this is how per-rollout state on resources servers is correlated.</text>
-    <text x="46" y="390">cost: one HMAC each way, every request.</text>
+    <text x="46" y="358">verifies the cookie's HMAC when a request carries one; re-signs on every response</text>
+    <text x="46" y="374">because the session-id layer marks the session modified. this is how per-rollout</text>
+    <text x="46" y="390">state on resources servers is correlated. cost: one HMAC sign per response.</text>
     <text x="46" y="462">guarantees a session id exists in the (verified) session dict so servers can key state</text>
     <text x="46" y="478">by it. also a BaseHTTPMiddleware on main; pure ASGI on the branch, uuid only minted</text>
     <text x="46" y="494">on a miss.</text>
@@ -69,9 +69,11 @@
     <text x="670" y="312" fill="#17201A" fill-opacity="0.75">the one subsystem that</text>
     <text x="670" y="328" fill="#17201A" fill-opacity="0.75">introspects routes.</text>
     <text x="670" y="384" fill="#17201A" font-weight="600">profiling</text>
-    <text x="670" y="402" fill="#17201A" fill-opacity="0.75">a yappi profiler + /stats route</text>
-    <text x="670" y="418" fill="#17201A" fill-opacity="0.75">can be enabled per server (dev</text>
-    <text x="670" y="434" fill="#17201A" fill-opacity="0.75">only, ~30% overhead); telemetry</text>
-    <text x="670" y="450" fill="#17201A" fill-opacity="0.75">(§4.4) is the production path.</text>
+    <text x="670" y="402" fill="#17201A" fill-opacity="0.75">a run-level flag adds a yappi</text>
+    <text x="670" y="418" fill="#17201A" fill-opacity="0.75">CPU profiler + /stats route to</text>
+    <text x="670" y="434" fill="#17201A" fill-opacity="0.75">every server (dev extra); its</text>
+    <text x="670" y="450" fill="#17201A" fill-opacity="0.75">overhead is undocumented;</text>
+    <text x="670" y="466" fill="#17201A" fill-opacity="0.75">telemetry (§4.4) is the</text>
+    <text x="670" y="482" fill="#17201A" fill-opacity="0.75">production path.</text>
   </g>
 </svg>
