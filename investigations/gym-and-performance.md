@@ -3,6 +3,11 @@
 NeMo Gym engineering report. 2026-08-31, upstream/main @ 6992a96de. Rigs: loopback
 micro-benchmarks, full-rollout simulation, slurm-cpu harness (96-core Xeon).
 
+Revision 2026-09-02: after the `code_gen` row was found to describe a Ray task
+as local processes, every code-read claim in this report was re-audited by
+tracing call sites and execution context on the same head. The corrections are
+in §2.2, §2.4, §2.5, §3, §4, and §5; the measured tables were not affected.
+
 How a rollout moves through Gym's servers, what one server actually does with a
 request, where the time goes, and where the optimization opportunities are — in
 the base classes, in resources servers, and in agent servers. Everything
@@ -143,7 +148,7 @@ Starlette 1.3.1, FastAPI 0.135.2. "Body" means the 2 MB training-shaped payload.
 | 7 · call the handler | An `async def` handler runs on the event loop; a plain `def` handler is sent to a thread pool (§2.4). Gym's wrappers run here: telemetry (a cheap enabled-check when off), `judge_failsafe` on `/verify`, rollout-context on `/run`. | Whatever your handler does. Anything CPU-bound done inline here stalls every other request on this worker. |
 | 8 · build the response | If the handler returned a ready `Response`, it passes through. Otherwise FastAPI validates the return value against the declared return type (an instance of exactly that class passes through untouched; a subclass instance is filtered to the declared fields), serializes it — by alias, honoring custom serializers and include/exclude options — and encodes the bytes with the route's response class. Un-annotated handlers go through a slow generic Python walk instead. | Stock encoding is stdlib `json.dumps`: 24 ms at 2 MB. The parity branch swaps only the encoder to orjson. |
 | 9 · send | Headers go first, then one write of the whole body; the cookie middleware re-signs the session and adds `Set-Cookie` on the way out. uvicorn writes into the socket buffer and pauses if it fills. | One copy into the kernel. Nothing streams: the full body exists before the first byte leaves. |
-| 10 · failures | A body that fails validation returns 422 — after Gym's handler **pretty-prints the entire request body to stdout**. Unhandled exceptions become JSON 500s with the exception text. | A 2 MB pretty-print per failed validation: harmless in dev, self-inflicted load in a schema-mismatch storm at 8K in flight. |
+| 10 · failures | A body that fails validation returns 422 — after Gym's handler **pretty-prints the entire request body to stdout**; when the body is not JSON, that print itself raises and the 422 becomes a 500. Unhandled exceptions become JSON 500s with the exception text. | A 2 MB pretty-print per failed validation: harmless in dev, self-inflicted load in a schema-mismatch storm at 8K in flight. |
 
 Two things fall out of laying it end to end. The payload is materialized **four
 times per hop** (socket bytes, joined bytes, parsed dicts, validated models), and
@@ -193,11 +198,15 @@ everyone else. Thread pools restore the loop's responsiveness but have small
 fixed sizes and share the GIL; only processes add CPU throughput for Python
 work.*
 
-Three consequences worth stating plainly. First, Gym's servers today have zero
-non-async handlers, so the 40-slot pool is idle — but 13 resources servers
-offload with `asyncio.to_thread`, which lands on the *other* pool: 32 threads on
-a 96-core node, shared with the fsyncs that capture performs on every model
-call. Second, "offload to a thread" is the right fix for I/O-bound or
+Three consequences worth stating plainly. First, no request-path handler on
+Gym's three base classes is a plain `def` (the only sync handlers in the tree
+are the profiling-only `/stats`, the head server's instance list, and
+`harbor_agent`'s in-container `/exec`), so the 40-slot pool is idle — but 16
+resources servers offload request-path work to the *other* pool (8 through
+`asyncio.to_thread`, 8 through `run_in_executor(None, …)`), as do 10 agent
+harnesses and `vllm_model`: 32 threads on a 96-core node, shared — whenever
+observability or token capture is on — with the flock, write, and fsync that
+capture performs per captured model call. Second, "offload to a thread" is the right fix for I/O-bound or
 GIL-releasing work (subprocess waits, C-implemented regex, RDKit, file writes)
 and only half a fix for pure-Python CPU work like SymPy or NLTK: the loop stops
 stalling, throughput does not rise. Third, the structural answer for CPU-heavy
@@ -228,7 +237,7 @@ usable by default).
 |---|---|---|
 | driver → agent | all rollouts funnel to one host:port | `limit_per_host ≥` intended in-flight (8,192 at Lightning scale → 16,384 for headroom) |
 | agent → model server | all model calls to one host:port (workers share the port) | same rule on the agent |
-| model proxy → engines | spread over K engine hosts | the *total* limit binds: Lightning's 4,096 across 16 workers = 256 per worker vs ~512 needed — a hidden 2:1 queue today |
+| model proxy → engines | spread over K engine hosts | the *total* limit binds, and it is divided by `num_workers`: a 4,096 total across 16 workers is 256 per worker, so ~512 engine calls in flight per worker queue 2:1 inside the client. Those figures are from the Lightning recipe on the NeMo RL side, not a config in this tree; here, the nemotron_3.5_super configs run `vllm_model` with 16 workers |
 | agent → resources | one verify + tool calls per rollout | per-host ≥ in-flight rollouts; verifies bunch at step end |
 
 > **Rule of thumb:** the limits are a destination-protection and descriptor
@@ -239,8 +248,8 @@ usable by default).
 ## 3. Opportunities for optimization in the server stack
 
 Everything in this section lives in `nemo_gym/` — the base classes every server
-inherits — so a change lands once and applies to all 169 servers (115 resources,
-44 agents, 10 models).
+inherits — so a change lands once and applies to all 173 servers (118 resources,
+45 agents, 10 models).
 
 ### 3.1 What has been done, with measured results
 
@@ -275,18 +284,18 @@ Every conversion of the large payload in one rollout with one model call.
 |---:|---|---|---|
 | 1 | driver egress | serialize row | necessary |
 | 2 | agent `/run` ingress | parse → validate | parse: **orjson** (parity branch) · validate: **unions** branch |
-| 3 | agent → seed_session | **dump the entire validated body + serialize; receiver parses and discards** | **open** — needs a declare-what-you-need contract (§4.2) |
+| 3 | agent → seed_session | **dump the entire validated body + serialize**; the base receiver declares no fields and discards it, and 17 servers override `seed_session` to read parts of it | **open** — needs a declare-what-you-need contract (§4.2) |
 | 4 | agent self-call | dump + serialize + parse + validate, same process | **open** — revive draft #1439 (§5.2) |
 | 5 | agent, per model call | `model_copy(deep=True)` of the whole request, then a copy-with-update per step | **open — near-trivial** |
 | 6 | agent → model, model ingress | dump + serialize → parse + validate the whole conversation, per step | cheapened by **orjson + unions**; the re-send is the Responses API's statelessness |
-| 7 | model server, dialect conversion | dump → **re-validate into the chat-params model**; reply: 2 dumps + construct-validate | **open — near-trivial** |
+| 7 | model server, dialect conversion | dump → rebuild → **validate-on-construct into the chat-params model**, then `chat_completions` dumps it again for the engine; reply: per-item dumps + message re-validation + construct-validate of the `NeMoGymResponse` | **open — near-trivial** |
 | 8 | model server, engine reply | parse + validate every token id and logprob | stays: the trust boundary where token data enters |
-| 9 | capture (when on) | one more full dump + per-element validation + canonical dump + hash + fsyncs | **open** — share the dump; batch the fsyncs |
+| 9 | capture (only with observability or token capture on) | one more full dump + per-element validation + canonical dump + hash, then flock + write + fsync on the default executor; the response's terminal chunk waits for the fsync | **open** — share the dump; batch the fsyncs |
 | 10 | model server egress | dump(json, by alias) + orjson | **landed** #2867 (+ alias fix); arrays collapse under the envelope |
 | 11 | agent, per model reply | parse + **full re-validation** | stays (trust model); cheap under unions + envelope |
 | 12 | agent → verify | **dump → merge → validate → dump again** → serialize | **open — trivial** — build the merged dict once (§5.2) |
 | 13 | resources ingress | parse + validate prompt+response | stays; cheapened |
-| 14 | resources, building the echo | `VerifyResponse(**body.model_dump(), …)` — dump + construct-validate of data validated microseconds ago | **open** — a base helper, or solved wholesale by echo slimming |
+| 14 | resources, building the echo | `VerifyResponse(**body.model_dump(), …)` — dump + construct-validate of data validated microseconds ago; 18 servers use this exact pattern | **open** — a base helper, or solved wholesale by echo slimming |
 | 15 | resources egress → agent → driver | serialize → parse+validate → serialize → parse | encoding: **parity branch**; the double-carry is the echo design |
 
 ### 3.3 A cautionary case: the response contract, and how #2867 broke it
@@ -309,11 +318,16 @@ models — `text.format.schema_`, whose wire name is `"schema"`, with
 `populate_by_name` off — so a served structured-output response now carries
 `schema_`, and the agent's per-step revalidation *rejects it* with a
 `ValidationError`. Gym's own vLLM converter never sets `text.format` (only
-`text.verbosity`), so **the vLLM training path is unaffected**; the five
-provider-backed model servers (`openai_model`, `azure_openai_model`,
-`inference_provider`, `litellm_model`, `switchyard_model`) forward the request's
-`text` config, the provider echoes it, and **every structured-output rollout
-through them fails**. The fix is one argument (`by_alias=True`) plus a
+`text.verbosity`), so **the vLLM training path is unaffected**; three
+provider-backed model servers (`openai_model`, `litellm_model`,
+`switchyard_model`), and `vllm_model` in `is_responses_native` mode (four
+`local_vllm_model` gpt-oss configs; that mode refuses token-id capture, so it is
+never a training path), forward the request's `text` config, the provider echoes
+it, and **every structured-output rollout through them fails**.
+`azure_openai_model` and `inference_provider` are outside this bug: their
+converter rejects `text.format` with `NotImplementedError` before any provider
+call, so structured-output requests through them already fail for a different
+reason. The fix is one argument (`by_alias=True`) plus a
 regression test — `ananthsub/orjson-dispatch-fallback`, rebased onto the current
 head and ready. A fallback encoder was tried alongside it and removed: after
 `mode="json"` normalization the only value orjson rejects that stdlib served is
@@ -331,54 +345,66 @@ switch for operators.
 | validation | the trust model: every hop revalidates because every peer is untrusted | removing any one validation is a policy decision, not an optimization |
 | handler | ledger #5, #7, #12: the near-trivial duplicate dumps and re-validations | none; ~5–20 lines each |
 | response | token metadata out of the response entirely on the NeMo RL path (capture store → TokenSource → actor-side rebuild; the machinery exists, the config plumbing does not); the envelope for every other framework | token fields stop being readable in artifacts when the envelope is on; readers need the decode helper |
-| failures | **cap the 422 handler's body print** to a bounded prefix and the size | none; do it before any high-concurrency run |
+| failures | **cap the 422 handler's body print** to a bounded prefix and the size, and make it tolerate non-JSON bodies (today the print raises and the 422 becomes a 500) | none; do it before any high-concurrency run |
+| client | the shared aiohttp session has an all-`None` `ClientTimeout`, and internal calls retry every exception forever, so a hung judge or GenRM generation never returns and `judge_failsafe` never fires; a default deadline and a retry cap on `ServerClient` would bound every such call at once | a deadline turns a hung call into a failed row, which the failsafe already handles; long verifier generations need a generous default |
 | driver | bounded task admission (all 128K tasks are created up front today), stream results to disk instead of retaining every row and result, move the capture-file parse and fsync off the loop | `run_from_config`'s in-memory return shape is the compat surface |
 | leave alone | `limit_concurrency` (a 503 becomes a failed rollout); the 64 KB read window (a uvicorn constant, dwarfed by later stages); the cookie-session layer (it is the correlation mechanism) | — |
 
 ## 4. Opportunities for optimization in resources server implementations
 
-All 115 resources servers were audited; the Nemotron 3.5 Lightning set of 30 in
-depth. Every finding below is code-read; the base-class fixes are hypotheses to
-confirm on cluster, since a single development machine cannot run all 30
-servers' dependencies.
+All 118 resources servers were audited; the Nemotron 3.5 Lightning set of 30 in
+depth. Every finding below is code-read and was re-traced from the `/verify`
+handler down to the code in question, noting where it executes (inline on the
+loop, a thread pool, a subprocess, or a Ray task). The base-class fixes are
+hypotheses to confirm on cluster, since a single development machine cannot run
+all 30 servers' dependencies.
 
 ### 4.1 The heavy hitters
 
 | Server | Finding | Fix |
 |---|---|---|
-| `math_with_judge` | a process fork per verify behind a semaphore of 32 with a 50 ms poll loop — a ~640 verify/s ceiling (≥12.8 s per 8,192-rollout step before any real work); judge calls with no timeout and no concurrency bound | warm process pool, event-driven join, raise and expose the concurrency knob; judge semaphore + timeout |
-| `genrm_compare` | re-dumps every buffered cohort response on each arrival (136 full dumps per 16-rollout cohort); buffers whole bodies (40–65 GB at 8K in flight); **bug:** a race silently drops comparisons from rewards — the declared lock is never acquired | dump once at append; buffer extracts only; take the lock; gate on comparisons-done |
-| `code_gen` | three OS processes per verify including a `multiprocessing.Manager` proxy; join backstop up to ~555 s; unit tests parsed three times | Pipe instead of Manager; cap the join; pass validated dicts through |
-| `nvarc` | **bug:** unbounded interpreter spawn per verify; timed-out processes leak | semaphore + `finally: kill` |
-| rule-based tier (`mcqa`, `ether0`, `equivalence_rule`, `instruction_following`, `structured_outputs`, `reasoning_gym`) | synchronous CPU work directly on the event loop: NLTK, SymPy, `SequenceMatcher` over 300 KB, catastrophic-backtracking regexes, per-request regex compilation, ~13 full-string copies per verify | tail-slice before matching, precompile, offload — but see §2.4 for what offloading does and does not buy |
-| judge callers (`inverse_if`, `multichallenge`, `jailbreak_detection`, …) | one judge call per rubric item with no semaphore — up to ~80K concurrent judge generations from one step; two independent judge calls made sequentially | shared semaphore + timeout (`equivalence_llm_judge` is the one server that has this right); `gather` the independent calls |
-| `terminus_judge` | sanitizes the entire rollout twice per verify (every token-id element, every string re-encoded) to scrub surrogates | scrub only the fields that reach the judge prompt |
+| `math_with_judge` | forks the server process per verify, synchronously on the loop thread, behind a semaphore of 32 (the code default; no shipped config changes it) with a 50 ms poll — so the library stage tops out near 640 verify/s per process (≥12.8 s per 8,192-rollout step) while SymPy runs in the child; up to two sequential judge calls with no timeout and no bound beyond the client's per-host connection limit | warm process pool, event-driven join, expose the concurrency knob; judge semaphore + timeout |
+| `genrm_compare` | re-dumps every buffered cohort response on each arrival (136 full dumps per 16-rollout cohort); holds each whole parsed request, its raw bytes, and the dumped dicts until the cohort resolves; **bug:** the cohort finalizes on the 16th *arrival* rather than when every comparison has returned, so a comparison still in flight is silently dropped from rewards (the declared lock is unused, and acquiring it would not fix this); cohort state is module-global, so `num_workers` would split cohorts; GenRM transport failures are swallowed into default scores | dump once at append; buffer extracts only; gate finalization on comparisons-done |
+| `code_gen` | verification is a Ray task (SPREAD across the cluster), so the server holds only a semaphore (`num_processes`, 8 in the shipped config) around an awaited future and does no local execution; inside each Ray task a `multiprocessing.Manager` helper and a runner process are spawned per verify, with a join backstop of `(timeout + 1) × tests + 5` s; the tests are re-serialized and re-parsed on the way to the runner | nothing here touches the server's event loop; raise `num_processes` in production configs (it is the in-flight cap); on the Ray side, a Pipe instead of a Manager and a capped backstop |
+| `nvarc` | **bug** (inductive mode): one fresh interpreter per verify with no bound; the in-child alarm covers only `transform()`, so a hang in module-level code outlives the 35 s outer timeout, which is swallowed without killing or reaping the child | semaphore + `finally: kill` + `await proc.wait()` |
+| rule-based tier (`mcqa`, `ether0`, `equivalence_rule`, `instruction_following`, `structured_outputs`, `reasoning_gym`) | synchronous CPU work directly on the event loop, with no offload in any of the six: third-party checkers (NLTK-backed) in `instruction_following`, data-driven `re.findall` in `mcqa`, `SequenceMatcher` in `equivalence_rule` only under grading rules no shipped config uses; the one quadratic pattern found is the `<think>` stripping regex in `inverse_if` and `multichallenge` (34.5 s on a degenerate 240 KB input, 5.7 ms on a normal one) | bound input sizes before matching, precompile, offload — but see §2.4 for what offloading does and does not buy |
+| judge callers (`inverse_if`, `multichallenge`, `jailbreak_detection`, …) | `inverse_if` and `multichallenge` gather one judge call per rubric item with no semaphore and no timeout — 3–10 items per task, so up to ~80K judge generations from one 8,192-rollout step; `jailbreak_detection` uses its own client that swallows errors and makes its safety and quality calls sequentially | shared semaphore + timeout (`arena` and `finance_agent_v2` are the two servers that already have both); `gather` the independent calls |
+| `terminus_judge` | sanitizes both halves of the rollout per verify (dump → recursive walk over every token-id element and every string → re-validate) inline on the loop; the shipped configs set judge concurrency to `null`, overriding the code default of 64 to unbounded | scrub only the fields that reach the judge prompt; restore a concurrency bound |
 
 ### 4.2 The recurring patterns are base-class gaps
 
 | Recurring finding | What is structurally missing |
 |---|---|
-| Unbounded, timeout-less judge calls in five+ servers | `judge.py` has no concurrency or deadline knobs. A shared semaphore + timeout on `call_judge`, with config surface — one change, every caller inherits it. |
-| Sync CPU work on the loop in six+ verifiers; thread offload in 13 more | No offload policy, and threads are only half a fix (§2.4): 32 slots on a 96-core node, shared with capture fsyncs, and the GIL. CPU-heavy verification needs a base-class **process pool** (warm, recycling, with a deadline) or `num_workers`; a thread wrapper is right only for I/O-bound or GIL-releasing work. |
-| Fork-per-verify in two servers, hand-rolled process management in more | No shared warm-pool utility with timeout and recycling semantics. One vetted implementation would replace three fragile ones. |
+| Unbounded, timeout-less judge calls in at least six servers; seven more have a semaphore but no timeout | `judge.py` has no concurrency or deadline knobs, and the shared client beneath it has no HTTP timeout at all and retries every exception forever for internal calls, so a hung judge never returns. A shared semaphore + timeout on `call_judge`, with config surface — one change, every caller inherits it; a default deadline on `ServerClient` covers the servers that bypass `call_judge`. |
+| Sync CPU work on the loop in six+ verifiers; thread offload in 16 more | No offload policy, and threads are only half a fix (§2.4): 32 slots on a 96-core node, shared with capture's fsyncs when capture is on, and the GIL. CPU-heavy verification needs a base-class **process pool** (warm, recycling, with a deadline) or `num_workers`; a thread wrapper is right only for I/O-bound or GIL-releasing work. |
+| Hand-rolled process management everywhere: one server forks a Python worker per verify (`math_with_judge`), four spawn a subprocess per verify in the server process (`bigcodebench`, `nvarc`, `vibench`, `scicode`), two keep a worker per session from a tool endpoint (`math_with_code`, `newton_bench`), and seven dispatch to Ray (`code_gen`, `evalplus`, `code_fim`, `swerl_gen`, `spider2_lite`, `wmt_translation`, `longmt_eval`) | No shared warm-pool utility with timeout, kill-and-reap, and recycling semantics. One vetted implementation would replace several fragile ones. |
 | Session-state leaks (one confirmed OOM, since fixed; several near-misses) | No session lifecycle contract: `seed_session` creates state, nothing guarantees cleanup. A base-class hook — verify (or a TTL) evicts the session's state unless the server opts out — turns a silent leak class into a default. |
-| Essentially every resources server is single-process | `num_workers` requires per-file entrypoint boilerplate that two configs in the whole tree use. Generate it in the scaffold, or let the runner import-and-serve without the module-level `app`. Stateful servers need the lifecycle hook above before multi-worker is safe; `genrm_compare`'s module-global cohort state blocks it outright. |
-| Verify and seed receive everything and need little | No declare-what-you-need contract. A per-server field declaration would let the agent slim both hops without breaking servers that genuinely read the full body (MCP's session-token minting does). |
+| Essentially every resources server is single-process | `num_workers` requires a per-file entrypoint guard that 9 of 173 app.py files carry (one resources server, four agents, four model servers); the 10 configs that set it above 1 all target those nine. Generate the guard in the scaffold, or let the runner import-and-serve without it. Stateful servers need the lifecycle hook above before multi-worker is safe; `genrm_compare`'s module-global cohort state blocks it outright. |
+| Verify and seed receive everything and need little | No declare-what-you-need contract. A per-server field declaration would let the agent slim both hops without breaking the 17 servers that override `seed_session` to read parts of the body. (MCP's wrapper also re-parses the full seed body, but only to feed an allow-list hook no server implements, and only when `expose_tools_over_mcp` is on.) |
 
 ### 4.3 Serving-coverage exceptions found in the full catalog
 
-156 of 169 servers inherit the base `setup_webserver` or call
+169 of 173 servers inherit the base `setup_webserver` or call
 `setup_session_middleware` before registering routes, so base-class serving
 changes reach them automatically — including per-server tool endpoints the base
-classes do not own (`conversational_tool_use_simulation`'s ten per-hop routes,
-the search/browse servers' large page payloads, the gymnasium `/reset`/`/step`
-pair, `vllm_model_with_compaction`'s hot `/tokenize`). The exceptions:
-`harbor_agent` and `mini_swe_agent` build their apps without the install point
-(and `legal_agent_bench`'s bridge inherits that); `openenv` returns third-party
-SDK objects in tool results and `grl_sokoban` leaks numpy scalars through an
-untyped `info` dict — both real serialization hazards; the `PlainTextResponse`
-tool endpoints (`ns_tools`, `litmus_agent`, `citation_if`) and all SSE paths
-rely on the pass-through contract for ready `Response`s.
+classes do not own (`conversational_tool_use_simulation`'s ten routes, the
+search/browse servers' large page payloads, the `/reset`/`/step` pair of the six
+gymnasium servers, `vllm_model_with_compaction`'s `/tokenize`, which is on the
+rollout path only when the `max_total_tokens` guard is configured, and no
+checked-in config sets it). The install-point exceptions are exactly three:
+`harbor_agent` and `mini_swe_agent` build their apps without it, and
+`legal_agent_bench`'s bridge inherits that. Two structural gaps sit next to
+them: the six gymnasium servers build their app on a base that registers no
+`/seed_session` or `/verify`, so base-class changes to those routes never reach
+them; and the untyped `info: dict` those servers return will 500 on numpy ints
+and bools — `grl_tetris` guards against it, `grl_sokoban` happens to emit only
+Python scalars, and `openenv` passes an untyped `Any` tool result through a
+dict, a latent hazard no bundled environment triggers today. The routes that
+rely on the pass-through contract for ready `Response`s are the three
+`PlainTextResponse` tool endpoints (`ns_tools`, `litmus_agent`, `citation_if`),
+the SSE paths, the model servers' own non-streaming orjson `Response` (#2867),
+`judge_failsafe`'s `JSONResponse` on `/verify`, and MCP's `/seed_session`
+wrapper.
 
 ### 4.4 How to profile a resources server
 
@@ -399,7 +425,7 @@ telemetry-on harness run → rank servers by span self-time → py-spy the top t
 
 ## 5. Opportunities for optimization in agent server implementations
 
-Of 44 agent servers, 38 inherit the base `setup_webserver` unchanged;
+Of 45 agent servers, 39 inherit the base `setup_webserver` unchanged;
 `simple_agent` is the production harness for the training configs, so its hot
 loop is where the per-rollout cost concentrates. Agents are structurally
 different from resources servers in one way that matters: **they hold no
@@ -413,7 +439,7 @@ today.
 | Step in `run()` | What it costs today | Opportunity |
 |---|---|---|
 | ingress: `SimpleAgentRunRequest` validation | full validation of the task row | cheapened by unions; stays (trust model) |
-| `/seed_session` with `body.model_dump()` | the entire task payload dumped, serialized, shipped, parsed, and discarded by a zero-field receiver | send only what the resources server declares it needs — a base-class contract (§4.2), not an agent change alone |
+| `/seed_session` with `body.model_dump()` | the entire task payload dumped, serialized, shipped, and parsed; the base receiver declares no fields and discards it (17 servers override `seed_session` to read parts of it) | send only what the resources server declares it needs — a base-class contract (§4.2), not an agent change alone |
 | self-call `POST /v1/responses` to its own server | a real loopback socket: serialize, parse, validate, two middleware traversals, in the same process | draft PR #1439 replaces it with a direct call: +7.5% on `simple_agent`, +13.3% on `proof_refinement_agent` (which self-calls repeatedly); the open review question is cookie propagation, which today rides on the HTTP layer |
 | `model_copy(deep=True)` at the top of every `/v1/responses` | a full deep copy of the request per call; the loop only appends to the input list | copy the list, not the world — audit for mutation first |
 | per step: `model_copy(update=…)`, dump, serialize the whole conversation | request size grows linearly with steps; total work quadratically (§1.2: 8 ms per hop at depth 1, 181 ms at depth 512) | inherent to the stateless Responses API; the compaction agent variant is the existing mitigation for long trajectories |
@@ -427,8 +453,10 @@ today.
   event loop (~15 rollouts/s at training bodies per loop, §1.2), and the
   driver→agent hop is a single host:port. Because agents are stateless per
   request, `num_workers` on the agent is safe today with no lifecycle work — yet
-  only `tau2` and `opencode_sandboxed_agent` carry the entrypoint guard that
-  makes it possible. Making that guard automatic (or unnecessary) is the
+  only four agents (`tau2`, `opencode_sandboxed_agent`,
+  `terminus_2_sandboxed_agent`, `vibench_agent`) carry the entrypoint guard that
+  makes it possible, and `simple_agent` is not one of them. Making that guard
+  automatic (or unnecessary) is the
   cheapest capacity in the system, and the harness fan-out experiment (knee at
   N≈4 behind a shared producer) tells you where the next wall is.
 - **The echo and the record.** The agent returns the verifier's echo verbatim as
@@ -437,18 +465,23 @@ today.
   agent re-attach its own copy of the response (it has one in hand) and give
   verifiers an explicit patch channel — otherwise token capture and NeMo RL both
   lose the response.
-- **Envelope readiness.** Six agent harnesses read token fields off model
+- **Envelope readiness.** Seven agent harnesses read token fields off model
   responses directly (`harbor_agent`, `terminus_2`, `hermes`, `verifiers`,
-  `mini_swe_agent`, `simple_agent_with_compaction`). They need accept-both
+  `mini_swe_agent`, `swe_agents`, `simple_agent_with_compaction`); no resources
+  server does. They need accept-both
   decoding before the envelope can be enabled underneath them; at the default
   setting they are unaffected.
 - **Serving coverage.** `harbor_agent` and `mini_swe_agent` construct their apps
   without `setup_session_middleware`, so base-class serving installs (and, more
   importantly, the session layer that other components assume) never run for
-  them. `mini_swe_agent_2` shows the corrected form.
+  them; they also skip the rollout-context and telemetry wrappers, so their
+  rollouts produce no spans. `mini_swe_agent_2` shows the corrected form for
+  the session layer, though it too registers `run` bare.
 - **Telemetry composes by construction.** The traced wrappers on `/run` and
   `/v1/responses` wrap handlers before registration, so they see raw results and
   cost a single enabled-check when off — no agent-side change needed to profile.
+  The exceptions are the three agents above and `litmus_agent`, which
+  re-registers `/verify` without the wrapper.
 
 ---
 
