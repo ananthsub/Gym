@@ -1,6 +1,6 @@
 # NeMo Gym rollout failure catalogue
 
-This document explains how NeMo Gym startup and rollout collection fail, what the code records, what happens to concurrent work, and which failures can recover. It covers NeMo Gym's managed evaluation path and lower-level library boundary. Controller and training policy outside NeMo Gym are out of scope. For a shorter overview, read the [current-state summary](./nemo-gym-error-handling-today.md). The [future-state design](./nemo-gym-error-handling-future.md) defines the proposed replacement contract.
+This document explains how NeMo Gym startup and rollout collection fail, what the code records, what happens to concurrent work, and which failures can recover. It covers NeMo Gym's managed evaluation path and lower-level library boundary. Controller and training policy outside NeMo Gym are out of scope. Source links point to upstream `main` @ [`98713f8e9`](https://github.com/NVIDIA-NeMo/Gym/tree/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5) (2026-09-02). Sections whose behavior changed with PRs #2017, #2883, #2726, and #2383 describe the new behavior and its default. For a shorter overview, read the [current-state summary](./nemo-gym-error-handling-today.md). The [future-state design](./nemo-gym-error-handling-future.md) defines the proposed replacement contract.
 
 ## Terms used in this document
 
@@ -56,7 +56,7 @@ This lifecycle is not a transaction. If the collector fails while reading the fi
 
 The managed collector can recover when `/run` returns a dictionary with `_ng_failure_class`. It writes the dictionary to the failure sidecar, excludes it from aggregate score input, and lets resume dispatch another attempt until the configured attempt limit is reached.
 
-The same collector cannot recover when `/run` raises before returning a dictionary. The exception escapes before marker routing, so the failing row receives no stored outcome and the collection run ends. This difference between returned failures and raised failures is the main boundary throughout the catalogue.
+By default, the same collector cannot recover when `/run` raises before returning a dictionary. The exception escapes before marker routing, so the failing row receives no stored outcome and the collection run ends. Since PR #2017 and PR #2883, a run that sets `route_failures_to_sidecar=true` converts request-class exceptions (`aiohttp.ClientError`, `orjson.JSONDecodeError`, and `TimeoutError`) into a sidecar row classed `agent_run_error` or `agent_request_failed` before the collector loop sees them, and the run continues. The setting is off by default because the resulting score covers fewer rollouts than were dispatched; a run that turns it on announces every routed row and reports coverage against the materialized input. The difference between returned failures and raised failures remains the main boundary throughout the catalogue.
 
 ```mermaid
 flowchart TD
@@ -65,7 +65,9 @@ flowchart TD
     MARKER -->|"none"| MAIN["Main rollout JSONL"]
     MARKER -->|"_ng_failure_class"| SIDE["Failure sidecar and resume accounting"]
     MARKER -->|"_ng_no_persist"| OMIT["No stored row"]
-    RESULT -->|"no"| EXC["Exception reaches collector"]
+    RESULT -->|"no"| FLAG{"route_failures_to_sidecar?"}
+    FLAG -->|"off (default)"| EXC["Exception reaches collector"]
+    FLAG -->|"on, request-class error"| REQ["Sidecar row: agent_run_error or agent_request_failed"]
     EXC --> ABORT["Collection ends before row routing"]
 ```
 
@@ -79,7 +81,7 @@ flowchart TD
 - **Persisted evidence:** No rollout row or sidecar row exists at this point. The configuration error is the available evidence.
 - **Effect on concurrent work:** No rollout or child-process work has started.
 - **Why it matters:** Allowing version skew can move the incompatibility from startup into runtime protocol behavior.
-- **Source:** [OpenAI-version compatibility guard](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/global_config.py#L805-L826)
+- **Source:** [OpenAI-version compatibility guard](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/global_config.py#L1194-L1218)
 
 ### The head server or a component remains alive but never becomes ready
 
@@ -89,7 +91,7 @@ flowchart TD
 - **Persisted evidence:** The collector has not started, so no rollout rows exist. There is no time-limited diagnostic that identifies the startup stage.
 - **Effect on concurrent work:** Concurrent startup work can remain alive until external cancellation or cleanup specific to its owner runs.
 - **Why it matters:** NeMo Gym does not guarantee cleanup of everything acquired before the wait.
-- **Source:** [Head and component readiness loops](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/cli/env.py#L456-L479) and [`wait_for_spinup()`](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/cli/env.py#L556-L585)
+- **Source:** [Head and component readiness loops](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/cli/env.py#L475-L498) and [`wait_for_spinup()`](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/cli/env.py#L575-L604)
 
 ### A configured model endpoint never answers
 
@@ -99,7 +101,7 @@ flowchart TD
 - **Persisted evidence:** The error identifies the configuration key and URL. No rollout row exists because collection has not started.
 - **Effect on concurrent work:** NeMo Gym cleans up the resources owned by this readiness path.
 - **Why it matters:** HTTP 401 and 404 responses count as answers, and a successful probe does not establish that requests can make progress.
-- **Source:** [Model endpoint readiness](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/cli/env.py#L649-L707)
+- **Source:** [Model endpoint readiness](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/cli/env.py#L673-L731)
 
 ### A ready process later stops serving requests without exiting
 
@@ -109,43 +111,43 @@ flowchart TD
 - **Persisted evidence:** No row is persisted for an in-flight rollout invocation while it remains live.
 - **Effect on concurrent work:** In-flight rollout invocations can continue holding collector semaphore slots. Cleanup is not guaranteed for all descendant processes.
 - **Why it matters:** NeMo Gym has no post-start progress contract.
-- **Source:** [`poll()` and `run_forever()`](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/cli/env.py#L499-L520) and [steady-state supervision](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/cli/env.py#L631-L647)
+- **Source:** [`poll()` and `run_forever()`](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/cli/env.py#L518-L539) and [steady-state supervision](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/cli/env.py#L655-L671)
 
 ## Collector failures before a result dictionary is returned
 
 `run_examples()` acquires the collector semaphore, asks `ServerClient` to `POST /run`, validates the HTTP status, reads and parses the JSON body, and returns `(row, result)`. `run_from_config()` waits for completed futures and only then adds identity fields and routes markers. Transport, status, body-read, JSON-parse, and result-processing failures therefore happen before persistence policy can inspect a dictionary.
 
-See the [low-level `/run` sequence](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L1162-L1196) and the [managed await and marker routing path](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L879-L964).
+See the [low-level `/run` sequence](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1876-L1934) and the [managed await and marker routing path](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1374-L1479).
 
 ### `/run` raises before producing a usable result dictionary
 
 - **Trigger:** `_post_subroutine()` raises before returning `(row, result)`.
 - **Sequence:** The outer `row, result = await future` does not convert the exception. Marker routing does not run because there is no result dictionary. `run_from_config()` exits before aggregation.
-- **Current handling:** One raw `/run` exception aborts high-level collection. Teardown cancels pending local tasks, but cancellation does not reverse remote work.
-- **Persisted evidence:** Rows completed earlier may already have been flushed. The failing row receives neither a main row nor a failure sidecar row, so artifacts do not say whether it was never delivered, completed remotely, cancelled locally, or safe to send again.
+- **Current handling:** By default, one raw `/run` exception aborts high-level collection. Teardown cancels pending local tasks, but cancellation does not reverse remote work. With `route_failures_to_sidecar=true`, `_post_subroutine()` catches `aiohttp.ClientError`, `orjson.JSONDecodeError`, and `TimeoutError`, releases the response, and returns a failure row instead: no reward, no response, plus `_ng_failure_type`, `_ng_failure_message`, `_ng_failure_http_status`, and a size-limited `_ng_failure_response_body`. The class is `agent_run_error` when the agent answered with a status other than 429, 502, 503, or 504, and `agent_request_failed` otherwise. Collection continues, and resume dispatches the row again with a new attempt index. Other exception types still propagate.
+- **Persisted evidence:** By default, rows completed earlier may already have been flushed and the failing row receives neither a main row nor a failure sidecar row, so artifacts do not say whether it was never delivered, completed remotely, cancelled locally, or safe to send again. With the flag on, the sidecar row records the exception type, message, status, and body prefix, but it still does not record whether the request was delivered, and nothing marks a deterministic 4xx as terminal, so resume retries it like any other row.
 - **Effect on concurrent work:** Pending local tasks are cancelled. Remote requests that were already delivered may continue.
 - **Why it matters:** The failing row has no stored outcome, even though the agent may have executed some or all of its work.
-- **Source:** [Exception escapes `_post_subroutine()`](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L1174-L1188) and [unconverted future await](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L877-L881)
+- **Source:** [`_post_subroutine()` catch and failure row](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1900-L1926), [`_agent_request_failure_row()`](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L829-L848), [`route_failures_to_sidecar` default](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L608-L615), and [unconverted future await](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1371-L1377)
 
 ### Every collector slot remains inside a lower retry loop
 
 - **Trigger:** Every active call remains inside `request()` while holding its collector semaphore slot.
 - **Sequence:** The semaphore covers the request, HTTP-status validation, body reading, and JSON parsing. `tqdm.as_completed()` has futures, but none completes because control has not returned to the collector.
-- **Current handling:** Collection keeps retrying without making progress, which is a livelock. Adding queued rows cannot restore throughput while all active slots remain occupied.
+- **Current handling:** Collection keeps retrying without making progress, which is a livelock. Adding queued rows cannot restore throughput while all active slots remain occupied. A caller that passes `max_connection_retries` (PR #2383) bounds the disconnect and socket-error branches, but only the vLLM model server's `endpoint_file` mode sets it, so the default remains unbounded.
 - **Persisted evidence:** No result reaches persistence, so the progress bar and output files stop advancing. No failed-rollout record is produced, and current logs do not connect one logical HTTP request with its HTTP transmissions, delivery state, or server-side execution count.
 - **Effect on concurrent work:** Every active slot remains occupied, and queued rows cannot begin.
 - **Why it matters:** This is not a queue-bookkeeping failure; the lower retry loops prevent the collector from observing an outcome.
-- **Source:** [Semaphore ownership](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L1174-L1190) and [unbounded transport branches](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/server_utils.py#L221-L275)
+- **Source:** [Semaphore ownership](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1900-L1926) and [unbounded transport branches](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/server_utils.py#L314-L368)
 
 ### HTTP 200 contains invalid JSON or a structurally unusable result
 
 - **Trigger:** An HTTP 200 response body cannot be read or parsed, or the parsed result lacks fields required by a later consumer.
 - **Sequence:** After status validation succeeds, `get_response_json()` reads the body and calls `orjson.loads()`. This helper is outside the transport retry loop, so a body-read or parse exception escapes `_post_subroutine()` like a request exception. If parsing succeeds, later structural validation also happens after transport success and has no general collector conversion.
-- **Current handling:** Collection aborts without marker routing.
+- **Current handling:** By default, collection aborts without marker routing. With `route_failures_to_sidecar=true`, an `orjson.JSONDecodeError` or a `ClientPayloadError` (an `aiohttp.ClientError`) becomes a sidecar row; because the agent answered with HTTP 200, the class is `agent_run_error`.
 - **Persisted evidence:** No marker-routed row is persisted. The server definitely returned headers and may have completed all side effects, but the artifacts do not record whether sending the rollout again is safe.
 - **Effect on concurrent work:** High-level collection aborts, which leads teardown to cancel pending local tasks.
 - **Why it matters:** A successful HTTP status does not prove that NeMo Gym received a complete, valid, or safely repeatable rollout result.
-- **Source:** [JSON body helper](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/server_utils.py#L278-L294) and [collector parse placement](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L1176-L1188)
+- **Source:** [JSON body helper](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/server_utils.py#L371-L399) and [collector parse placement](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1900-L1926)
 
 ### Token-capture quality checks stop collection before the current result is stored
 
@@ -155,7 +157,7 @@ See the [low-level `/run` sequence](https://github.com/NVIDIA-NeMo/Gym/blob/db5a
 - **Persisted evidence:** The exception reports masked and finalized counts plus aggregated mask reasons. The current row has no stored outcome.
 - **Effect on concurrent work:** Pending collector tasks are cancelled through the same teardown path as request failures.
 - **Why it matters:** This is an intentional collection-wide stop policy, but it currently runs inside row dispatch. A failure-quality threshold and a row outcome are separate decisions.
-- **Source:** [Token-capture threshold before persistence](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L916-L961)
+- **Source:** [Token-capture threshold before persistence](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1425-L1450)
 
 ## Transport and response failures at different request stages
 
@@ -164,22 +166,22 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 ### Connection setup fails before a peer accepts the request
 
 - **Trigger:** `client.request()` raises during connection setup or name resolution.
-- **Sequence:** Connector exceptions inherit from `ClientOSError`, so NeMo Gym enters the unbounded 0.5-second retry branch for internal and external requests.
+- **Sequence:** Connector exceptions inherit from `ClientOSError`, so NeMo Gym enters the 0.5-second retry branch for internal and external requests. The branch is unbounded unless the caller passed `max_connection_retries` (PR #2383), which no default caller does.
 - **Current handling:** The call does not return a response or structured failure, and the rollout slot can remain occupied forever.
 - **Persisted evidence:** No response or structured failure reaches persistence.
 - **Effect on concurrent work:** The occupied rollout slot reduces available collector capacity for other rows.
 - **Why it matters:** This failure is usually the safest to repeat because delivery did not occur. However, file-descriptor or socket-buffer exhaustion is a local capacity problem and should not be diagnosed as a missing server. Current code does not separate unreachable endpoints from local resource pressure.
-- **Source:** [`ClientOSError` retry branch](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/server_utils.py#L244-L258)
+- **Source:** [`ClientOSError` retry branch](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/server_utils.py#L337-L351)
 
 ### The peer drops an established connection
 
 - **Trigger:** An established connection fails with `ServerDisconnectedError` or a connected `ClientOSError`.
-- **Sequence:** NeMo Gym retries the same request body forever. The requesting component cannot know whether the peer failed before reading the request, after invoking the model, after changing a tool or sandbox, or after constructing the response.
+- **Sequence:** NeMo Gym retries the same request body forever unless the caller passed `max_connection_retries` (PR #2383). The requesting component cannot know whether the peer failed before reading the request, after invoking the model, after changing a tool or sandbox, or after constructing the response.
 - **Current handling:** The call can keep retrying without progress.
 - **Persisted evidence:** NeMo Gym persists no operation ID or deduplication result. Local cancellation or final failure cannot determine how many remote executions occurred.
 - **Effect on concurrent work:** The call continues holding its collector slot while it retries.
 - **Why it matters:** Delivery is uncertain, so replaying the POST can duplicate side effects.
-- **Source:** [Disconnect and socket-error branches](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/server_utils.py#L228-L258)
+- **Source:** [Disconnect and socket-error branches](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/server_utils.py#L321-L351)
 
 ### Another exception escapes an HTTP transmission
 
@@ -189,7 +191,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** High-level collection has no routing for the failed rollout invocation, so it produces no failure row.
 - **Effect on concurrent work:** Teardown cancels concurrent collector tasks after an external error. Remote work that was already delivered is not cancelled as part of one all-or-nothing operation.
 - **Why it matters:** The `_internal` flag decides whether retries end even though it says nothing about whether sending the request again is safe.
-- **Source:** [Generic retry branch](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/server_utils.py#L259-L275) and [internal call flag](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/server_utils.py#L340-L371)
+- **Source:** [Generic retry branch](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/server_utils.py#L352-L368) and [internal call flag](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/server_utils.py#L456-L488)
 
 ### Response headers arrive but the body is truncated
 
@@ -199,17 +201,17 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** No complete response body is available for diagnostics, and no result row is written.
 - **Effect on concurrent work:** High-level collection aborts and pending local work is cancelled.
 - **Why it matters:** The server may have completed the rollout. The missing body does not reveal completion or remote side effects, so sending the request again may duplicate work.
-- **Source:** [Status and body helpers](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/server_utils.py#L278-L294)
+- **Source:** [Status and body helpers](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/server_utils.py#L371-L399)
 
 ### The server returns HTTP 4xx or 5xx
 
 - **Trigger:** `raise_for_status()` receives an HTTP 4xx or 5xx response.
 - **Sequence:** `raise_for_status()` reads the error body, asks aiohttp to raise `ClientResponseError`, attaches the bytes as `response_content`, and raises the exception again. The base transport loop does not retry the status because it has already returned the response. A higher-level model or agent may add its own policy, but a raw agent `/run` status error escapes collection before marker routing.
-- **Current handling:** An uncaught `/run` HTTP error aborts collection.
-- **Persisted evidence:** No marker-routed failure row is written. Ray may wrap the concrete exception or fail to serialize it.
+- **Current handling:** By default, an uncaught `/run` HTTP error aborts collection. With `route_failures_to_sidecar=true`, a 4xx or 5xx that the agent itself returned becomes an `agent_run_error` row and a 429, 502, 503, or 504 becomes an `agent_request_failed` row.
+- **Persisted evidence:** By default, no marker-routed failure row is written. `raise_for_status()` now replaces the aiohttp fields on `ClientResponseError` that could not be pickled (PR #2726), so the exception crosses a Ray boundary with its status, message, URL, headers, and response body.
 - **Effect on concurrent work:** Concurrent local work is cancelled, while earlier remote effects remain.
-- **Why it matters:** Recovery cannot safely depend on Python exception identity when failure information may need to cross Ray. [Gym #1788](https://github.com/NVIDIA-NeMo/Gym/pull/1788) documents a concrete `CIMultiDictProxy` pickling incident and proposes stripping unpicklable fields.
-- **Source:** [HTTP error body and exception](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/server_utils.py#L278-L290)
+- **Why it matters:** Recovery should not depend on Python exception identity when failure information may need to cross Ray. [Gym #1788](https://github.com/NVIDIA-NeMo/Gym/pull/1788) documented a concrete `CIMultiDictProxy` pickling incident; [Gym #2726](https://github.com/NVIDIA-NeMo/Gym/pull/2726) landed the fix and #1788 was closed.
+- **Source:** [HTTP error body and exception](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/server_utils.py#L371-L395)
 
 ## Model-wrapper failures after transport returns
 
@@ -221,7 +223,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** Exhaustion does not produce a recovered rollout or a marker-routed failure row.
 - **Effect on concurrent work:** One status attempt can still remain forever inside the lower transport loop, holding the enclosing `/run` call and collector slot.
 - **Why it matters:** A finite model-status loop does not make the full request path finite.
-- **Source:** [Model status loop](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/openai_utils.py#L882-L906)
+- **Source:** [Model status loop](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/openai_utils.py#L1078-L1102)
 
 ### The provider repeatedly returns HTTP 429, 502, 503, 504, or 520
 
@@ -231,7 +233,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** Nothing is persisted until a final dictionary exists, and the consumer receives no record for the logical request while retries continue.
 - **Effect on concurrent work:** The model call, its enclosing agent `/run`, and its collector slot can remain live indefinitely.
 - **Why it matters:** Persistent retry statuses can cause unbounded replay and block collector capacity without producing an observable rollout outcome.
-- **Source:** [Extending model retry limit](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/openai_utils.py#L882-L901)
+- **Source:** [Extending model retry limit](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/openai_utils.py#L1078-L1097)
 
 ### Streaming starts before the model backend fails
 
@@ -241,7 +243,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** Optional capture records model bytes and terminal state on a best-effort basis. Capture failure does not change the response.
 - **Effect on concurrent work:** The effect depends on the stream consumer because Chat Completions, Responses, and Anthropic consumers do not share one terminal-failure contract.
 - **Why it matters:** Partial delivery means the same backend failure can appear differently across API dialects and consumers.
-- **Source:** [Responses streaming failure synthesis](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/base_responses_api_model.py#L499-L575)
+- **Source:** [Responses streaming failure synthesis](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/base_responses_api_model.py#L611-L687)
 
 ## Agent, verifier, and sandbox failures after side effects
 
@@ -253,7 +255,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** The rollout result and failure sidecar have no common field that proves whether a remote session was released. A failure before a result dictionary exists produces no row-associated session or cleanup record.
 - **Effect on concurrent work:** Orphaned sessions can continue consuming external concurrency, quota, memory, or billing capacity while replacement attempts allocate more sessions. Cancelling the local request does not reclaim them.
 - **Why it matters:** The configured rollout-attempt limit bounds how many times the collector dispatches a row, but it does not bound how many remote sessions those attempts can leave behind. Caller-driven release is also insufficient when the caller process is killed, so an environment-side idle deadline is needed as a separate backstop.
-- **Source:** [The simple agent seeds, runs, and verifies without a release scope](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/responses_api_agents/simple_agent/app.py#L277-L352) and [the base resources server exposes no release route](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/base_resources_server.py#L120-L179). [Issue #2609](https://github.com/NVIDIA-NeMo/Gym/issues/2609) reports the production impact for browser-based training.
+- **Source:** [The simple agent seeds, runs, and verifies without a release scope](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/responses_api_agents/simple_agent/app.py#L277-L352) and [the base resources server exposes no release route](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/base_resources_server.py#L121-L180). [Issue #2609](https://github.com/NVIDIA-NeMo/Gym/issues/2609) reports the production impact for browser-based training.
 
 ### A judge failure becomes a returned rollout marker
 
@@ -263,7 +265,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** `run_from_config()` writes the result to the failure sidecar and excludes it from aggregate score input.
 - **Effect on concurrent work:** High-level collection continues instead of aborting.
 - **Why it matters:** A consumer that treats every reward-zero result as a legitimate score can mistake an infrastructure failure for a failed task.
-- **Source:** [Judge failure sentinel](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/judge.py#L83-L110) and [sidecar routing](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L943-L964)
+- **Source:** [Judge failure sentinel](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/judge.py#L83-L110) and [sidecar routing](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1456-L1479)
 
 ### An agent returns its own failure marker
 
@@ -273,7 +275,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** The sidecar records the result unless `_ng_no_persist` is also set.
 - **Effect on concurrent work:** Collection continues after the returned dictionary.
 - **Why it matters:** No common schema guarantees the failure stage, delivery state, replay safety, or remote cleanup status.
-- **Source:** [RemoteAgent conversion](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/responses_api_agents/remote_agent/app.py#L279-L391) and [marker precedence](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L943-L962)
+- **Source:** [RemoteAgent conversion](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/responses_api_agents/remote_agent/app.py#L279-L391) and [marker precedence](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1456-L1479)
 
 ### Sandbox execution or cleanup fails
 
@@ -283,7 +285,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** Evidence depends on whether the owning agent returns structured data or allows an exception or hang to escape.
 - **Effect on concurrent work:** Cancelling the collector cancels only the local HTTP await. It does not prove that an in-container process, remote sandbox, or external operation stopped.
 - **Why it matters:** NeMo Gym provides no end-to-end guarantee that repeated operations are safe or that remote work terminates.
-- **Source:** [Sandbox start, stop, and context cleanup](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/sandbox/api.py#L490-L586)
+- **Source:** [Sandbox start, stop, and context cleanup](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/sandbox/api.py#L548-L644)
 
 ### An incomplete GenRM cohort keeps every arrived member waiting
 
@@ -293,7 +295,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** The collector receives no result while verification waits, so no main row or failure sidecar row records the missing member or blocked cohort.
 - **Effect on concurrent work:** Each waiting verification holds its enclosing agent `/run` and collector slot. One missing member can therefore block several otherwise completed rollouts.
 - **Why it matters:** The key does not include an explicit cohort identifier or member identifier. Retries, repeated evaluation sets, or overlapping requests with the same key can fill a cohort with members from different intended comparison sets. Duplicate delivery can also count twice.
-- **Source:** [Cohort admission and unbounded wait](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/resources_servers/genrm_compare/app.py#L208-L281) and [prompt-based cohort key](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/resources_servers/genrm_compare/app.py#L289-L301)
+- **Source:** [Cohort admission and unbounded wait](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/resources_servers/genrm_compare/app.py#L208-L281) and [prompt-based cohort key](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/resources_servers/genrm_compare/app.py#L289-L301)
 
 ## Persistence and resume behavior
 
@@ -305,7 +307,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** The failure sidecar contains durable evidence for the failed attempt.
 - **Effect on concurrent work:** Other rollout work continues because the failure arrived as a returned dictionary.
 - **Why it matters:** Aggregate metrics describe only rows that reached the main JSONL unless completion coverage is reported separately.
-- **Source:** [Result identity and sidecar write](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L882-L964)
+- **Source:** [Result identity and sidecar write](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1379-L1479)
 
 ### `_ng_no_persist` removes durable evidence of the attempt
 
@@ -315,7 +317,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** No disk row records the attempt, its delivery state, the reason it was omitted, or an explanation for the missing attempt after process exit.
 - **Effect on concurrent work:** The current process keeps the result in memory and continues, but later runs have no durable knowledge of it.
 - **Why it matters:** Repeated dispatch can occur without evidence that explains what happened during the earlier attempt.
-- **Source:** [No-persist precedence](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L943-L962)
+- **Source:** [No-persist precedence](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1456-L1479)
 
 ### A fresh run clears the main output and failure sidecar
 
@@ -325,7 +327,7 @@ The aiohttp exception hierarchy distinguishes request stages. `ClientConnectorEr
 - **Persisted evidence:** The new files contain only outcomes written after the fresh materialization.
 - **Effect on concurrent work:** Cleanup happens before rollout dispatch, so no active work depends on the removed files.
 - **Why it matters:** This closes the stale-sidecar problem that previously allowed unrelated attempts to affect resume.
-- **Source:** [Fresh-run output reset](https://github.com/NVIDIA-NeMo/Gym/blob/db5a15d22eb45437d35548d5a1317dabb9afade6/nemo_gym/rollout_collection.py#L769-L814)
+- **Source:** [Fresh-run output reset](https://github.com/NVIDIA-NeMo/Gym/blob/98713f8e9cbdbcc1db568fc6ab0dfc938d30afe5/nemo_gym/rollout_collection.py#L1264-L1298)
 
 ## Failure flow through rollout collection
 
@@ -337,7 +339,8 @@ flowchart TD
     BODY --> MODEL["Model status retry"]
     MODEL --> COMPONENT["Agent, verifier, and sandbox"]
     COMPONENT --> PERSIST["Persistence and resume"]
-    DISPATCH -.->|"raw exception"| ABORT["Collection aborts without a row outcome"]
+    DISPATCH -.->|"raw exception, default"| ABORT["Collection aborts without a row outcome"]
+    DISPATCH -.->|"request-class exception, route_failures_to_sidecar=true"| SIDE
     CONNECT -.->|"unbounded retry"| LIVELOCK["Collector slot remains occupied"]
     MODEL -.->|"persistent retry status"| LIVELOCK
     COMPONENT -.->|"returned failure marker"| SIDE["Failure sidecar"]
@@ -370,4 +373,4 @@ stateDiagram-v2
 
 ## Current recovery remains incomplete
 
-The catalogue shows one consistent boundary: NeMo Gym can store and resume a returned failure dictionary, but it cannot record an expected failure that raises before a result exists or remains inside an unbounded wait. It also does not own the full lifetime of a remote session allocated for one rollout. Closing these gaps requires row-associated failure records, finite retry allowances, explicit replay policy, caller-created identity for allocating requests, exact coverage reporting, remote-session release with an expiry backstop, and cleanup that owns partial startup. The [future-state design](./nemo-gym-error-handling-future.md) describes those changes and their dependency order.
+The catalogue shows one consistent boundary: NeMo Gym can store and resume a returned failure dictionary, and, when a run opts in, a request-class exception from `/run`. It still cannot record an exception of another kind, a failure during reverification `/verify`, or a request that remains inside an unbounded wait, and by default it still ends the run on the first raised `/run` failure. It also does not own the full lifetime of a remote session allocated for one rollout. Closing these gaps requires row-associated failure records, finite retry allowances, explicit replay policy, caller-created identity for allocating requests, exact coverage reporting, remote-session release with an expiry backstop, and cleanup that owns partial startup. The [future-state design](./nemo-gym-error-handling-future.md) describes those changes and their dependency order.
