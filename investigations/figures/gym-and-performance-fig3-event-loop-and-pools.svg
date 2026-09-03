@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="620" font-family="IBM Plex Mono, Menlo, Consolas, DejaVu Sans Mono, monospace" viewBox="0 0 960 620" role="img"
+     aria-label="Diagram of one Gym worker process: the single event-loop thread running many coroutines that mostly await network I/O, hand-offs to two thread pools with fixed sizes and a queue, the GIL constraint, and the process pool or extra workers that provide real parallelism.">
+  <defs>
+    <marker id="arr2" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0,0 10,4 0,8" fill="#17201A"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="#FFFFFF"/>
+  <!-- process boundary -->
+  <rect x="20" y="16" width="920" height="468" fill="none" stroke="#17201A" stroke-opacity="0.45" stroke-dasharray="6 4" rx="6"/>
+  <text x="34" y="38" fill="#17201A" font-size="12" font-weight="600">one uvicorn worker process</text>
+
+  <!-- event loop -->
+  <rect x="40" y="56" width="360" height="400" fill="none" stroke="#17201A" stroke-opacity="0.6" rx="4"/>
+  <text x="56" y="80" fill="#17201A" font-size="12.5" font-weight="600">event loop — ONE thread</text>
+  <text x="56" y="98" fill="#17201A" fill-opacity="0.75" font-size="10.5">runs coroutines by turns; one coroutine per request</text>
+  <g font-size="10.5" fill="#17201A">
+    <rect x="56" y="118" width="328" height="26" fill="#E3F0E7" stroke="none" rx="3"/>
+    <text x="66" y="135">A · awaiting model reply (socket) — loop is free</text>
+    <rect x="56" y="150" width="328" height="26" fill="#E3F0E7" stroke="none" rx="3"/>
+    <text x="66" y="167">B · awaiting verify reply (socket) — loop is free</text>
+    <rect x="56" y="182" width="328" height="26" fill="#E3F0E7" stroke="none" rx="3"/>
+    <text x="66" y="199">C · awaiting tool result (socket) — loop is free</text>
+    <rect x="56" y="214" width="328" height="26" fill="#F7E5E3" stroke="none" rx="3"/>
+    <text x="66" y="231">D · RUNNING: parse 2 MB JSON, validate (CPU)</text>
+    <rect x="56" y="246" width="328" height="26" fill="#F7E5E3" stroke="none" rx="3"/>
+    <text x="66" y="263">E · READY, needs the thread — stalled behind D</text>
+    <rect x="56" y="278" width="328" height="26" fill="#F7E5E3" stroke="none" rx="3"/>
+    <text x="66" y="295">…every other ready coroutine — stalled behind D</text>
+  </g>
+  <text x="56" y="330" fill="#17201A" font-size="10.5" fill-opacity="0.8">green: waiting on I/O — free</text>
+  <text x="56" y="346" fill="#17201A" font-size="10.5" fill-opacity="0.8">red: needs the one thread — serialized</text>
+  <text x="56" y="372" fill="#17201A" font-size="11" font-weight="600">inline CPU work = everyone waits.</text>
+  <text x="56" y="390" fill="#17201A" font-size="10.5" fill-opacity="0.8">a 900 ms SymPy verify done inline delays every</text>
+  <text x="56" y="406" fill="#17201A" font-size="10.5" fill-opacity="0.8">in-flight request on this worker by 900 ms.</text>
+  <text x="56" y="432" fill="#17201A" font-size="10.5" fill-opacity="0.8">the fix: hand CPU work to a pool →</text>
+
+  <!-- arrows to pools -->
+  <line x1="400" y1="150" x2="530" y2="120" stroke="#17201A" marker-end="url(#arr2)"/>
+  <text x="412" y="100" fill="#17201A" font-size="9.5" fill-opacity="0.85">plain def handler /</text>
+  <text x="412" y="112" fill="#17201A" font-size="9.5" fill-opacity="0.85">run_in_threadpool</text>
+  <line x1="400" y1="300" x2="530" y2="290" stroke="#17201A" marker-end="url(#arr2)"/>
+  <text x="412" y="272" fill="#17201A" font-size="9.5" fill-opacity="0.85">asyncio.to_thread /</text>
+  <text x="412" y="284" fill="#17201A" font-size="9.5" fill-opacity="0.85">run_in_executor(None)</text>
+
+  <!-- pool 1 -->
+  <rect x="536" y="70" width="380" height="140" fill="none" stroke="#17201A" stroke-opacity="0.6" rx="4"/>
+  <text x="552" y="92" fill="#17201A" font-size="12" font-weight="600">anyio thread pool — 40 slots per process</text>
+  <text x="552" y="110" fill="#17201A" fill-opacity="0.75" font-size="10.5">FastAPI uses it for non-async handlers (Gym has none)</text>
+  <g fill="#17201A" fill-opacity="0.55">
+    <rect x="552" y="122" width="14" height="14" rx="2"/><rect x="572" y="122" width="14" height="14" rx="2"/><rect x="592" y="122" width="14" height="14" rx="2"/><rect x="612" y="122" width="14" height="14" rx="2"/><rect x="632" y="122" width="14" height="14" rx="2"/>
+    <rect x="652" y="122" width="14" height="14" rx="2"/><rect x="672" y="122" width="14" height="14" rx="2"/><rect x="692" y="122" width="14" height="14" rx="2"/>
+  </g>
+  <text x="716" y="134" fill="#17201A" fill-opacity="0.75" font-size="10.5">… 40 threads</text>
+  <text x="552" y="160" fill="#17201A" fill-opacity="0.75" font-size="10.5">slot free → work runs in that thread; loop keeps serving</text>
+  <text x="552" y="176" fill="#17201A" fill-opacity="0.75" font-size="10.5">no slot → the request waits in a queue for one</text>
+
+  <!-- pool 2 -->
+  <rect x="536" y="230" width="380" height="160" fill="none" stroke="#17201A" stroke-opacity="0.6" rx="4"/>
+  <text x="552" y="252" fill="#17201A" font-size="12" font-weight="600">asyncio default executor — min(32, cpu+4)</text>
+  <text x="552" y="270" fill="#17201A" fill-opacity="0.75" font-size="10.5">32 threads on a 96-core node; used by the to_thread</text>
+  <text x="552" y="285" fill="#17201A" fill-opacity="0.75" font-size="10.5">offloads of 13 resources servers, and shared with</text>
+  <text x="552" y="300" fill="#17201A" fill-opacity="0.75" font-size="10.5">capture's fsync writes.</text>
+  <g fill="#17201A" fill-opacity="0.55">
+    <rect x="552" y="310" width="14" height="14" rx="2"/><rect x="572" y="310" width="14" height="14" rx="2"/><rect x="592" y="310" width="14" height="14" rx="2"/><rect x="612" y="310" width="14" height="14" rx="2"/><rect x="632" y="310" width="14" height="14" rx="2"/>
+    <rect x="652" y="310" width="14" height="14" rx="2"/><rect x="672" y="310" width="14" height="14" rx="2"/><rect x="692" y="310" width="14" height="14" rx="2"/>
+  </g>
+  <text x="716" y="322" fill="#17201A" fill-opacity="0.75" font-size="10.5">… 32 threads</text>
+  <text x="552" y="350" fill="#17201A" font-size="11" font-weight="600">8,192 concurrent verifies → 32 slots → 8,160 queued</text>
+  <text x="552" y="368" fill="#17201A" fill-opacity="0.75" font-size="10.5">loop stays responsive; throughput is capped by the pool</text>
+
+  <!-- GIL note -->
+  <rect x="536" y="400" width="380" height="70" fill="#F7EEDF" stroke="none" rx="4"/>
+  <text x="552" y="418" fill="#17201A" font-size="11" font-weight="600">the GIL: threads take turns running Python</text>
+  <text x="552" y="434" fill="#17201A" fill-opacity="0.85" font-size="10.5">pure-Python CPU work in a pool does not run in</text>
+  <text x="552" y="449" fill="#17201A" fill-opacity="0.85" font-size="10.5">parallel — it only stops blocking the loop. C code</text>
+  <text x="552" y="464" fill="#17201A" fill-opacity="0.85" font-size="10.5">that releases the GIL (regex, RDKit, fsync, waits) does.</text>
+
+  <!-- processes -->
+  <rect x="20" y="504" width="920" height="96" fill="none" stroke="#17201A" stroke-opacity="0.6" rx="6"/>
+  <text x="34" y="528" fill="#17201A" font-size="12.5" font-weight="600">real parallelism: separate processes</text>
+  <text x="34" y="546" fill="#17201A" fill-opacity="0.8" font-size="10.5">a warm process pool for CPU-heavy verification, or uvicorn workers (num_workers: N gives N loops, N pools, N GILs;</text>
+  <text x="34" y="561" fill="#17201A" fill-opacity="0.8" font-size="10.5">connection budgets are divided by N). This is the only way to add verification throughput for pure-Python work.</text>
+  <text x="34" y="576" fill="#17201A" fill-opacity="0.8" font-size="10.5">Today two resources servers fork per verify by hand, and only two configs in the tree use num_workers —</text>
+  <text x="34" y="591" fill="#17201A" fill-opacity="0.8" font-size="10.5">the entrypoint boilerplate it requires was never added to the other 100+ servers.</text>
+</svg>

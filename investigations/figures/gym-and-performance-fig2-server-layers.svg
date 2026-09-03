@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="752" font-family="IBM Plex Mono, Menlo, Consolas, DejaVu Sans Mono, monospace" viewBox="0 0 940 752" role="img"
+     aria-label="Layer stack inside one Gym server process: uvicorn HTTP parsing, exception middleware, per-server-type middleware, cookie session middleware, session-id middleware, route layer, handler — with each layer's job and cost.">
+  <rect width="100%" height="100%" fill="#FFFFFF"/>
+  <g fill="none" stroke="#17201A" stroke-opacity="0.55">
+    <rect x="30" y="20" width="610" height="72" rx="4"/>
+    <rect x="30" y="108" width="610" height="88" rx="4"/>
+    <rect x="30" y="212" width="610" height="88" rx="4"/>
+    <rect x="30" y="316" width="610" height="88" rx="4"/>
+    <rect x="30" y="420" width="610" height="88" rx="4"/>
+    <rect x="30" y="524" width="610" height="104" rx="4"/>
+    <rect x="30" y="644" width="610" height="88" rx="4"/>
+  </g>
+  <g stroke="#17201A" stroke-opacity="0.4">
+    <line x1="335" y1="92" x2="335" y2="108"/>
+    <line x1="335" y1="196" x2="335" y2="212"/>
+    <line x1="335" y1="300" x2="335" y2="316"/>
+    <line x1="335" y1="404" x2="335" y2="420"/>
+    <line x1="335" y1="508" x2="335" y2="524"/>
+    <line x1="335" y1="628" x2="335" y2="644"/>
+  </g>
+  <g fill="#17201A" font-size="12.5" font-weight="600">
+    <text x="46" y="44">uvicorn — socket handling + HTTP parsing</text>
+    <text x="46" y="132">exception-handling middleware (Gym)</text>
+    <text x="46" y="236">per-server-type middleware (Gym)</text>
+    <text x="46" y="340">cookie-session middleware (Starlette)</text>
+    <text x="46" y="444">session-id middleware (Gym)</text>
+    <text x="46" y="548">route layer (FastAPI)</text>
+    <text x="46" y="668">handler — your function (+ optional telemetry wrapper)</text>
+  </g>
+  <g fill="#17201A" fill-opacity="0.75" font-size="10.5">
+    <text x="46" y="62">reads bytes off the socket, splits headers from body, assembles the full body in memory.</text>
+    <text x="46" y="78">parser: httptools (C, landed #2869) — was h11, pure Python; see §2.3 for the delta</text>
+    <text x="46" y="150">catches anything a handler raises and turns it into a JSON 500 with Gym's error text.</text>
+    <text x="46" y="166">on main it is a "BaseHTTPMiddleware": an extra task + byte-relay stream per request</text>
+    <text x="46" y="182">(the §3 ASGI rewrite makes it a plain function call).</text>
+    <text x="46" y="254">model servers: capture middleware — records request/response bytes when observability</text>
+    <text x="46" y="270">is on, a cheap check when off. resources servers: rollout-context middleware — reads</text>
+    <text x="46" y="286">the rollout id prefix off the URL, cheap.</text>
+    <text x="46" y="358">verifies the HMAC signature on the session cookie coming in; re-signs and re-sends it</text>
+    <text x="46" y="374">going out. this is how per-rollout state on resources servers is correlated.</text>
+    <text x="46" y="390">cost: one HMAC each way, every request.</text>
+    <text x="46" y="462">guarantees a session id exists in the (verified) session dict so servers can key state</text>
+    <text x="46" y="478">by it. also a BaseHTTPMiddleware on main; pure ASGI on the branch, uuid only minted</text>
+    <text x="46" y="494">on a miss.</text>
+    <text x="46" y="566">reads the body, parses the JSON, validates it against the handler's declared parameter</text>
+    <text x="46" y="582">types, calls the handler, validates and serializes whatever the handler returns.</text>
+    <text x="46" y="598"><tspan fill="#106B3C" fill-opacity="1" font-weight="600">parity serving branch: parse with orjson, encode with orjson</tspan> — everything else</text>
+    <text x="46" y="614">about the response contract stays FastAPI's.</text>
+    <text x="46" y="686">the server's actual logic. The telemetry wrapper (landed, off by default) opens a span</text>
+    <text x="46" y="702">around it; it wraps the handler BEFORE registration, so it always sees the handler's</text>
+    <text x="46" y="718">raw result.</text>
+  </g>
+  <g font-size="10.5">
+    <text x="670" y="44" fill="#17201A" font-weight="600">order note</text>
+    <text x="670" y="62" fill="#17201A" fill-opacity="0.75">requests flow top → bottom;</text>
+    <text x="670" y="78" fill="#17201A" fill-opacity="0.75">responses bubble bottom → top.</text>
+    <text x="670" y="110" fill="#17201A" fill-opacity="0.75">Starlette registers middleware</text>
+    <text x="670" y="126" fill="#17201A" fill-opacity="0.75">last-added-outermost, so the</text>
+    <text x="670" y="142" fill="#17201A" fill-opacity="0.75">order is fixed by the</text>
+    <text x="670" y="158" fill="#17201A" fill-opacity="0.75">registration sequence in the</text>
+    <text x="670" y="174" fill="#17201A" fill-opacity="0.75">base classes (and pinned by a</text>
+    <text x="670" y="190" fill="#17201A" fill-opacity="0.75">test on the ASGI branch).</text>
+    <text x="670" y="230" fill="#17201A" font-weight="600">who else touches routes</text>
+    <text x="670" y="248" fill="#17201A" fill-opacity="0.75">MCP auto-exposure re-wraps</text>
+    <text x="670" y="264" fill="#17201A" fill-opacity="0.75">/verify and /seed_session after</text>
+    <text x="670" y="280" fill="#17201A" fill-opacity="0.75">registration, and its tool calls</text>
+    <text x="670" y="296" fill="#17201A" fill-opacity="0.75">invoke handlers directly —</text>
+    <text x="670" y="312" fill="#17201A" fill-opacity="0.75">the one subsystem that</text>
+    <text x="670" y="328" fill="#17201A" fill-opacity="0.75">introspects routes.</text>
+    <text x="670" y="384" fill="#17201A" font-weight="600">profiling</text>
+    <text x="670" y="402" fill="#17201A" fill-opacity="0.75">a yappi profiler + /stats route</text>
+    <text x="670" y="418" fill="#17201A" fill-opacity="0.75">can be enabled per server (dev</text>
+    <text x="670" y="434" fill="#17201A" fill-opacity="0.75">only, ~30% overhead); telemetry</text>
+    <text x="670" y="450" fill="#17201A" fill-opacity="0.75">(§4.4) is the production path.</text>
+  </g>
+</svg>
