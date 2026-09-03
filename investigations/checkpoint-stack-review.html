@@ -1,0 +1,879 @@
+<title>Checkpoint Stack Review</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@87.5,600;87.5,700;100,500&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --ground: #EEF1F4;
+    --surface: #FFFFFF;
+    --surface-2: #E3E8ED;
+    --ink: #14202B;
+    --ink-2: #3E4C59;
+    --ink-3: #6B7A89;
+    --rule: #CBD3DB;
+    --accent: #0F7B6C;
+    --accent-ink: #0A5A4F;
+    --accent-wash: #DDEFEB;
+    --blocker: #B3261E;
+    --blocker-wash: #F6E1DF;
+    --serious: #A85A0B;
+    --serious-wash: #F7E8D6;
+    --minor: #4B5C6B;
+    --minor-wash: #E6EBEF;
+    --ok: #2C6E49;
+    --ok-wash: #DCEEE3;
+    --code-bg: #E7ECF0;
+    --lane: #F5F7F9;
+    --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --sans: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif;
+    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0F1419;
+      --surface: #171D24;
+      --surface-2: #1F262E;
+      --ink: #E6EBF0;
+      --ink-2: #B4BFCA;
+      --ink-3: #8593A1;
+      --rule: #2C353F;
+      --accent: #2FB8A6;
+      --accent-ink: #7ED8CB;
+      --accent-wash: #143B36;
+      --blocker: #F28B82;
+      --blocker-wash: #3B1F1D;
+      --serious: #F5B14C;
+      --serious-wash: #3A2A12;
+      --minor: #A8B4BF;
+      --minor-wash: #232C35;
+      --ok: #7FCF9C;
+      --ok-wash: #16301F;
+      --code-bg: #1F272F;
+      --lane: #131920;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0F1419;
+    --surface: #171D24;
+    --surface-2: #1F262E;
+    --ink: #E6EBF0;
+    --ink-2: #B4BFCA;
+    --ink-3: #8593A1;
+    --rule: #2C353F;
+    --accent: #2FB8A6;
+    --accent-ink: #7ED8CB;
+    --accent-wash: #143B36;
+    --blocker: #F28B82;
+    --blocker-wash: #3B1F1D;
+    --serious: #F5B14C;
+    --serious-wash: #3A2A12;
+    --minor: #A8B4BF;
+    --minor-wash: #232C35;
+    --ok: #7FCF9C;
+    --ok-wash: #16301F;
+    --code-bg: #1F272F;
+    --lane: #131920;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.55;
+  }
+  a { color: var(--accent-ink); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code, pre, .mono { font-family: var(--mono); font-size: 0.86em; }
+  code { background: var(--code-bg); padding: 0.05em 0.35em; border-radius: 3px; }
+  pre { background: var(--code-bg); padding: 0.9rem 1rem; overflow-x: auto; border-radius: 4px; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  h1, h2, h3, h4 { font-family: var(--display); font-stretch: 87.5%; text-wrap: balance; line-height: 1.15; margin: 0; }
+  h1 { font-size: 2.35rem; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 1.55rem; font-weight: 700; margin-top: 3.2rem; padding-top: 1.2rem; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.15rem; font-weight: 600; margin-top: 2rem; }
+  h4 { font-size: 1rem; font-weight: 600; margin-top: 1.4rem; font-family: var(--sans); font-stretch: normal; }
+  p { margin: 0.8rem 0; max-width: 68ch; }
+  ul, ol { max-width: 68ch; padding-left: 1.3rem; }
+  li { margin: 0.35rem 0; }
+  li p { margin: 0.25rem 0; }
+  .eyebrow { font-family: var(--display); font-stretch: 87.5%; font-weight: 600; font-size: 0.78rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+
+  .page { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 3rem; max-width: 1180px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+  .rail { position: sticky; top: 1.5rem; align-self: start; font-size: 0.9rem; }
+  .rail ol { list-style: none; padding: 0; margin: 0.8rem 0 0; border-left: 2px solid var(--rule); }
+  .rail li { margin: 0; }
+  .rail a { display: block; padding: 0.3rem 0 0.3rem 0.9rem; color: var(--ink-2); text-decoration: none; border-left: 2px solid transparent; margin-left: -2px; }
+  .rail a:hover { color: var(--ink); border-left-color: var(--accent); }
+  .rail .sub a { padding-left: 1.7rem; font-size: 0.84rem; color: var(--ink-3); }
+  @media (max-width: 900px) {
+    .page { grid-template-columns: 1fr; gap: 1.5rem; }
+    .rail { position: static; }
+  }
+
+  header .meta { display: flex; flex-wrap: wrap; gap: 0.5rem 1.6rem; margin-top: 0.9rem; font-size: 0.9rem; color: var(--ink-3); }
+  header .meta span b { color: var(--ink-2); font-weight: 600; }
+  .verdict { margin-top: 1.6rem; padding: 1.1rem 1.3rem; border-left: 4px solid var(--accent); background: var(--surface); }
+  .verdict p { margin: 0.4rem 0; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.93rem; margin: 1rem 0; }
+  .tablewrap { overflow-x: auto; }
+  th, td { text-align: left; vertical-align: top; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--rule); }
+  th { font-family: var(--display); font-stretch: 87.5%; font-weight: 600; font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+  td.num, th.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+  .chip { display: inline-block; font-family: var(--display); font-stretch: 87.5%; font-weight: 600; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; padding: 0.12rem 0.5rem; border-radius: 2px; white-space: nowrap; }
+  .chip.blocker { color: var(--blocker); background: var(--blocker-wash); }
+  .chip.serious { color: var(--serious); background: var(--serious-wash); }
+  .chip.minor { color: var(--minor); background: var(--minor-wash); }
+  .chip.ok { color: var(--ok); background: var(--ok-wash); }
+  .chip.accent { color: var(--accent-ink); background: var(--accent-wash); }
+
+  figure { margin: 1.6rem 0; background: var(--surface); border: 1px solid var(--rule); padding: 1rem 1rem 0.6rem; }
+  figure svg { display: block; width: 100%; height: auto; }
+  figcaption { font-size: 0.88rem; color: var(--ink-2); margin-top: 0.6rem; max-width: 80ch; }
+  .figwrap { overflow-x: auto; }
+
+  .phase { margin-top: 1.4rem; padding-left: 1rem; border-left: 3px solid var(--surface-2); }
+  .phase h3 { margin-top: 0; }
+  .phase .who { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-3); }
+  .divergence { margin: 0.6rem 0 0; padding: 0.7rem 0.9rem; background: var(--surface-2); font-size: 0.93rem; max-width: 72ch; }
+  .divergence b { color: var(--ink); }
+
+  .case { margin-top: 1.5rem; padding: 1rem 1.1rem; background: var(--surface); border: 1px solid var(--rule); }
+  .case h4 { margin-top: 0; display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: baseline; font-family: var(--display); font-stretch: 87.5%; font-size: 1.05rem; }
+  .case h4 .id { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-3); font-weight: 400; }
+  .case .row { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: 0.3rem 1rem; margin-top: 0.6rem; font-size: 0.95rem; }
+  .case .row dt { font-family: var(--display); font-stretch: 87.5%; font-weight: 600; font-size: 0.74rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); padding-top: 0.15rem; }
+  .case .row dd { margin: 0; max-width: 68ch; }
+  .case .row dd p { margin: 0 0 0.35rem; }
+  .status { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+  .contract li { margin: 0.5rem 0; }
+  .fixorder { counter-reset: fix; list-style: none; padding: 0; max-width: 72ch; }
+  .fixorder li { counter-increment: fix; position: relative; padding-left: 2.4rem; margin: 0.7rem 0; }
+  .fixorder li::before { content: counter(fix); position: absolute; left: 0; top: 0.05rem; width: 1.7rem; height: 1.7rem; border-radius: 50%; background: var(--accent-wash); color: var(--accent-ink); font-family: var(--display); font-weight: 700; font-size: 0.85rem; display: grid; place-items: center; }
+
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="page">
+  <nav class="rail" aria-label="Sections">
+    <div class="eyebrow">Contents</div>
+    <ol>
+      <li><a href="#verdict">Verdict</a></li>
+      <li><a href="#stack">What the stack implements</a></li>
+      <li><a href="#lifecycle">Lifecycle as implemented</a></li>
+      <li class="sub"><a href="#runtime">Runtime</a></li>
+      <li class="sub"><a href="#prepare">Prepare</a></li>
+      <li class="sub"><a href="#save">Save</a></li>
+      <li class="sub"><a href="#restore">Restore and resume</a></li>
+      <li><a href="#cases">Edge cases to guard against</a></li>
+      <li class="sub"><a href="#c-identity">Identity and fencing</a></li>
+      <li class="sub"><a href="#c-prepare">Prepare order and deadline</a></li>
+      <li class="sub"><a href="#c-tokens">Token chain across the boundary</a></li>
+      <li class="sub"><a href="#c-agent">Agent continuation</a></li>
+      <li class="sub"><a href="#c-resources">Resources state</a></li>
+      <li class="sub"><a href="#c-control">Control plane and operations</a></li>
+      <li class="sub"><a href="#c-scale">Scale</a></li>
+      <li><a href="#rl">What NeMo RL must guarantee</a></li>
+      <li><a href="#tests">Test coverage</a></li>
+      <li><a href="#order">Suggested fix order</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header>
+      <div class="eyebrow">Partial-rollout checkpointing · NeMo Gym PRs 2939–2946</div>
+      <h1 style="margin-top:0.5rem">Checkpoint Stack Review</h1>
+      <div class="meta">
+        <span><b>Stack tip</b> 5b189df61 (fix: close participant integration gaps)</span>
+        <span><b>Base</b> pthombre/tokcap/full-stack</span>
+        <span><b>Reviewed</b> 2 September 2026</span>
+        <span><b>Scope</b> lifecycle re-derivation and edge-case catalogue</span>
+      </div>
+      <div class="verdict" id="verdict">
+        <p><b>The stack builds the right participants with the right fencing discipline, and the single-participant mechanics are sound.</b> Admission close is atomic with the admission test, every control route is fenced by checkpoint id with idempotent replay, every commit writes payloads before its manifest, and every restore validates the whole set before activating anything.</p>
+        <p>The gaps are between participants, not inside them. Five need to close before NeMo RL integrates. A restored continuation re-tokenizes its whole conversation because parent resolution never looks across attempts, so pre-checkpoint generations train as prompt carry. The checkpoint taken after a restore drops every restored ledger, because admission tombstones double as commit exclusions. The agent and model checkpoint directories are not namespaced by instance, so with two agent servers the second commit silently returns the first server's manifest. The prepare order is safe only as agents, then resources, then policy model, and nothing in Gym enforces it while the whitebox agents turn either wrong order into a lost or corrupted boundary. And the controller cannot see which executions block a prepare, because neither the agent nor the resources participant exposes a status route. On the resources side three more break the participant for real environments: any identity-carrying request that fails before a session exists poisons every later prepare, every Gymnasium environment advertises state export that most of them cannot perform, and MCP tool traffic is refused outright.</p>
+      </div>
+    </header>
+
+    <h2 id="stack">What the stack implements</h2>
+    <p>Eight PRs, each a dependent layer. The rows name the participant each layer adds and the routes it exposes. Every control route lives under <code>/ng-control/v1</code>, requires the bearer resolved from <code>NEMO_GYM_CHECKPOINT_CONTROL_TOKEN</code> (or the external-staging control variable), and carries a <code>checkpoint_id</code> plus an absolute <code>deadline_ts</code>.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>PR</th><th>Layer</th><th>Routes and mechanisms</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">2939</td><td>Execution identity</td><td>Logical <code>rollout_id</code> and <code>attempt_index</code> propagate on every call as <code>x-nemo-gym-rollout-id</code> / <code>x-nemo-gym-attempt-index</code>, independent of observability. Capture key is <code>rollout_id</code> at attempt 0 and <code>rollout_id-aN</code> afterwards. A caller-supplied header that disagrees with the active context is rejected.</td></tr>
+        <tr><td class="mono">2940</td><td>Fenced control contracts</td><td><code>GET capabilities</code> on every server; <code>ControlFence</code> phase machine (idle → preparing → prepared → committing → committed_paused; restoring → restored_paused); <code>AdmissionLimiter</code> and <code>AdmissionMiddleware</code>; the Unix-socket worker coordinator (not launched by production startup; <code>num_workers &gt; 1</code> advertises <code>unmanaged</code>).</td></tr>
+        <tr><td class="mono">2941</td><td>Policy model participant</td><td><code>model-admission/pause|status|resume|abort_inflight</code>; <code>model-checkpoint/commit|restore</code> copying the token-free ledger (<code>*.lineage.jsonl</code>) with a manifest written last; tombstones for aborted attempts and, on restore, for every attempt the server had seen; <code>x-nemo-gym-model-call-id</code> echoed on every capture response.</td></tr>
+        <tr><td class="mono">2942</td><td>Whitebox agent participant</td><td><code>agent-checkpoint/prepare|commit|restore|resume|retire</code>; one active <code>/run</code> per attempt; <code>AgentBoundaryRecord</code> committed after each completed turn; prepare parks every running execution at its next boundary or fails at the deadline.</td></tr>
+        <tr><td class="mono">2943</td><td>SimpleAgent</td><td>Boundary after each turn that made tool calls; continuation skips <code>/seed_session</code>, restores output items, usage, cookies, last model-call id and resources revision.</td></tr>
+        <tr><td class="mono">2944</td><td>GymnasiumAgent</td><td>Boundary after each nonterminal step; continuation skips <code>/reset</code>; no boundary after a terminal step so a retired episode is never resumed.</td></tr>
+        <tr><td class="mono">2945</td><td>Resources state participant</td><td><code>resources-checkpoint/prepare|commit|restore|resume</code>; per-attempt mutation lock and <code>x-nemo-gym-resource-state-revision</code> header; prepare exports every live session under its lock; restore installs the full set under attempt N+1 and tombstones N; <code>/verify</code> retires a session only on success.</td></tr>
+        <tr><td class="mono">2946</td><td>Environment adapters</td><td>Gymnasium base (execution-to-session map, JSON-safe state), Blackjack (RNG state), the counter example, Workplace Assistant (DataFrames as JSON); integration fixes for stale attempts, terminal retirement, failed verify, cancelled parked runs, commit retries.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="lifecycle">The lifecycle as the code runs it</h2>
+    <p>The figure follows one checkpoint across the five participants. Arrows are the actual routes. The numbers on the prepare arrows are the only safe order, derived from what the agents do when a call is refused; that order is argued in the edge cases below.</p>
+
+    <figure>
+      <div class="figwrap">
+      <svg viewBox="0 0 1140 590" role="img" aria-label="Swimlane of one checkpoint across the NemoGym actor, agent server, policy model server, resources server, and generation workers with TransferQueue, through runtime, prepare, save, and restore-plus-resume phases, showing the control routes each phase issues.">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+          <marker id="arr-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+          </marker>
+        </defs>
+        <g fill="currentColor" font-family="Source Sans 3, Helvetica, Arial, sans-serif" font-size="12">
+          <!-- lane bands -->
+          <rect x="0" y="48" width="1140" height="96" fill="var(--lane)"/>
+          <rect x="0" y="240" width="1140" height="96" fill="var(--lane)"/>
+          <rect x="0" y="432" width="1140" height="96" fill="var(--lane)"/>
+          <!-- lane labels -->
+          <g font-family="Archivo, Helvetica, Arial, sans-serif" font-weight="600" font-size="12">
+            <text x="12" y="92">NemoGym actor</text>
+            <text x="12" y="107" font-weight="400" font-size="11" fill="var(--ink-3)">NeMo RL</text>
+            <text x="12" y="188">Agent server</text>
+            <text x="12" y="284">Policy model</text>
+            <text x="12" y="299" font-weight="400" font-size="11" fill="var(--ink-3)">instance_role=policy</text>
+            <text x="12" y="380">Resources server</text>
+            <text x="12" y="476">Generation workers</text>
+            <text x="12" y="491" font-weight="400" font-size="11" fill="var(--ink-3)">+ TransferQueue</text>
+          </g>
+          <!-- phase columns -->
+          <g stroke="var(--rule)" stroke-width="1">
+            <line x1="160" y1="20" x2="160" y2="540"/>
+            <line x1="385" y1="20" x2="385" y2="540"/>
+            <line x1="640" y1="20" x2="640" y2="540"/>
+            <line x1="840" y1="20" x2="840" y2="540"/>
+          </g>
+          <g font-family="Archivo, Helvetica, Arial, sans-serif" font-weight="700" font-size="13" letter-spacing="0.06em">
+            <text x="172" y="36">RUNTIME</text>
+            <text x="397" y="36">PREPARE</text>
+            <text x="652" y="36">SAVE</text>
+            <text x="852" y="36">RESTORE · RESUME</text>
+          </g>
+
+          <!-- RUNTIME -->
+          <g stroke="currentColor" stroke-width="1.4" fill="none">
+            <line x1="185" y1="112" x2="185" y2="168" marker-end="url(#arr)"/>
+            <line x1="240" y1="208" x2="240" y2="264" marker-end="url(#arr)"/>
+            <line x1="240" y1="304" x2="240" y2="456" marker-end="url(#arr)"/>
+            <line x1="330" y1="208" x2="330" y2="360" marker-end="url(#arr)"/>
+          </g>
+          <text x="192" y="140">POST /run (rollout, attempt)</text>
+          <text x="247" y="236">/v1/responses + identity headers</text>
+          <text x="247" y="330">generate</text>
+          <text x="247" y="345" fill="var(--ink-3)">→ custody row, token-free</text>
+          <text x="247" y="360" fill="var(--ink-3)">→ x-nemo-gym-model-call-id</text>
+          <text x="336" y="236" transform="rotate(90 336 236)" fill="var(--ink-3)">tool call → revision hdr</text>
+          <text x="172" y="504">stage delta to TQ, then ack</text>
+          <text x="172" y="519" fill="var(--ink-3)">durable before response</text>
+          <text x="192" y="128" fill="var(--ink-3)"></text>
+          <text x="245" y="200" fill="var(--ink-3)">boundary committed after each turn</text>
+
+          <!-- PREPARE -->
+          <g stroke="currentColor" stroke-width="1.4" fill="none">
+            <line x1="405" y1="112" x2="405" y2="168" marker-end="url(#arr)"/>
+            <line x1="490" y1="112" x2="490" y2="360" marker-end="url(#arr)"/>
+            <line x1="580" y1="112" x2="580" y2="264" marker-end="url(#arr)"/>
+          </g>
+          <g font-family="Archivo, Helvetica, Arial, sans-serif" font-weight="700" font-size="11">
+            <circle cx="405" cy="100" r="9" fill="var(--accent)"/>
+            <text x="405" y="104" text-anchor="middle" fill="#fff">1</text>
+            <circle cx="490" cy="100" r="9" fill="var(--accent)"/>
+            <text x="490" y="104" text-anchor="middle" fill="#fff">2</text>
+            <circle cx="580" cy="100" r="9" fill="var(--accent)"/>
+            <text x="580" y="104" text-anchor="middle" fill="#fff">3</text>
+          </g>
+          <text x="412" y="140">agent-checkpoint/prepare</text>
+          <text x="412" y="155" fill="var(--ink-3)">park at next boundary</text>
+          <text x="412" y="200" fill="var(--ink-3)">stragglers: retire</text>
+          <text x="497" y="330">resources-checkpoint/prepare</text>
+          <text x="497" y="345" fill="var(--ink-3)">lock + export each session</text>
+          <text x="587" y="236">model-admission/pause</text>
+          <text x="587" y="251" fill="var(--ink-3)">status until paused</text>
+          <text x="497" y="504" fill="var(--ink-3)">workers keep serving accepted calls</text>
+          <text x="587" y="266" fill="var(--ink-3)">abort_inflight → tombstone</text>
+
+          <!-- SAVE -->
+          <g stroke="currentColor" stroke-width="1.4" fill="none">
+            <line x1="660" y1="112" x2="660" y2="168" marker-end="url(#arr)"/>
+            <line x1="710" y1="112" x2="710" y2="360" marker-end="url(#arr)"/>
+            <line x1="760" y1="112" x2="760" y2="264" marker-end="url(#arr)"/>
+            <line x1="812" y1="112" x2="812" y2="456" marker-end="url(#arr)" stroke-dasharray="4 3"/>
+          </g>
+          <text x="666" y="140">agent commit(dir)</text>
+          <text x="716" y="330">resources commit(dir)</text>
+          <text x="766" y="236">model commit(dir)</text>
+          <text x="652" y="72" fill="var(--ink-3)">payloads first, manifest last;</text>
+          <text x="652" y="86" fill="var(--ink-3)">training_info published last</text>
+          <text x="700" y="504">TQ snapshot (RL side)</text>
+          <text x="700" y="519" fill="var(--ink-3)">after finalizers idle</text>
+
+          <!-- RESTORE + RESUME -->
+          <g stroke="currentColor" stroke-width="1.4" fill="none">
+            <line x1="858" y1="112" x2="858" y2="264" marker-end="url(#arr)"/>
+            <line x1="905" y1="112" x2="905" y2="360" marker-end="url(#arr)"/>
+            <line x1="952" y1="112" x2="952" y2="168" marker-end="url(#arr)"/>
+          </g>
+          <g stroke="var(--accent)" stroke-width="1.6" fill="none">
+            <line x1="1005" y1="112" x2="1005" y2="168" marker-end="url(#arr-acc)"/>
+          </g>
+          <text x="864" y="236">model restore (fresh dir)</text>
+          <text x="864" y="251" fill="var(--ink-3)">tombstone seen attempts</text>
+          <text x="911" y="330">resources restore</text>
+          <text x="911" y="345" fill="var(--ink-3)">sessions under N+1</text>
+          <text x="958" y="140">agent restore</text>
+          <text x="958" y="155" fill="var(--ink-3)">continuations N+1</text>
+          <text x="852" y="72" fill="var(--ink-3)">resume: resources → model → agent</text>
+          <text x="852" y="86" fill="var(--ink-3)">then dispatch continuations</text>
+          <text x="1011" y="140" fill="var(--accent-ink)">POST /run</text>
+          <text x="1011" y="155" fill="var(--accent-ink)">attempt N+1</text>
+          <text x="852" y="504" fill="var(--ink-3)">TQ restore, then custody ↔ staging</text>
+          <text x="852" y="519" fill="var(--ink-3)">reconciliation (RL side, absent)</text>
+        </g>
+      </svg>
+      </div>
+      <figcaption>One checkpoint across the five participants. Solid arrows are routes the stack implements; the dashed arrow and the bottom-right note are NeMo RL responsibilities the stack does not cover. The accent arrow is the continuation dispatch that only works if every earlier step used attempt N+1 consistently.</figcaption>
+    </figure>
+
+    <div class="phase" id="runtime">
+      <h3>Runtime — every participant records what it already owns</h3>
+      <p class="who">/run · /v1/responses · tool routes · /verify</p>
+      <p>The actor posts <code>/run</code> with task index, rollout index and attempt index. The agent's <code>/run</code> wrapper establishes the execution identity from the body, registers the execution with the agent participant (one active run per attempt, closed admission or a tombstone gives HTTP 409), and installs the rollout context so every downstream call carries the two identity headers.</p>
+      <p>Each policy call reaches the model server through the admission middleware, which is outermost. It reads the identity from the headers, or from the <code>/ng-rollout/&lt;key&gt;/</code> path when a client we do not control sent no headers, refuses tombstoned attempts, and counts the request in flight until the ASGI call returns. Inside, the capture middleware mints a model-call id, resolves the request's parent by fingerprinting the conversation against this capture key's ledger rows, hands the worker a token-in admission with the parent's staging chain, and after the worker's acknowledgement appends a token-free custody row. The model-call id is echoed on the response.</p>
+      <p>Each tool call reaches the resources server through the session middleware, which serializes mutations per attempt, refuses tombstoned attempts, and stamps a revision header on every successful response. The agent keeps the last revision it saw.</p>
+      <p>After every turn that made tool calls (SimpleAgent) or every nonterminal step (GymnasiumAgent), the agent commits an <code>AgentBoundaryRecord</code>: the output items so far, usage, the last model-call id, the resources revision, and agent-specific state including plain cookie values. When no checkpoint is in progress the commit returns immediately.</p>
+      <div class="divergence"><b>Divergence from the doc.</b> The doc's runtime phase records nothing per rollout on the filesystem; the stack matches that. The doc also expects the agent to check a park flag before every operation; the stack parks only inside <code>commit_boundary</code>, so a run parks after its current turn completes, never before a model call.</div>
+    </div>
+
+    <div class="phase" id="prepare">
+      <h3>Prepare — stop new work and reach a recoverable boundary</h3>
+      <p class="who">agent-checkpoint/prepare · resources-checkpoint/prepare · model-admission/pause, status, abort_inflight</p>
+      <p><b>Agents first.</b> <code>prepare</code> closes <code>/run</code> admission, moves every running execution to park-requested, and waits until every execution is parked or finished, or the deadline passes. A parked execution is blocked inside <code>commit_boundary</code> with its HTTP request still open. At the deadline the route answers HTTP 409 <code>agent_prepare_incomplete</code> with a count, leaves admission closed, and the controller retires the stragglers by attempt and calls prepare again for the same checkpoint id.</p>
+      <p><b>Resources second.</b> <code>prepare</code> closes mutation admission, then takes every registered session's lock in turn and exports it through the server's <code>export_checkpoint_state</code> hook, each with the remaining deadline. A request waiting behind a lock is re-checked after acquiring it and refused. A failure leaves admission closed.</p>
+      <p><b>Policy model last.</b> <code>pause</code> closes admission and returns immediately with the drain state; <code>status</code> long-polls until nothing is in flight and marks the fence prepared. <code>abort_inflight</code> tombstones one attempt and cancels its in-flight requests; the request stays counted until its task exits and the capture middleware writes a failure row for the uncommitted call.</p>
+      <div class="divergence"><b>Divergence from the doc.</b> The doc orders prepare as model drain first with agents parking on <code>409 checkpoint_parked</code>. In the stack, neither whitebox agent treats that code as a park signal, so the model must be paused only after every agent is parked. The doc also specifies <code>status</code> long-poll routes for agents and resources; the stack has none, so the controller's only view of a stuck prepare is the failure count.</div>
+    </div>
+
+    <div class="phase" id="save">
+      <h3>Save — commit each participant, then publish</h3>
+      <p class="who">agent-checkpoint/commit · resources-checkpoint/commit · model-checkpoint/commit</p>
+      <p>Each commit takes the controller's checkpoint directory. The agent participant writes one JSON file per parked execution under <code>agent/</code>; the resources participant writes one JSON file per exported session under <code>resources/&lt;server_name&gt;/</code>; the model participant copies one ledger file per non-tombstoned capture key under <code>model-ledger/</code> and records every tombstone plus every attempt the server ever admitted as <code>source_attempts</code>. Every writer fsyncs payloads, then writes its manifest through a temporary name and rename, then fsyncs the directory. A repeated commit for the same checkpoint id validates the existing manifest and returns the original result, which covers a lost acknowledgement.</p>
+      <p>The model commit refuses unless admission is paused with zero in flight. The agent commit refuses while any execution is between boundaries. The TransferQueue snapshot and the final publication of <code>training_info.json</code> remain on the RL side.</p>
+      <div class="divergence"><b>Divergence from the doc.</b> The doc requires streaming frozen state into compressed shards with a member index so the shared filesystem never receives one file per rollout. The stack writes one file per parked run, one per session, and one per capture key, each with its own fsync.</div>
+    </div>
+
+    <div class="phase" id="restore">
+      <h3>Restore and resume — fresh processes, paused, then opened in order</h3>
+      <p class="who">model-checkpoint/restore · resources-checkpoint/restore · agent-checkpoint/restore · */resume</p>
+      <p>The model restore closes admission first, refuses a capture directory that already holds ledger files, verifies every file's digest before copying any, and installs a tombstone for every attempt in the manifest's tombstone and source-attempt lists. The resources restore loads and verifies the whole snapshot set, calls <code>restore_checkpoint_states</code> once with every snapshot re-labelled attempt N+1, and only then tombstones the source attempts. The agent restore installs each boundary as the continuation for attempt N+1 and tombstones N. All three leave their fence in <code>restored_paused</code>.</p>
+      <p>Resume is explicit per participant and retires the checkpoint id on that server. Because a released parked run immediately calls the model and resources servers, the order is resources, then model, then agents. A continuation is dispatched as a normal <code>/run</code> whose attempt index is exactly the source attempt plus one; the agent finds the restored boundary by that pair, skips seeding or reset, and continues from the restored conversation.</p>
+      <div class="divergence"><b>Divergence from the doc.</b> The doc verifies each selected continuation against the restored TransferQueue rows before dispatch and downgrades a rollout with a missing row to a fresh dispatch. The stack has no such reconciliation, and, as the next section shows, the continuation would not chain to those rows even if they were present.</div>
+    </div>
+
+    <h2 id="cases">Edge cases to guard against</h2>
+    <p>Each entry names the failing sequence, the consequence, whether the stack guards it today, and the guard that would close it. Severity reflects the effect on training data or on the checkpoint completing, not on code size.</p>
+
+    <h3 id="c-identity">Identity and fencing</h3>
+
+    <div class="case">
+      <h4><span class="id">E1</span> Rollout ids reused after a restart are fenced forever <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><p>The model restore installs a tombstone for every attempt the old process had ever admitted (<code>ledger.py</code> writes <code>source_attempts</code> from <code>AdmissionLimiter.seen_attempts()</code>; restore calls <code>install_tombstone</code> for each). After the restart the dispatcher assigns a new task the same <code>{task}-{rollout}</code> indices a pre-checkpoint rollout used, at attempt 0.</p></dd>
+        <dt>Effect</dt><dd>Every policy call of the new rollout is refused with HTTP 409 <code>stale_attempt</code>. The rollout fails without ever generating.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> The identity docstring warns that reused indices repeat a capture key, but nothing enforces uniqueness across the restart boundary.</dd>
+        <dt>Guard</dt><dd>NeMo RL must pass an explicit <code>_ng_rollout_id</code> that is unique for the whole job (a step or epoch prefix), and Gym should reject a dispatch whose attempt 0 collides with a restored source attempt with a distinct error code rather than the stale-attempt code.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E2</span> Explicit ids that end in <code>-aN</code> split wrongly for header-less callers <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>A blackbox harness reaches the model server through its base URL only, so identity comes from the path. An explicit logical id such as <code>run-a1</code> at attempt 0 produces the capture key <code>run-a1</code>; the path splitter reads it as rollout <code>run</code>, attempt 1, while the agent's header-carrying calls say <code>run-a1</code>, attempt 0.</dd>
+        <dt>Effect</dt><dd>The tombstone written for the agent's identity never matches the harness's calls, so a sacrificed blackbox attempt is not fenced at the model server.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> Only index-derived ids are safe.</dd>
+        <dt>Guard</dt><dd>Reject explicit rollout ids matching <code>.*-a\d+$</code> at dispatch, or make the attempt suffix unambiguous (for example <code>~a1</code>, a character the id grammar forbids).</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E3</span> Calls that carry no identity are admitted but can never be sacrificed <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>A blackbox harness whose base URL carries no capture prefix (token capture off) sends neither headers nor a keyed path. The model server admits the call with an empty identity; <code>abort_inflight</code> matches tickets by identity only. On the agent side, a <code>/run</code> body without task and rollout indices bypasses the participant entirely: the run is never registered, cannot be parked, and prepare reports success over it.</dd>
+        <dt>Effect</dt><dd>One long identity-less generation holds the model drain to the deadline with nothing the controller can target; untracked runs keep issuing calls through a checkpoint the controller believes is quiescent.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div></dd>
+        <dt>Guard</dt><dd>When checkpoint control is enabled, refuse gated routes and <code>/run</code> without identity, and add an abort form addressed by ticket id for anything that still slips through.</dd>
+      </dl>
+    </div>
+
+    <h3 id="c-prepare">Prepare order and the deadline</h3>
+
+    <div class="case">
+      <h4><span class="id">E4</span> The only safe prepare order is agents, then resources, then policy model <span class="chip blocker">blocker</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><p><b>Model paused first.</b> A whitebox run that is mid-turn issues its next policy call, receives HTTP 409 <code>checkpoint_parked</code>, and <code>raise_for_status</code> raises. The <code>/run</code> wrapper records the execution as failed; only parked executions are committed, so the boundary the run committed one turn earlier is discarded and the run's HTTP call returns an error to the actor.</p><p>The prepare then reports zero running executions and succeeds, so the loss is invisible: the report carries no count of executions that failed after park was requested. GymnasiumAgent additionally closes its environment on the way out.</p><p><b>Resources prepared while agents are still finishing a turn.</b> SimpleAgent does not call <code>raise_for_status</code> on tool responses; it reads the HTTP 409 body as the tool output string, appends it to the conversation, and commits a boundary containing that text; the code comment there says resource-server errors are valid model-visible tool outputs. The continuation resumes with a checkpoint error inside its history, and the boundary's recorded revision is stale because a refused call carries no revision header. GymnasiumAgent raises on the refused <code>/step</code> instead, so its run fails and closes the environment. A run on its terminal turn needs <code>/verify</code>, which the resources middleware also treats as a mutation, so it is refused and the finished rollout is lost.</p></dd>
+        <dt>Effect</dt><dd>Model-first loses continuations that had valid boundaries. Resources-first corrupts the boundaries that do get committed and the token rows generated from them afterwards.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> The order is not enforced or stated; PR 2942's body describes parking in isolation.</dd>
+        <dt>Guard</dt><dd>Document the order as a contract of the <code>NemoGym</code> actor; make the whitebox agents treat <code>checkpoint_parked</code> and <code>resources_admission_closed</code> as park-now signals that commit the boundary reached so far instead of failing; and make tool-call responses with HTTP 409 checkpoint codes never enter the conversation.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E5</span> The controller cannot see which executions block a prepare <span class="chip blocker">blocker</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>Agent prepare times out and answers HTTP 409 with a count of running executions. <code>AgentCheckpointParticipant.status()</code> lists each execution's rollout, attempt, state and boundary index, but no route exposes it. The resources participant likewise has an unexposed <code>status()</code>.</dd>
+        <dt>Effect</dt><dd>To apply <code>deadline_policy: restart_safe_rollouts</code> the actor must retire exactly the executions that are between boundaries. It can only retire everything it dispatched, which also discards parked continuations, or retire nothing and abort the checkpoint.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">missing</span></div> The doc's <code>agent/status</code> long-poll with <code>parked | running | mid_operation</code> is not implemented.</dd>
+        <dt>Guard</dt><dd>Add <code>GET agent-checkpoint/status</code> and <code>GET resources-checkpoint/status</code> (fenced, long-poll optional) returning per-execution state, and include the blocking attempts in the prepare-incomplete error body.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E6</span> Judge and simulator instances default to the policy role <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><code>BaseResponsesAPIModelConfig.instance_role</code> defaults to <code>policy</code>. A judge model configured as a separate instance advertises <code>instance_role: policy</code> in its capabilities and installs the admission middleware. The actor pauses every policy instance.</dd>
+        <dt>Effect</dt><dd>A verifier's judge call during the drain is parked. The judge fail-safe turns that refusal into a completed verification with reward 0.0 and a failure class, so every rollout that reaches its terminal turn during the pause is scored zero without an error, and because that response is a success the session is retired, leaving nothing to re-verify. A verify that is still waiting on the judge holds its session lock, and the resources prepare waits on that lock until its deadline.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">config footgun</span></div> The role is a per-instance config field with the unsafe default.</dd>
+        <dt>Guard</dt><dd>Default to <code>auxiliary</code> and let the training config mark the one instance NeMo RL generates through as <code>policy</code>, or validate at startup that exactly one policy instance exists per training run.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E7</span> Blackbox agents advertise boundary support they cannot deliver <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>Every agent server inherits the same <code>/run</code> wrapper and the same capability declaration (<code>checkpoint_mode: export_restore</code> whenever a bearer is configured). A Claude Code or OpenCode run registers an execution but never commits a boundary.</dd>
+        <dt>Effect</dt><dd>Agent prepare on a blackbox agent always waits to the deadline and fails. The actor cannot tell from capabilities that these executions should be retired immediately as restart-only.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div></dd>
+        <dt>Guard</dt><dd>Make <code>checkpoint_mode</code> a per-agent-class declaration (blackbox agents report <code>stateless</code>), and have prepare on a stateless agent return immediately with its executions listed for retirement.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E8</span> Abandoning a checkpoint must reopen every participant explicitly <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>Agent or resources prepare fails at the deadline; both leave admission closed while the fence returns to idle. The controller decides to abort the checkpoint instead of retrying.</dd>
+        <dt>Effect</dt><dd>Without a resume call the server refuses all new work indefinitely. The single-worker model pause cannot fail, and the coordinator pause reopens itself on failure, so the asymmetry is easy to miss.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip ok">guarded</span></div> Both resume routes accept the idle phase, so the abort path exists; it is just not automatic.</dd>
+        <dt>Guard</dt><dd>The actor's <code>abort_checkpoint</code> must call resume on every participant it prepared, including the ones whose prepare failed.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E9</span> Retired executions leave orphan sessions in the checkpoint <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The controller retires an execution that missed the agent deadline. The resources participant still exports that attempt's session at prepare, and restore installs it under attempt N+1, but no continuation will ever dispatch that attempt.</dd>
+        <dt>Effect</dt><dd><p>Memory and checkpoint bytes accumulate across checkpoints for sessions nobody can reach. Retire itself touches only the agent participant: the model needs its own <code>abort_inflight</code> for the same attempt or the attempt's ledger rows are committed as trainable, and the resources participant has no per-attempt retire at all.</p><p>The fresh re-dispatch of a sacrificed rollout must also use attempt N+1, because attempt N is refused everywhere after restore. That fresh run then overwrites the adapter's mapping for N+1, the restored session leaks, and its first mutation reports the restored revision plus one for state the run never saw.</p></dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> The doc's <code>resources/retire {rollout_id, attempt}</code> route is not implemented.</dd>
+        <dt>Guard</dt><dd>Add the resources retire route; define sacrifice as agent retire, then model abort, then resources retire for the same attempt, before any commit; and have resources prepare export only sessions whose attempt has a committed agent boundary.</dd>
+      </dl>
+    </div>
+
+    <h3 id="c-tokens">The token chain across the attempt boundary</h3>
+
+    <div class="case">
+      <h4><span class="id">E10</span> A restored continuation re-tokenizes its whole conversation <span class="chip blocker">blocker</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><p>Attempt 0 of rollout <code>4-2</code> made three policy calls; their custody rows live in <code>4-2.lineage.jsonl</code> and their token deltas in TransferQueue. The checkpoint commits that ledger and the agent boundary whose <code>last_committed_model_call_id</code> is the third call. After the restart the continuation runs as attempt 1 with capture key <code>4-2-a1</code>. Its first policy call sends the full conversation. <code>resolve_parent</code> asks the lineage store for the parent under <code>context.rollout_id</code>, which is <code>4-2-a1</code>; that key has no rows, so the external-staging admission falls to the text root branch and the worker re-tokenizes the entire prompt.</p></dd>
+        <dt>Effect</dt><dd>The three pre-checkpoint generations enter the continuation's staged row as prompt carry with mask 0. The terminal chain RL linearizes contains no policy-generated tokens from before the checkpoint, and the attempt-0 chain has no terminal of its own. The rollout trains on a fraction of what the policy produced, silently. There is also no token-in link RL could use to stitch the two chains.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">missing</span></div> <code>resolve_parent</code> and <code>FileLineageStore._resolve_row</code> are scoped to one capture key; no request header lets the agent hand over the parent call id it holds, and nothing in the stack reads <code>last_committed_model_call_id</code> except the tests. The model restore also tombstones every source attempt, so the old key could not be reused legitimately even by hand.</dd>
+        <dt>Guard</dt><dd>Two workable designs. Either the model server resolves parents across attempts of one logical rollout (search the restored source-attempt ledgers named in the manifest for the fingerprint) and admits a token-in child whose <code>staging_chain</code> spans both attempts; or the agent sends <code>x-nemo-gym-parent-call-id</code> plus the source capture key on the first post-restore call and the model server verifies the fingerprint against that row before admitting. Either way the reconciliation step must confirm the parent's staged rows exist before the continuation is made runnable.</dd>
+      </dl>
+    </div>
+
+    <figure>
+      <svg viewBox="0 0 780 172" role="img" aria-label="Two capture-key ledgers side by side: attempt 0's ledger holds a chain of three calls linked parent to child; attempt 1's ledger holds a single text-mode root; a dashed, crossed-out link between the third call and the root marks the cross-attempt parent lookup that does not exist.">
+        <defs>
+          <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+        <g fill="currentColor" font-family="Source Sans 3, Helvetica, Arial, sans-serif" font-size="12">
+          <rect x="20" y="40" width="380" height="120" fill="var(--lane)" stroke="var(--rule)"/>
+          <text x="32" y="60" font-family="JetBrains Mono, monospace" font-size="12">4-2.lineage.jsonl</text>
+          <text x="32" y="76" fill="var(--ink-3)">attempt 0 · restored from the checkpoint</text>
+          <g stroke="currentColor" fill="var(--surface)" stroke-width="1.2">
+            <rect x="40" y="96" width="88" height="40" rx="3"/>
+            <rect x="166" y="96" width="88" height="40" rx="3"/>
+            <rect x="292" y="96" width="88" height="40" rx="3"/>
+          </g>
+          <g text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11">
+            <text x="84" y="113">c1 · text</text><text x="84" y="128">prev 0</text>
+            <text x="210" y="113">c2 · token_in</text><text x="210" y="128">parent c1</text>
+            <text x="336" y="113">c3 · token_in</text><text x="336" y="128">parent c2</text>
+          </g>
+          <g stroke="currentColor" stroke-width="1.4" fill="none">
+            <line x1="128" y1="116" x2="164" y2="116" marker-end="url(#arr2)"/>
+            <line x1="254" y1="116" x2="290" y2="116" marker-end="url(#arr2)"/>
+          </g>
+
+          <rect x="480" y="40" width="280" height="120" fill="var(--lane)" stroke="var(--rule)"/>
+          <text x="492" y="60" font-family="JetBrains Mono, monospace" font-size="12">4-2-a1.lineage.jsonl</text>
+          <text x="492" y="76" fill="var(--ink-3)">attempt 1 · the continuation</text>
+          <rect x="520" y="96" width="120" height="40" rx="3" fill="var(--surface)" stroke="var(--blocker)" stroke-width="1.4"/>
+          <g text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11">
+            <text x="580" y="113">c4 · text root</text><text x="580" y="128">prev 0 again</text>
+          </g>
+
+          <g stroke="var(--blocker)" stroke-width="1.4" fill="none" stroke-dasharray="5 4">
+            <line x1="380" y1="116" x2="518" y2="116" marker-end="url(#arr2)"/>
+          </g>
+          <line x1="442" y1="104" x2="456" y2="128" stroke="var(--blocker)" stroke-width="2"/>
+          <line x1="456" y1="104" x2="442" y2="128" stroke="var(--blocker)" stroke-width="2"/>
+          <text x="449" y="150" text-anchor="middle" fill="var(--blocker)" font-size="11">no cross-attempt lookup</text>
+        </g>
+      </svg>
+      <figcaption>Where the token chain breaks at a restart. The boundary record knows c3 as <code>last_committed_model_call_id</code>, but the model server resolves parents only within one capture key, so c4 re-tokenizes the whole prompt and the outputs of c1–c3 become mask-0 prompt carry in the row RL trains on. The data to stitch the chain exists on both sides; the lookup that would use it does not.</figcaption>
+    </figure>
+
+    <div class="case">
+      <h4><span class="id">E11</span> The checkpoint taken after a restore drops every restored ledger <span class="chip blocker">blocker</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>Restore installs a tombstone for every source attempt so late calls are fenced. Commit excludes every tombstoned capture key from the ledger copy, because the same set serves as the list of attempts force-closed at the deadline. The next checkpoint after a restore therefore skips every ledger file the restore installed: a probe that commits, restores on a fresh server, resumes, pauses and commits again gets zero rollouts and one exclusion, and the second checkpoint holds only a manifest.</dd>
+        <dt>Effect</dt><dd>A rollout whose life spans two checkpoints loses its pre-checkpoint custody after the second one. A later restore has no custody rows for the staged rows attempt 0 produced, and the continuation chain in E10 could not be stitched even after the lookup exists.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> Confirmed by running the sequence.</dd>
+        <dt>Guard</dt><dd>Keep two sets: attempts fenced for admission, and attempts force-closed at this checkpoint's deadline. Exclude only the second from the copy; restored source attempts are fenced but committed.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E12</span> Custody and staged rows are never reconciled after restore <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>TransferQueue's memory-resident rows survive only through its own checkpoint cut. If the cut and the Gym commit disagree (a torn cut, a retried save, an operator restoring one from an older checkpoint), custody rows reference staging keys that no longer exist.</dd>
+        <dt>Effect</dt><dd>Nothing on the Gym side checks. A continuation whose parent chain is missing fails only at its next policy call, when the worker cannot fetch the prefix, and a completed rollout with missing rows fails only when RL linearizes it.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">RL-side, absent</span></div> The manifest route (<code>/training-token-capture/control/rollouts/{key}/manifest</code>) provides the staging keys and chain hashes to reconcile against; a continued rollout's chain sits under two capture keys.</dd>
+        <dt>Guard</dt><dd>Implement the reconciliation in the actor before dispatch: for every restored capture key, every manifest row's staging key must exist with a matching digest, or that logical rollout downgrades to a fresh dispatch.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E13</span> Aborted calls leave orphan staged rows and failure rows <span class="chip ok">guarded</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><code>abort_inflight</code> cancels the model server's task while the worker has already staged the delta durably. The capture middleware's cleanup writes a failure row for the uncommitted call; the staged row stays in TransferQueue.</dd>
+        <dt>Effect</dt><dd>The attempt is tombstoned, commit excludes its ledger by capture key, and the staged row is an orphan that normal cleanup removes. Failure rows carry no fingerprint so they can never be chosen as a parent.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip ok">guarded</span></div> Consistent with the design's masked-orphan rule; the tombstone keys and ledger file names agree for attempt 0 and attempt N through <code>capture_key_for</code>. Two loose ends: a cancellation that lands while the custody row is being written leaves both a custody row and a failure row for the same call, and the cancelled client receives an opaque HTTP 500 rather than a 409, so an agent records it as a failure instead of a park.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E14</span> Model restore needs an empty capture directory <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>A model server restarts on the same node with the same capture directory. Restore finds ledger files not named in the manifest and refuses.</dd>
+        <dt>Effect</dt><dd>Restore fails until an operator clears or repoints the directory; token JSONL and lock files in the directory are not inspected at all.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip ok">fails closed</span></div> The refusal is correct; the operational requirement is unstated.</dd>
+        <dt>Guard</dt><dd>Accept a directory whose existing files are a subset of the manifest with matching digests, so a same-node restart and a retried restore both succeed; otherwise provision a fresh, checkpoint-id-suffixed capture directory per restart and state it in the deployment docs. Nothing ever deletes a ledger file today.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E15</span> The model-call id is echoed only on capture-prefixed calls <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The capture middleware appends <code>x-nemo-gym-model-call-id</code> only when the request path carried a capture key, and never on an exception-path HTTP 500. An agent that identifies calls by headers alone, with capture disabled, reads no header.</dd>
+        <dt>Effect</dt><dd>Every boundary records <code>last_committed_model_call_id</code> as null, which removes the only join key the reconciliation in E12 could use.</dd>
+        <dt>Guard</dt><dd>Mint and echo the id whenever admission resolved an identity, not only when a capture prefix is present.</dd>
+      </dl>
+    </div>
+
+    <h3 id="c-agent">Agent continuation</h3>
+
+    <div class="case">
+      <h4><span class="id">E16</span> The continuation's attempt index must be exactly source plus one <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The agent restore stores the boundary under <code>(rollout_id, attempt + 1)</code> and the resources restore installs sessions under the same pair. The dispatcher, which also increments the attempt on ordinary retries, sends the continuation with attempt N+2.</dd>
+        <dt>Effect</dt><dd><code>checkpoint_continuation</code> finds nothing and the run silently starts fresh: it seeds a new session, ignores the restored one, and generates from the original input under an identity that the resources server has no state for.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> A miss is indistinguishable from a fresh dispatch.</dd>
+        <dt>Guard</dt><dd>Have the actor read the restore result (source attempts) and dispatch continuations with exactly N+1; have the agent refuse a fresh dispatch for a logical rollout that holds an unconsumed continuation.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E17</span> A parked run holds its HTTP connections for the whole checkpoint <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>A parked SimpleAgent run has two open requests: the actor's <code>/run</code> and the agent's self-call to <code>/v1/responses</code>. Gym's own aiohttp client is built with <code>ClientTimeout()</code>, so it never times out, and internal requests retry forever on transport errors. The actor's client is RL's choice.</dd>
+        <dt>Effect</dt><dd>If the actor's client times out and retries <code>/run</code> while the original is still running, the retry is refused with <code>duplicate_execution</code> and the original completes onto a socket nobody reads; the result is lost. If the retry arrives after the original completed, <code>begin</code> accepts a second execution under the same attempt: it seeds a new session and appends new ledger rows under the same capture key with nothing to deduplicate them. If a connection drops during a same-process resume, the self-call is retried and runs the episode a second time from the seeded session.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> There is no result-handoff acknowledgement or registry on the Gym side, as the doc assumes on the RL side.</dd>
+        <dt>Guard</dt><dd>The actor must issue <code>/run</code> with no total timeout and treat <code>duplicate_execution</code> as "still running". On the Gym side, cache each attempt's terminal result and return it to a duplicate dispatch, which is the smallest form of the doc's transferred-to-RL handoff.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E18</span> Completed executions are never released from memory <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><code>AgentCheckpointParticipant.finish</code> marks an execution completed but leaves it in <code>_executions</code> with its last boundary record, which holds the full conversation. <code>_restored</code> keeps every installed continuation after it is consumed.</dd>
+        <dt>Effect</dt><dd>Agent-server memory grows with every rollout attempt ever run in the process, multiplied by conversation size; a 5,000-run check holds all 5,000 records with their conversations, and <code>status()</code> rescans every entry on each prepare wake-up. At tens of thousands of rollouts per step this is gigabytes per day.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div></dd>
+        <dt>Guard</dt><dd>Drop completed and retired executions when the actor acknowledges their result, or at least drop their boundary payloads on finish.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E19</span> Retire cancels the wrong task, and a retired loop can corrupt its successor <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><p>The <code>/run</code> wrapper registers the <code>/run</code> task with the execution, but SimpleAgent's loop runs inside its own self-call to <code>/v1/responses</code>, and that inner handler is where <code>commit_boundary</code> parks. <code>retire</code> sets the resume event and cancels the outer task only. The inner loop wakes in the retired state and keeps generating; a repro shows it committing two further boundaries after retirement. The model server fences the attempt only if the controller also called <code>abort_inflight</code> for it.</p><p><code>begin</code> then accepts a new execution under the retired key and replaces the dictionary entry. The stale loop's next <code>commit_boundary</code> lands on the new execution's record, and the new run's own first boundary is refused because its index does not increase.</p></dd>
+        <dt>Effect</dt><dd>A sacrificed rollout keeps consuming policy generations, and a later legitimate run under the same attempt inherits a boundary it never produced.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div></dd>
+        <dt>Guard</dt><dd>Register the task that actually calls <code>commit_boundary</code> (or cancel through a per-execution scope both handlers share); refuse <code>begin</code> while a retired execution's loop is still live, for example with a generation counter on the execution; and pair every agent retire with a model <code>abort_inflight</code> for the same attempt.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E20</span> Park requests outlive an abandoned checkpoint <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><p>Prepare marks every running execution park-requested and closes admission. It times out; the fence rolls back to idle, but the participant stays closed and the executions stay park-requested. The controller abandons the checkpoint and calls resume. Resume reopens admission and releases executions that are already parked, but leaves park-requested ones as they are; at their next boundary they park and wait for a resume that never comes.</p><p>Resume also marks a parked execution whose task was cancelled as retired without setting its event, so a SimpleAgent inner handler in that state waits forever. After a same-process checkpoint that execution's boundary is in the checkpoint but there is no in-process continuation, so a re-dispatch at N+1 starts from scratch while the resources server still holds attempt N.</p></dd>
+        <dt>Effect</dt><dd>After any aborted or retried checkpoint, runs that were mid-turn at the time hang at their next boundary with no active checkpoint, and their <code>/run</code> calls never return.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> A repro shows an execution parked with the participant reporting <code>accepting</code>.</dd>
+        <dt>Guard</dt><dd>Resume resets park-requested executions to running and releases or cancels task-less parked ones; a failed prepare undoes its own marks before returning the error.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E21</span> A boundary committed at <code>max_steps</code> breaks the continuation <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><p>GymnasiumAgent commits a boundary after every nonterminal step, including the last one allowed by <code>max_steps</code>. After a restart the continuation's loop range is empty, no model call is made, and the code then reads <code>last_model_response.output</code> on a value that is still <code>None</code>.</p><p>SimpleAgent commits its boundary before the <code>max_steps</code> check, so a run parked at the last step continues after restore with one more model call than the configuration allows.</p></dd>
+        <dt>Effect</dt><dd>The Gymnasium continuation fails with an attribute error and the rollout is lost after the restart; the SimpleAgent continuation exceeds its step budget.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> The existing Gymnasium continuation test passes only because its environment terminates on the first continued step.</dd>
+        <dt>Guard</dt><dd>Never commit a boundary when the step equals <code>max_steps</code>; a continuation whose boundary index already meets the budget returns the truncated response built from the restored items.</dd>
+      </dl>
+    </div>
+
+    <h3 id="c-resources">Resources state</h3>
+
+    <div class="case">
+      <h4><span class="id">E22</span> Header-less callers are refused on every path, including liveness <span class="chip blocker">blocker</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><code>ResourcesSessionMiddleware</code> is installed outermost on checkpoint-enabled resources servers and treats every path outside <code>/ng-control/</code>, <code>/aggregate_metrics</code> and <code>/reverify_mode</code> as a mutation that requires both identity headers. Callers without them: the liveness probe <code>GET /</code> that <code>run_webserver</code> installs on every server, MCP tool calls from sandboxed harnesses (the Claude Code and Codex harnesses send only <code>X-NeMo-Gym-Session-Token</code>), re-verification's direct <code>/verify</code> when observability is off, external <code>/run</code> callers that omit the task and rollout indices, and OpenAPI or docs requests.</dd>
+        <dt>Effect</dt><dd>Every MCP tool call on Gymnasium, Workplace Assistant or the counter example fails with HTTP 409, re-verification cannot run against these servers, and any health probe that checks the status code marks the server down (<code>gym env status</code> itself ignores the code, so it still reports success).</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div></dd>
+        <dt>Guard</dt><dd>Scope the middleware to POST mutation routes; exempt <code>/mcp</code> and resolve its identity from the signed session token by minting the rollout and attempt into it at seed time, then lock and count revisions inside the tool dispatch; derive identity for <code>/verify</code> from the body regardless of observability, or treat a verify on an unknown key as stateless.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E23</span> The capture-path prefix defeats the terminal-session check <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The session middleware runs outside <code>RolloutContextMiddleware</code>, so it sees the raw path and compares it to <code>/verify</code> literally. With observability on, every resources call from an agent arrives as <code>/ng-rollout/&lt;key&gt;/verify</code>. The verify succeeds, but the middleware never retires the session.</dd>
+        <dt>Effect</dt><dd>Every completed rollout's session stays registered, is exported at every prepare, and is reinstalled under attempt N+1 at every restore, forever; a run confirmed the counter example never frees its sessions. Workplace Assistant and Gymnasium survive only because their adapters mark the terminal themselves. A prefixed request that carries no headers is also refused before the context middleware could read the identity from the path.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div></dd>
+        <dt>Guard</dt><dd>Strip the prefix before classifying the path, or install the session middleware inside the context middleware and read identity from the context variables.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E24</span> Agent revisions and resources revisions are never compared <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><p>The agent boundary records the last revision header it saw; the resources snapshot records <code>state_revision</code> at export. A tool call that mutated state but returned an error (no revision bump), or a turn that finished after the last boundary but before the agent parked, leaves the two numbers apart. <code>record_mutation</code> also bumps the revision on reads and on <code>/seed_session</code>.</p><p>Prepare itself makes the comparison unreliable: it materializes the list of sessions and their revisions before taking each lock. A mutation still in flight at that moment completes, bumps the revision to 2, and returns the header 2 to the agent; the export runs afterwards on the mutated state but the snapshot is stamped 1.</p></dd>
+        <dt>Effect</dt><dd>A continuation can resume against environment state one or more mutations ahead of the conversation it remembers, and nothing flags it. A controller that does compare would see a false mismatch on every session that had a mutation in flight at prepare.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">RL-side, absent</span></div> PR 2943 defers the comparison to the controller.</dd>
+        <dt>Guard</dt><dd>Read the revision after the lock is held, not from the pre-materialized list; bump it only on routes that mutate; and have the actor compare the boundary's revision per server with the snapshot's before dispatching a continuation, downgrading any mismatch to a fresh dispatch.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E25</span> Any identity-carrying request that fails before a session exists poisons every later prepare <span class="chip blocker">blocker</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The middleware registers a revision for the identity before the handler runs; the adapters map the identity to a session only when seeding or reset succeeds; and export indexes that mapping without a guard. A <code>/seed_session</code> with a bad body (HTTP 422), a tool call before seeding (HTTP 200 on a fresh cookie session), or a Blackjack <code>/step</code> before <code>/reset</code> (HTTP 500) each leaves a registered key with no mapping.</dd>
+        <dt>Effect</dt><dd>The next prepare raises <code>KeyError</code> on that key, fails, and leaves admission closed. No route can clear the key, so every later checkpoint on that server fails until the process restarts. A run confirmed all three triggers.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div></dd>
+        <dt>Guard</dt><dd>Register only on the first successful response, and make <code>export_checkpoint_state</code> skip and report keys it cannot map instead of raising.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E26</span> A verify or terminal step in flight at prepare makes the prepare fail <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>Prepare snapshots the session list, then waits for each session's lock. A <code>/verify</code> holding a lock completes, the adapter drops the session and the middleware retires the key; prepare then acquires the lock and exports a session that no longer exists.</dd>
+        <dt>Effect</dt><dd><code>KeyError</code>, prepare fails, admission stays closed. A run confirmed it with one verify in flight.</dd>
+        <dt>Guard</dt><dd>After acquiring each lock, re-read the registry and skip keys retired in the meantime.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E27</span> A fresh process accepts continuation traffic before its restore <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The participant starts accepting; restore is what closes admission. A continuation's tool call for attempt N+1 that reaches the server before the restore succeeds on a cookie-bound session. Restore then maps N+1 to the restored session.</dd>
+        <dt>Effect</dt><dd>The early mutation is orphaned on a session nobody can reach while the model has already seen its tool result; after resume the continuation reads the restored value. A run confirmed the divergence.</dd>
+        <dt>Guard</dt><dd>Refuse an attempt above zero that has no mapping unless a restore has run, or start paused whenever a restore directory is configured, and have the actor dispatch nothing before every restore has returned.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E28</span> Every Gymnasium environment advertises state export that most cannot perform <span class="chip blocker">blocker</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The Gymnasium base enables checkpoint state for every subclass and exports <code>session_state[session_id]</code>. Sokoban, Tetris and TALES keep live environment objects in a different dictionary; the multi-turn example keeps <code>session_turns</code>; OpenAir stores a backend episode id that a fresh process cannot reuse. Only Blackjack keeps JSON-safe state where the base looks.</dd>
+        <dt>Effect</dt><dd>The controller sees <code>export_restore</code>, calls prepare, and the first live session raises, closing admission; for OpenAir the export succeeds and the restored state fails on its next step. A run confirmed the multi-turn example fails at export.</dd>
+        <dt>Guard</dt><dd>Default <code>checkpoint_state_enabled</code> to false in the Gymnasium base and opt in per subclass, or gate it on the subclass overriding the serialization hooks.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E29</span> Serialization changes value types on the way through a checkpoint <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The Gymnasium base round-trips state through JSON, so tuples come back as lists, and NumPy scalars or sets fail at prepare. Workplace Assistant's DataFrames come back with <code>None</code> as <code>NaN</code> and a plain index in place of a range index.</dd>
+        <dt>Effect</dt><dd>Verification cannot diverge (the verifier never reads the frames, and over HTTP both serialize as null), but tool code that branches on <code>is None</code> behaves differently after a restore. Blackjack's random-number state round-trips exactly. The adapter tests skip the JSON hop, so they would not catch a regression.</dd>
+        <dt>Guard</dt><dd>Normalize <code>NaN</code> back to <code>None</code> and reset the index on restore; add the serialize-to-JSON hop to the adapter tests.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E30</span> Non-adapted stateful environments must be treated as restart-only <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>A stateful resources server that has not implemented the export hook advertises <code>checkpoint_mode: stateless</code>. After a restart its sessions are gone while the agent continuation still carries the old cookie.</dd>
+        <dt>Effect</dt><dd>If the actor continues such a rollout anyway, the server silently creates fresh state under the old cookie's session id and the continuation runs against an empty environment.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip ok">declared</span></div> The capability is honest; the actor must honor it by restarting those rollouts from input.</dd>
+      </dl>
+    </div>
+
+    <h3 id="c-control">Control plane and operations</h3>
+
+    <div class="case">
+      <h4><span class="id">E31</span> Agent and model checkpoint directories are shared by every instance <span class="chip blocker">blocker</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The resources participant writes under <code>resources/&lt;server_name&gt;/</code>. The agent participant writes under <code>agent/</code> and the model participant under <code>model-ledger/</code>, with no server name. Both return the existing manifest when one is already present. A training run with two agent servers, or two policy model instances, gives every participant the same checkpoint directory.</dd>
+        <dt>Effect</dt><dd>The second agent server's commit validates the first server's manifest, reports its digest, and never writes its own records; restore on the second server installs the first server's continuations. A probe with two agent servers confirmed it. The same holds for two policy model instances.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> The PR bodies describe one controller-provided directory.</dd>
+        <dt>Guard</dt><dd>Namespace every participant's subdirectory by <code>config.name</code>, as the resources participant already does, and record the name in the manifest so a restore on the wrong instance is refused.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E32</span> A failed model restore parks the server with no way to reopen it <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The model restore closes admission before it validates the checkpoint directory. Against a torn directory the validation raises, the fence returns to idle, and the limiter stays paused. Resume is allowed only from a non-idle phase.</dd>
+        <dt>Effect</dt><dd>Every generation request is parked until the process is restarted; a probe confirms resume answers <code>invalid_phase</code> for any checkpoint id. The coordinator has the mirror image: its resume broadcasts accepting before awaiting acknowledgements, and a missing worker leaves the fence prepared while every worker is already open.</dd>
+        <dt>Guard</dt><dd>Validate first and close admission last, reopen on any failure, and let resume from idle succeed whenever the limiter is closed.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E33</span> Status is refused after commit and restore, and commit needs a status poll first <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The model status route accepts only the preparing and prepared phases, so after commit or restore the controller cannot read tombstones or in-flight counts. The fence reaches prepared only when a pause or status call observes the drained state; commit requires prepared even though its own quiescence check would pass.</dd>
+        <dt>Effect</dt><dd>A controller that calls commit as soon as its own bookkeeping says the drain finished receives <code>invalid_phase</code>. After restore, the installed fences are unobservable until resume.</dd>
+        <dt>Guard</dt><dd>Allow status in every non-idle phase and let commit promote preparing to prepared when it finds the server quiescent.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E34</span> A commit retry after a torn publication ignores new tombstones <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The ledger commit renames its manifest and then fsyncs the directory; if the fsync raises, the fence returns to prepared with no recorded result. The controller aborts a straggler, which is allowed in prepared, and retries the commit. The retry finds the manifest and validates it as-is.</dd>
+        <dt>Effect</dt><dd>The published manifest omits the new tombstone, so restore never fences the aborted attempt.</dd>
+        <dt>Guard</dt><dd>On retry, compare the manifest's tombstones with the limiter's and rewrite the commit when they differ.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E35</span> A multi-worker drain that never reaches zero cannot be aborted or resumed <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The coordinator's <code>pause</code> returns after every worker acknowledges the closed state; the fence stays in <code>preparing</code> until status observes zero in flight. The coordinator's <code>abort_inflight</code> and <code>resume</code> accept only <code>prepared</code> and later phases. One worker holds a stuck generation.</dd>
+        <dt>Effect</dt><dd>The controller can neither tombstone the straggler nor reopen admission; the fence is stuck until the process restarts. The single-worker routes accept <code>preparing</code>, so the two implementations of the same contract diverge.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div> Production startup does not launch the coordinator yet, so the exposure is latent. The protocol also needs hardening before it is wired: a write to a half-closed worker socket raises a broken-pipe error the coordinator does not catch, a worker whose listener hits end-of-file never reconnects (a coordinator restart leaves the pool permanently missing, and a worker left draining parks all traffic), and re-registration by pid keeps dead worker records forever.</dd>
+        <dt>Guard</dt><dd>Align the coordinator's allowed phases with the single-worker routes; catch connection errors and reconnect with backoff; drop disconnected records on re-register; add a contract test that runs the same control script against both implementations.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E36</span> The two status routes have different signatures <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The single-worker <code>model-admission/status</code> requires <code>deadline_ts</code> as a query parameter; the coordinator's does not accept it as required and ignores the deadline for its wait.</dd>
+        <dt>Effect</dt><dd>A controller written against one deployment receives HTTP 422 or an unbounded long-poll against the other.</dd>
+        <dt>Guard</dt><dd>One shared request model for status, as the pause and resume routes already have.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E37</span> Agents and resources servers have no multi-worker story at all <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>The agent and resources participants keep executions, sessions, locks and tombstones in process memory. With <code>num_workers &gt; 1</code>, prepare on one worker parks that worker's runs only, commit exports that worker's sessions only, and a tombstone installed on one worker does not fence the others.</dd>
+        <dt>Effect</dt><dd>A checkpoint through a multi-worker agent or resources server is silently partial. The model server is no better today: its admission and checkpoint routes are installed on every worker regardless of the worker count, so a pause reaches one worker while the others keep appending to the shared ledger files during the copy, producing torn content under valid digests. Capabilities do report <code>multi_process: unmanaged</code>, so the actor can refuse it, and nothing else does.</dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip ok">declared</span></div> Refusal depends on the actor reading capabilities before the first checkpoint.</dd>
+        <dt>Guard</dt><dd>Refuse to install checkpoint routes server-side when <code>num_workers &gt; 1</code> and no coordinator is attached, fail setup in the actor when any participant reports <code>unmanaged</code>, and extend the coordinator pattern to agents and resources before allowing more than one worker.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E38</span> Control routes appear only when the bearer is present in every process <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>Each server installs its checkpoint routes only if <code>NEMO_GYM_CHECKPOINT_CONTROL_TOKEN</code> or the external-staging control variable resolves in its own environment. <code>gym env start</code> copies the launcher's environment into every server process, but servers launched by NeMo RL depend on RL setting the variable.</dd>
+        <dt>Effect</dt><dd>A server without the variable advertises <code>checkpoint_mode: stateless</code> and no admission states, which is honest, but a training run that expected continuation gets restart-only behavior without an error. There are also two bearer sources with a fallback chain, so a host that sets only the capture variable accepts a different token from one that sets the checkpoint variable, and control calls fail with HTTP 401 on some servers. The token cannot come from the run config; servers launched by NeMo RL need it in the Ray runtime environment.</dd>
+        <dt>Guard</dt><dd>Use one variable name for all checkpoint control routes, log the resolved source at startup, and have the actor assert the expected capability per participant and fail loudly on a mismatch.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E39</span> Restore is accepted at any time and adds to live state <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>Each restore route is allowed from the idle phase whenever no checkpoint is active. Issued against a process that is already serving, the agent restore closes admission and installs tombstones without touching in-flight executions; the model restore refuses only when ledger files are present.</dd>
+        <dt>Effect</dt><dd>A misdirected restore silently freezes a healthy server until someone resumes it. On a resources server that prepared the same checkpoint, restore leaves the source attempt registered beside the replacement, so the next prepare exports both and the next restore installs three.</dd>
+        <dt>Guard</dt><dd>Accept restore only while the process has served nothing (a startup flag), and report the refusal with its own error code.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E40</span> Absolute deadlines assume synchronized clocks <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>Every control request carries an epoch-seconds deadline; each server computes the remaining budget from its own clock.</dd>
+        <dt>Effect</dt><dd>A server whose clock runs ahead drains for less time than the controller intended; one that runs behind can outlive the controller's budget. Skew in cluster NTP is usually small, but a badly configured node makes prepare fail every time. The coordinator's abort and resume waits ignore the deadline entirely and use a fixed acknowledgement timeout.</dd>
+        <dt>Guard</dt><dd>Record the server's own clock in every control response so the controller can detect skew, and refuse a deadline that is already in the past by more than a small tolerance with a distinct error.</dd>
+      </dl>
+    </div>
+
+    <h3 id="c-scale">Scale</h3>
+
+    <div class="case">
+      <h4><span class="id">E41</span> One file per rollout on the shared filesystem <span class="chip serious">serious</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd>Commit writes one fsynced JSON per parked execution, one per exported session per resources server, and one copied ledger per capture key, followed by directory fsyncs. Restore reads and copies all of them again.</dd>
+        <dt>Effect</dt><dd><p>Per rollout a commit costs about nineteen metadata operations and four full file reads across the three participants, and a restore about nine more. At tens of thousands of live executions that is millions of operations on Lustre per checkpoint, which is the pattern the doc's requirement on archive shards exists to avoid.</p><p>The model commit is worse than linear in live rollouts: it copies every ledger file in the store root, and nothing ever prunes that root, so each checkpoint re-copies the custody of every rollout the process has served since it started.</p></dd>
+        <dt>Stack today</dt><dd><div class="status"><span class="chip minor">not guarded</span></div></dd>
+        <dt>Guard</dt><dd>Introduce the shared checkpoint writer (compressed shards with a member index) and have all three participants stream through it; the manifest-last and digest discipline carries over unchanged. Commit ledger files incrementally by chaining manifests, and retire ledger files once the framework acknowledges the rollout's receipt.</dd>
+      </dl>
+    </div>
+
+    <div class="case">
+      <h4><span class="id">E42</span> Fence and limiter bookkeeping grows without bound <span class="chip minor">minor</span></h4>
+      <dl class="row">
+        <dt>Sequence</dt><dd><code>AdmissionLimiter._seen_attempts</code> and <code>_tombstones</code>, <code>ResourcesCheckpointParticipant._locks</code>, the coordinator's tombstone list (re-broadcast in full on every state change), and the fence's retired-id map all only grow.</dd>
+        <dt>Effect</dt><dd>Memory grows with rollouts served: a run of 100,000 register-and-retire cycles leaves 100,000 locks and about 25 MB behind, and a restore of the same size adds 100,000 tombstones. The model manifest's <code>source_attempts</code> grows with every rollout the process ever admitted, and the coordinator's broadcasts become proportional to the tombstone count.</dd>
+        <dt>Guard</dt><dd>Retire bookkeeping when the actor acknowledges a rollout's result; carry into a checkpoint only tombstones for attempts that could still have a live caller.</dd>
+      </dl>
+    </div>
+
+    <h2 id="rl">What NeMo RL's actor must guarantee for this stack to be safe</h2>
+    <ol class="contract">
+      <li>Assign rollout ids that are unique for the whole job and never end in <code>-a&lt;digits&gt;</code>; increment the attempt on every retry and dispatch continuations with exactly the source attempt plus one.</li>
+      <li>Read every participant's capabilities at startup; refuse any that reports <code>multi_process: unmanaged</code> or a checkpoint mode weaker than the run expects; set the control bearer in every Gym server's Ray runtime environment.</li>
+      <li>Give every participant instance its own checkpoint directory until the agent and model participants namespace by server name.</li>
+      <li>Prepare in the order agents, resources, policy model, and wait for each to report prepared before starting the next; never pause an auxiliary model instance.</li>
+      <li>On an agent deadline, retire the specific executions between boundaries (which requires the status route), abort the same attempts at the model server, then re-prepare; on any other prepare failure, decide between retry and abort, and on abort call resume on every participant already prepared. Re-dispatch every sacrificed rollout at attempt N+1, never N.</li>
+      <li>Commit only after every participant is prepared; take the TransferQueue cut after the model drain reports zero in flight and finalizers are idle; publish only after every commit returned a manifest digest.</li>
+      <li>Restore into fresh processes with empty capture directories, in the order model, resources, agents; reconcile custody manifests against restored staging rows and boundary revisions against session revisions before selecting any continuation; downgrade any mismatch to a fresh dispatch.</li>
+      <li>Resume in the order resources, model, agents; only then dispatch continuations and fresh work.</li>
+      <li>Issue <code>/run</code> with no total timeout and treat <code>duplicate_execution</code> as "still running"; keep a live-execution registry so a result that outlives its socket is not lost.</li>
+    </ol>
+
+    <h2 id="tests">Test coverage</h2>
+    <p>The stack's tests are thorough within each participant: the atomic close-versus-admit race is run a hundred times, manifest-last ordering and digest validation are exercised for every writer, parked runs survive cancellation, commit retries return the original result, and a real two-worker uvicorn pool is driven through the coordinator.</p>
+    <p>There is no SimpleAgent boundary or continuation test at all, and the Gymnasium continuation test calls <code>run</code> directly, bypassing the <code>/run</code> wrapper, so it never exercises admission, <code>begin</code>, or the resources mapping; a nonterminal continued step in that test would fail with "no active /run".</p>
+    <p>One coordinator test aborts with a transport id (<code>7-1-a2</code> at attempt 2) rather than the logical id, which would fence the wrong ledger file in production; the tests encode a contract the code does not have.</p>
+    <p>No test drives a checkpoint across participants. The sequences that have no coverage are the ones the edge cases above come from: an agent parking while the model is paused; resources prepare during an agent's tool calls; a restart followed by a continuation through the real <code>/run</code> wrapper with the resources mapping; two participants of one kind committing into one directory; a second checkpoint after a restore; any resources adapter round trip through the real app with cookies and the JSON hop; the composition of the session and context middlewares; a verify in flight during prepare; the lineage of a continuation's first policy call; header-less callers on a checkpoint-enabled resources server; and any run past a few hundred executions.</p>
+
+    <h2 id="order">Suggested fix order</h2>
+    <ol class="fixorder">
+      <li><b>Cross-attempt lineage and the tombstone split (E10, E11)</b>, because every continuation that ships without them trains on truncated policy output silently, and the second checkpoint after any restore drops the custody the first one saved. This decides the model-server and agent contract for the first post-restore call.</li>
+      <li><b>Per-instance checkpoint directories (E31)</b>, because any run with two agent servers loses one server's checkpoint today.</li>
+      <li><b>Status routes, park-now handling, and the agent state machine (E4, E5, E19, E20)</b>, because without them the deadline policy cannot be applied, the safe prepare order cannot be verified, and an abandoned checkpoint leaves runs hanging.</li>
+      <li><b>Resources participant robustness (E22, E23, E25, E26, E27, E28)</b>, because today a single failed seed poisons every later checkpoint, MCP traffic is refused, and most Gymnasium environments advertise an export that fails.</li>
+      <li><b>Role default and capability accuracy (E6, E7, E38)</b>, so the actor's capability check means what it says.</li>
+      <li><b>Reconciliation contracts (E12, E16, E24)</b> specified precisely enough for the RL-side implementation, with the manifest route keyed so a continued rollout resolves under both capture keys.</li>
+      <li><b>Bookkeeping release and the shard writer (E18, E41, E42)</b> before any run at the intended scale.</li>
+      <li><b>Restore failure recovery and status phases (E32, E33)</b>, so an operator has a route out of every paused state.</li>
+      <li><b>Coordinator phase alignment and hardening (E35, E36)</b> before multi-worker startup is wired.</li>
+    </ol>
+  </main>
+</div>

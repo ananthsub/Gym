@@ -1,0 +1,432 @@
+<title>Checkpoint Fix Plan</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@87.5,600;87.5,700;100,500&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root {
+    --ground: #EEF1F4; --surface: #FFFFFF; --surface-2: #E3E8ED;
+    --ink: #14202B; --ink-2: #3E4C59; --ink-3: #6B7A89; --rule: #CBD3DB;
+    --accent: #0F7B6C; --accent-ink: #0A5A4F; --accent-wash: #DDEFEB;
+    --blocker: #B3261E; --blocker-wash: #F6E1DF; --serious: #A85A0B; --serious-wash: #F7E8D6;
+    --minor: #4B5C6B; --minor-wash: #E6EBEF; --ok: #2C6E49; --ok-wash: #DCEEE3;
+    --code-bg: #E7ECF0; --lane: #F5F7F9;
+    --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --sans: "Source Sans 3", "Segoe UI", Helvetica, Arial, sans-serif;
+    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0F1419; --surface: #171D24; --surface-2: #1F262E;
+      --ink: #E6EBF0; --ink-2: #B4BFCA; --ink-3: #8593A1; --rule: #2C353F;
+      --accent: #2FB8A6; --accent-ink: #7ED8CB; --accent-wash: #143B36;
+      --blocker: #F28B82; --blocker-wash: #3B1F1D; --serious: #F5B14C; --serious-wash: #3A2A12;
+      --minor: #A8B4BF; --minor-wash: #232C35; --ok: #7FCF9C; --ok-wash: #16301F;
+      --code-bg: #1F272F; --lane: #131920;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0F1419; --surface: #171D24; --surface-2: #1F262E;
+    --ink: #E6EBF0; --ink-2: #B4BFCA; --ink-3: #8593A1; --rule: #2C353F;
+    --accent: #2FB8A6; --accent-ink: #7ED8CB; --accent-wash: #143B36;
+    --blocker: #F28B82; --blocker-wash: #3B1F1D; --serious: #F5B14C; --serious-wash: #3A2A12;
+    --minor: #A8B4BF; --minor-wash: #232C35; --ok: #7FCF9C; --ok-wash: #16301F;
+    --code-bg: #1F272F; --lane: #131920;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); font-size: 17px; line-height: 1.55; }
+  a { color: var(--accent-ink); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code, .mono { font-family: var(--mono); font-size: 0.86em; }
+  code { background: var(--code-bg); padding: 0.05em 0.35em; border-radius: 3px; }
+  pre { background: var(--code-bg); padding: 0.9rem 1rem; overflow-x: auto; border-radius: 4px; line-height: 1.45; font-family: var(--mono); font-size: 0.84em; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  h1, h2, h3, h4 { font-family: var(--display); font-stretch: 87.5%; text-wrap: balance; line-height: 1.15; margin: 0; }
+  h1 { font-size: 2.35rem; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 1.55rem; font-weight: 700; margin-top: 3.2rem; padding-top: 1.2rem; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1.15rem; font-weight: 600; margin-top: 2rem; }
+  h4 { font-size: 1rem; font-weight: 600; margin-top: 1.3rem; font-family: var(--sans); font-stretch: normal; }
+  p { margin: 0.8rem 0; max-width: 68ch; }
+  ul, ol { max-width: 68ch; padding-left: 1.3rem; }
+  li { margin: 0.35rem 0; }
+  .eyebrow { font-family: var(--display); font-stretch: 87.5%; font-weight: 600; font-size: 0.78rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+  .page { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 3rem; max-width: 1180px; margin: 0 auto; padding: 2.5rem 1.5rem 5rem; }
+  .rail { position: sticky; top: 1.5rem; align-self: start; font-size: 0.9rem; }
+  .rail ol { list-style: none; padding: 0; margin: 0.8rem 0 0; border-left: 2px solid var(--rule); }
+  .rail li { margin: 0; }
+  .rail a { display: block; padding: 0.3rem 0 0.3rem 0.9rem; color: var(--ink-2); text-decoration: none; border-left: 2px solid transparent; margin-left: -2px; }
+  .rail a:hover { color: var(--ink); border-left-color: var(--accent); }
+  .rail .sub a { padding-left: 1.7rem; font-size: 0.84rem; color: var(--ink-3); }
+  @media (max-width: 900px) { .page { grid-template-columns: 1fr; gap: 1.5rem; } .rail { position: static; } }
+  header .meta { display: flex; flex-wrap: wrap; gap: 0.5rem 1.6rem; margin-top: 0.9rem; font-size: 0.9rem; color: var(--ink-3); }
+  header .meta span b { color: var(--ink-2); font-weight: 600; }
+  .verdict { margin-top: 1.6rem; padding: 1.1rem 1.3rem; border-left: 4px solid var(--accent); background: var(--surface); }
+  .verdict p { margin: 0.4rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.93rem; margin: 1rem 0; }
+  .tablewrap { overflow-x: auto; }
+  th, td { text-align: left; vertical-align: top; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--rule); }
+  th { font-family: var(--display); font-stretch: 87.5%; font-weight: 600; font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+  .chip { display: inline-block; font-family: var(--display); font-stretch: 87.5%; font-weight: 600; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; padding: 0.12rem 0.5rem; border-radius: 2px; white-space: nowrap; }
+  .chip.blocker { color: var(--blocker); background: var(--blocker-wash); }
+  .chip.serious { color: var(--serious); background: var(--serious-wash); }
+  .chip.minor { color: var(--minor); background: var(--minor-wash); }
+  .chip.ok { color: var(--ok); background: var(--ok-wash); }
+  .chip.accent { color: var(--accent-ink); background: var(--accent-wash); }
+  figure { margin: 1.6rem 0; background: var(--surface); border: 1px solid var(--rule); padding: 1rem 1rem 0.6rem; }
+  figure svg { display: block; width: 100%; height: auto; }
+  figcaption { font-size: 0.88rem; color: var(--ink-2); margin-top: 0.6rem; max-width: 80ch; }
+  .figwrap { overflow-x: auto; }
+  .ws { margin-top: 1.6rem; padding: 1rem 1.1rem; background: var(--surface); border: 1px solid var(--rule); }
+  .ws h3 { margin-top: 0; display: flex; flex-wrap: wrap; gap: 0.5rem 0.8rem; align-items: baseline; }
+  .ws h3 .id { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-3); font-weight: 400; }
+  .ws .closes { font-size: 0.86rem; color: var(--ink-3); margin: 0.2rem 0 0.8rem; }
+  .ws .closes code { font-size: 0.8em; }
+  .ws ul { margin: 0.4rem 0; }
+  .ws li { margin: 0.45rem 0; }
+  .ws li p { margin: 0.2rem 0; }
+  .tier { margin-top: 1.4rem; padding-left: 1rem; border-left: 3px solid var(--surface-2); }
+  .tier h3 { margin-top: 0; }
+  .tier .req { font-family: var(--mono); font-size: 0.8rem; color: var(--ink-3); }
+  .callout { margin: 1rem 0; padding: 0.8rem 1rem; background: var(--surface-2); max-width: 72ch; font-size: 0.95rem; }
+  .fixorder { counter-reset: fix; list-style: none; padding: 0; max-width: 72ch; }
+  .fixorder li { counter-increment: fix; position: relative; padding-left: 2.4rem; margin: 0.7rem 0; }
+  .fixorder li::before { content: counter(fix); position: absolute; left: 0; top: 0.05rem; width: 1.7rem; height: 1.7rem; border-radius: 50%; background: var(--accent-wash); color: var(--accent-ink); font-family: var(--display); font-weight: 700; font-size: 0.85rem; display: grid; place-items: center; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="page">
+  <nav class="rail" aria-label="Sections">
+    <div class="eyebrow">Contents</div>
+    <ol>
+      <li><a href="#verdict">Verdict</a></li>
+      <li><a href="#map">How 42 cases collapse into 9 workstreams</a></li>
+      <li><a href="#ws">The workstreams</a></li>
+      <li class="sub"><a href="#w1">W1 Identity and lineage across attempts</a></li>
+      <li class="sub"><a href="#w2">W2 Park-now and the prepare protocol</a></li>
+      <li class="sub"><a href="#w3">W3 Agent execution state machine</a></li>
+      <li class="sub"><a href="#w4">W4 Resources participant robustness</a></li>
+      <li class="sub"><a href="#w5">W5 Roles, capabilities, and configuration</a></li>
+      <li class="sub"><a href="#w6">W6 Control-plane consistency</a></li>
+      <li class="sub"><a href="#w7">W7 Checkpoint layout and bookkeeping release</a></li>
+      <li class="sub"><a href="#w8">W8 Actor-side reconciliation contract</a></li>
+      <li class="sub"><a href="#w9">W9 Cross-participant tests</a></li>
+      <li><a href="#blackbox">Blackbox harnesses</a></li>
+      <li class="sub"><a href="#bb-today">How Claude Code runs in Gym today</a></li>
+      <li class="sub"><a href="#bb-tiers">Three tiers of continuation</a></li>
+      <li class="sub"><a href="#bb-hold">Hold-first admission</a></li>
+      <li class="sub"><a href="#bb-sandbox">Is a sandbox required?</a></li>
+      <li class="sub"><a href="#bb-claude">What Claude Code specifically needs</a></li>
+      <li><a href="#prs">Landing the changes in the stack</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header>
+      <div class="eyebrow">Partial-rollout checkpointing · follow-up to the stack review</div>
+      <h1 style="margin-top:0.5rem">Checkpoint Fix Plan</h1>
+      <div class="meta">
+        <span><b>Fixes</b> the 42 cases in the stack review</span>
+        <span><b>Extends</b> continuation to blackbox harnesses</span>
+        <span><b>Stack</b> NeMo Gym PRs 2939–2946</span>
+        <span><b>Date</b> 2 September 2026</span>
+      </div>
+      <div class="verdict" id="verdict">
+        <p><b>The 42 cases are not 42 fixes.</b> They collapse into nine workstreams, and three of those decide the shape of everything else: parent resolution across attempts of one rollout, a park-now protocol that every caller of a paused server obeys, and per-instance checkpoint namespaces with release of bookkeeping. Most of the remaining cases are one-line to one-function corrections inside the participants the stack already has.</p>
+        <p><b>Blackbox harnesses do not need a sandbox to pause and resume.</b> They need two things the stack does not yet provide: a model server that holds a refused call instead of failing it, which gives an opaque harness a clean turn boundary without its cooperation, and a per-rollout home for the harness's own session store and working directory that survives the checkpoint. With those, Claude Code, Codex and OpenCode resume through their own session mechanisms after a restart, and after a same-process checkpoint they never notice anything happened. A sandbox becomes necessary only for the last tier, freezing a process tree mid-call, which none of the current providers can do and which this plan defers.</p>
+      </div>
+    </header>
+
+    <h2 id="map">How 42 cases collapse into 9 workstreams</h2>
+    <p>Case numbers refer to the <a href="checkpoint-stack-review.html">stack review</a>. The dependency order matters: W1 and W2 change contracts that W3, W4 and the blackbox work build on, and W7's namespacing must land before any multi-instance deployment.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Workstream</th><th>Closes</th><th>Touches</th><th>Blocks</th></tr></thead>
+      <tbody>
+        <tr><td><b>W1</b> Identity and lineage across attempts</td><td>E1 E2 E10 E11 E14 E15 E16</td><td>rollout_correlation, sink, lineage, ledger, admission</td><td>every continuation, whitebox or blackbox</td></tr>
+        <tr><td><b>W2</b> Park-now and the prepare protocol</td><td>E4 E5 E9 E17 E39</td><td>admission, agent participant, simple and gymnasium agents, resources participant</td><td>the deadline policy; blackbox hold-first</td></tr>
+        <tr><td><b>W3</b> Agent execution state machine</td><td>E19 E20 E21 E18 E8</td><td>agent participant, agent base, both whitebox agents</td><td>correct retire and resume</td></tr>
+        <tr><td><b>W4</b> Resources participant robustness</td><td>E22 E23 E24 E25 E26 E27 E28 E29 E30</td><td>resources participant and middleware, adapters, MCP exposure</td><td>any stateful environment; MCP for blackbox</td></tr>
+        <tr><td><b>W5</b> Roles, capabilities, configuration</td><td>E6 E7 E38</td><td>model config, agent base, control</td><td>a truthful capability check</td></tr>
+        <tr><td><b>W6</b> Control-plane consistency</td><td>E13 E32 E33 E34 E35 E36 E37 E40</td><td>control, model admission, coordinator, ledger</td><td>multi-worker; recovery from failed restores</td></tr>
+        <tr><td><b>W7</b> Checkpoint layout and bookkeeping release</td><td>E31 E41 E42 E18</td><td>a shared checkpoint writer; all three participants; a new ack route</td><td>scale</td></tr>
+        <tr><td><b>W8</b> Actor-side reconciliation contract</td><td>E12 E24 E16</td><td>NeMo RL's NemoGym actor; manifest route</td><td>trainability decisions after restore</td></tr>
+        <tr><td><b>W9</b> Cross-participant tests</td><td>the untested sequences</td><td>tests</td><td>confidence in all of the above</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="ws">The workstreams</h2>
+
+    <div class="ws" id="w1">
+      <h3><span class="id">W1</span> Identity and lineage across attempts <span class="chip blocker">blocker</span></h3>
+      <div class="closes">Closes E1, E2, E10, E11, E14, E15, E16. Lands in PRs 2939 and 2941.</div>
+      <ul>
+        <li><p><b>Resolve parents across the attempts of one rollout.</b> In <code>resolve_parent</code>, when the lineage store returns unresolved and the context's attempt index is above zero, retry the resolution against the earlier capture keys of the same logical rollout, from <code>rollout_id-a{N-1}</code> down to <code>rollout_id</code>. A fingerprint match there admits a <code>token_in</code> child whose <code>staging_chain</code> continues the parent's, exactly as within one key. Only when every attempt is exhausted does the existing rule apply: poison the call unless the rollout has no rows anywhere. The keys to search come from the restored manifest's source attempts, so the model server never guesses.</p><p>This is one lookup loop in <code>FileLineageStore</code> plus a change in <code>resolve_parent</code>'s fallback. It serves whitebox agents, which resend the restored output items, and blackbox harnesses, which resend their own transcript; both produce the same fingerprints. An optional hint header from the agent, <code>x-nemo-gym-parent-call-id</code> with the parent's capture key, can short-circuit the search but must still be verified by fingerprint, so implement the search first.</p></li>
+        <li><p><b>Separate admission tombstones from commit exclusions.</b> A tombstone fences new calls under a retired attempt; it must never hide that attempt's already-committed rows. Keep two sets in the limiter: <code>tombstones</code> for admission, and <code>excluded_at_checkpoint</code> holding only attempts force-closed by <code>abort_inflight</code> during the current checkpoint. Commit excludes the second set and clears it on resume; restore installs tombstones from the manifest's tombstone list and its source attempts without ever adding them to the exclusion set. The second checkpoint after a restore then commits the restored ledgers again.</p></li>
+        <li><p><b>Make restore idempotent on the same namespace.</b> Accept a capture directory whose existing ledger files are all named in the manifest with matching digests, and refuse only files the manifest does not know. A same-node restart with the same directory then restores cleanly, and a retried restore is a no-op.</p></li>
+        <li><p><b>Fence identity at dispatch.</b> Reject an explicit rollout id that matches <code>-a\d+$</code> with its own error code, and reject a dispatch at attempt zero for a rollout that the restored manifest lists as a source attempt with a code that says "id reused across restart" rather than "stale attempt". NeMo RL passes an explicit, job-unique <code>_ng_rollout_id</code> in every dispatch.</p></li>
+        <li><p><b>Echo the model-call id whenever admission identity exists.</b> Mint and return <code>x-nemo-gym-model-call-id</code> for header-identified calls, not only for capture-prefixed ones, so a boundary always carries the id that a later reconciliation needs.</p></li>
+      </ul>
+    </div>
+
+    <div class="ws" id="w2">
+      <h3><span class="id">W2</span> Park-now and the prepare protocol <span class="chip blocker">blocker</span></h3>
+      <div class="closes">Closes E4, E5, E9, E17, E39. Lands in PRs 2940, 2942, 2943, 2944, 2945.</div>
+      <ul>
+        <li><p><b>Every refusal a paused server issues is a park signal, not an error.</b> Define one rule for the three checkpoint codes, <code>checkpoint_parked</code>, <code>resources_admission_closed</code> and <code>agent_admission_closed</code>: a whitebox agent that receives one re-commits its last boundary through <code>park_now()</code> and blocks until resume, then reissues the refused operation. The refused response never enters the conversation: the tool-call path in SimpleAgent checks the checkpoint codes before treating a body as tool output. With this rule the prepare order stops being a correctness requirement and becomes a latency preference.</p></li>
+        <li><p><b>Hold instead of refuse for callers that cannot park.</b> The admission limiter distinguishes a caller with identity headers, which understands the codes, from a path-identified caller with none, which is an SDK inside a harness. The second kind is held: the request waits on the limiter's resume event up to a configured hold budget and is counted as a waiter, not as in flight, so it cannot block the drain. Past the budget it receives HTTP 503 with <code>retry-after</code>. Held waiters appear in status per rollout, which is the signal the blackbox tier below builds on.</p></li>
+        <li><p><b>Add status routes to the agent and resources participants.</b> <code>GET agent-checkpoint/status</code> returns each active execution with its rollout, attempt, state, boundary index, current operation and age; <code>GET resources-checkpoint/status</code> returns each registered session with its lock state and revision. Both accept the same long-poll parameters as the model status. The prepare-incomplete error lists the blocking attempts so the deadline policy can retire exactly those.</p></li>
+        <li><p><b>Count what prepare lost.</b> Prepare's report includes executions that failed after park was requested, and the actor treats a nonzero count as a sacrifice to record, not as success.</p></li>
+        <li><p><b>Add <code>resources-checkpoint/retire</code>.</b> It drops the session, mapping, revision and lock for one attempt, and the actor calls it for every sacrificed attempt before resources prepare so no orphan session is exported.</p></li>
+        <li><p><b>Fix the judge fail-safe for control refusals.</b> When the judge error is a checkpoint code, the fail-safe returns HTTP 503 with the code rather than a successful zero reward, so the resources middleware does not retire the session and the agent parks instead of finishing.</p></li>
+        <li><p><b>State the order anyway.</b> Agents, then resources, then policy model; resume in reverse. The actor enforces it; Gym documents it in the control-plane docstring and the design page.</p></li>
+      </ul>
+    </div>
+
+    <div class="ws" id="w3">
+      <h3><span class="id">W3</span> Agent execution state machine <span class="chip serious">serious</span></h3>
+      <div class="closes">Closes E19, E20, E21, E18, E8. Lands in PRs 2942, 2943, 2944.</div>
+      <ul>
+        <li><p><b>Cancel the task that is parked, not the task that began.</b> <code>commit_boundary</code> records <code>asyncio.current_task()</code> on the execution at the moment it parks, and <code>retire</code> cancels that task as well as the outer one. Better still, SimpleAgent's inner self-call inherits a per-execution cancel scope so both handlers fall together.</p></li>
+        <li><p><b>Generation-stamp executions.</b> Each execution carries a generation counter; <code>begin</code> under a retired key increments it and <code>commit_boundary</code> from a stale generation is refused with a distinct code. A zombie loop can no longer write into its successor's record.</p></li>
+        <li><p><b>Undo park requests when a checkpoint is abandoned.</b> A failed prepare resets park-requested executions to running before returning its error. Resume resets any remaining park-requested execution to running and releases or cancels task-less parked ones, so nothing waits for a resume that will never come.</p></li>
+        <li><p><b>Never commit a boundary at the step budget.</b> Both agents skip the boundary when the step equals <code>max_steps</code>; a continuation whose boundary index already meets the budget returns the truncated response from the restored items without a model call.</p></li>
+        <li><p><b>Release completed executions.</b> Drop an execution's boundary payload on finish and drop the execution itself when the actor acknowledges the result (the ack route in W7); drop a restored continuation once its <code>/run</code> has begun.</p></li>
+        <li><p><b>Refuse a fresh dispatch that shadows a continuation.</b> If an unconsumed restored boundary exists for a rollout, a <code>/run</code> at any other attempt is refused with a code naming the expected attempt.</p></li>
+      </ul>
+    </div>
+
+    <div class="ws" id="w4">
+      <h3><span class="id">W4</span> Resources participant robustness <span class="chip blocker">blocker</span></h3>
+      <div class="closes">Closes E22 through E30. Lands in PRs 2945 and 2946.</div>
+      <ul>
+        <li><p><b>Install the session middleware inside the context middleware and classify by route.</b> Reading identity from the context variables lets a capture-prefixed path and a header-only path resolve the same way, and the literal <code>/verify</code> comparison sees the stripped path. Only POST routes that a server declares as mutations are gated; <code>GET /</code>, docs and metrics pass.</p></li>
+        <li><p><b>Give MCP calls an identity.</b> At <code>/seed_session</code>, mint the rollout id and attempt into the signed MCP session token; the MCP dispatcher validates the token and enters the same per-attempt lock and revision accounting as a direct tool call. This is the single change that makes stateful environments usable by sandboxed harnesses under checkpointing.</p></li>
+        <li><p><b>Register after success, export defensively.</b> The middleware registers an attempt only on its first successful response, and the export loop skips keys the adapter cannot map, reporting them in the prepare result instead of raising. After taking each lock, prepare re-reads the registry and skips keys retired meanwhile, and reads the revision under the lock rather than from the pre-materialized list.</p></li>
+        <li><p><b>Count revisions only on mutations.</b> Adapters declare their mutation routes (the default is every declared POST tool route plus <code>/reset</code> and <code>/step</code>); reads and <code>/seed_session</code> do not bump the revision.</p></li>
+        <li><p><b>Start paused when a restore is expected.</b> A launcher flag or the presence of a configured restore directory starts the participant with admission closed, so no attempt above zero can mutate a cookie session before restore installs the mapping.</p></li>
+        <li><p><b>Make Gymnasium opt in.</b> <code>GymnasiumServer.checkpoint_state_enabled</code> returns true only when the subclass overrides the serialization hooks; Blackjack opts in, Sokoban, Tetris, TALES, the multi-turn example and OpenAir report stateless until they implement their own codecs.</p></li>
+        <li><p><b>Normalize on restore.</b> Workplace Assistant converts <code>NaN</code> back to <code>None</code> and resets frame indexes; the adapter tests add the JSON hop.</p></li>
+        <li><p><b>Prune on retire and on same-process restore.</b> Retire pops the lock when it is not held; restore retires the source attempt it tombstones.</p></li>
+      </ul>
+    </div>
+
+    <div class="ws" id="w5">
+      <h3><span class="id">W5</span> Roles, capabilities, and configuration <span class="chip serious">serious</span></h3>
+      <div class="closes">Closes E6, E7, E38. Lands in PRs 2940 and 2941.</div>
+      <ul>
+        <li><p><b>Default the model role to auxiliary.</b> The training config marks the single instance NeMo RL generates through as <code>policy</code>; startup validation fails when a run declares more than one policy instance or none. Judges and simulators stop pausing by omission.</p></li>
+        <li><p><b>Make the agent capability truthful.</b> <code>checkpoint_mode</code> becomes a class-level declaration: SimpleAgent and GymnasiumAgent declare <code>export_restore</code>, the base declares <code>stateless</code>, and a blackbox agent moves to <code>export_restore</code> only when the blackbox tier below lands for it. Prepare on a stateless agent returns immediately with its executions listed for retirement or hold.</p></li>
+        <li><p><b>One bearer, one name.</b> Collapse the two environment variables into <code>NEMO_GYM_CHECKPOINT_CONTROL_TOKEN</code>, log the resolved source at startup, and have the actor assert each participant's expected capability before the first checkpoint.</p></li>
+      </ul>
+    </div>
+
+    <div class="ws" id="w6">
+      <h3><span class="id">W6</span> Control-plane consistency <span class="chip serious">serious</span></h3>
+      <div class="closes">Closes E13, E32, E33, E34, E35, E36, E37, E40. Lands in PRs 2940 and 2941.</div>
+      <ul>
+        <li><p><b>Close admission after validation, not before.</b> The model restore validates the checkpoint directory first and closes admission only when it is about to install; a failed restore leaves the server accepting. Model resume is additionally allowed from idle when the limiter is closed, so any stuck state has an exit.</p></li>
+        <li><p><b>Align the coordinator with the single-worker routes.</b> Abort and resume accept the preparing phase; status accepts every non-idle phase; the status request model is shared so both deployments take the same parameters; the coordinator's resume rolls back to draining if acknowledgements fail.</p></li>
+        <li><p><b>Let commit promote the phase.</b> A commit whose own quiescence check passes promotes preparing to prepared instead of demanding a prior status poll.</p></li>
+        <li><p><b>Refuse checkpoint routes without a coordinator.</b> When <code>num_workers</code> exceeds one and no coordinator is attached, the routes answer with <code>multi_process_unmanaged</code> rather than acting on one worker.</p></li>
+        <li><p><b>Give every admitted request an abort handle.</b> <code>abort_inflight</code> accepts a ticket id, and status lists tickets, so an identity-less generation can still be sacrificed at the deadline.</p></li>
+        <li><p><b>Turn a cancelled admitted call into a clean refusal.</b> The capture middleware converts a cancellation after admission into HTTP 409 <code>stale_attempt</code>, and the manifest reader treats a failure row for an already-recorded id as poison.</p></li>
+        <li><p><b>Carry both an absolute deadline and a relative budget</b>, use the smaller, thread the deadline through abort, resume and status, and return the server's clock in every control response so the actor can detect skew.</p></li>
+        <li><p><b>Rewrite the manifest on a commit retry when the exclusion set changed.</b></p></li>
+      </ul>
+    </div>
+
+    <div class="ws" id="w7">
+      <h3><span class="id">W7</span> Checkpoint layout and bookkeeping release <span class="chip serious">serious</span></h3>
+      <div class="closes">Closes E31, E41, E42, E18. Lands as one new PR after 2941, consumed by 2942 and 2945.</div>
+      <ul>
+        <li><p><b>Namespace every participant by instance.</b> Commit and restore write under <code>&lt;checkpoint_dir&gt;/&lt;component&gt;/&lt;server_name&gt;/</code> for agents and model servers as the resources participant already does, and the manifest records the server name so a mismatch is refused.</p></li>
+        <li><p><b>One shared checkpoint writer.</b> A <code>CheckpointArchiveWriter</code> streams records into compressed shards with a member index of rollout to shard, offset and length, writes each shard through a temporary name with fsync and rename, and returns a digest. All three participants serialize their records through it; the manifest-last discipline and digest verification carry over. Restore reads the index and extracts only what it installs.</p></li>
+        <li><p><b>Commit incrementally.</b> The model manifest records the highest committed row offset per capture key; the next commit copies only new or grown files, and the archive index chains to the previous checkpoint's shards by digest.</p></li>
+        <li><p><b>An ack route for release.</b> <code>POST /ng-control/v1/ack {rollout_id, attempt_index}</code> on every participant lets the actor say a rollout's result is durable on the RL side. On ack the agent drops the execution, the model retires the attempt from the seen set and, once no later attempt exists, from the tombstone set, the resources server drops locks and any leftover session, and the coordinator sends tombstone deltas instead of the full list.</p></li>
+      </ul>
+    </div>
+
+    <div class="ws" id="w8">
+      <h3><span class="id">W8</span> Actor-side reconciliation contract <span class="chip serious">serious</span></h3>
+      <div class="closes">Closes E12, E24, E16. Lands in NeMo RL.</div>
+      <ul>
+        <li><p><b>Per logical rollout, join the manifests of every capture key</b> from the restored source attempts, verify each row's staging key exists in the restored TransferQueue with a matching digest, and downgrade the rollout to fresh dispatch on any miss.</p></li>
+        <li><p><b>Cut the chain at the boundary.</b> A continuation is runnable only if its boundary's <code>last_committed_model_call_id</code> is present and verified; rows after it under the old attempt are ignored, which handles late calls from a zombie.</p></li>
+        <li><p><b>Compare revisions per resources server</b> between the boundary and the snapshot; a mismatch downgrades the rollout.</p></li>
+        <li><p><b>Dispatch continuations at exactly source plus one</b>, and never retry <code>/run</code> with the same attempt; treat <code>duplicate_execution</code> as still running and wait for the ack path.</p></li>
+      </ul>
+    </div>
+
+    <div class="ws" id="w9">
+      <h3><span class="id">W9</span> Cross-participant tests <span class="chip serious">serious</span></h3>
+      <div class="closes">Lands beside each workstream; the harness lands with W2.</div>
+      <ul>
+        <li><p>Extend the staged data-plane simulation from the prototype branch into a four-participant harness: SimpleAgent, a stateful resources server, the policy model with the fake external staging store, and a test-side actor that runs prepare, commit, restart, restore, reconcile and resume. Every sequence the review found untested becomes one test on this harness: park under each prepare order, a tool call refused mid-turn, a boundary at the step budget, a retired execution's zombie, a restart continuation through the real <code>/run</code> wrapper with a resources mapping, header-less callers, and two agent servers committing into one directory.</p></li>
+        <li><p>A contract test drives the same control script against the single-worker model routes and the coordinator, so the two implementations cannot drift again.</p></li>
+        <li><p>A scale test with ten thousand synthetic executions measures commit and restore time and process memory before and after the ack route and the archive writer.</p></li>
+      </ul>
+    </div>
+
+    <h2 id="blackbox">Blackbox harnesses</h2>
+
+    <div class="tier" id="bb-today">
+      <h3>How Claude Code runs in Gym today</h3>
+      <p>The Claude Code agent starts <code>claude -p --output-format stream-json</code> as a local subprocess of the agent server. There is no sandbox; the agent records the gap <code>no_sandbox_runtime</code> in its observations. Each request gets a fresh <code>CLAUDE_CONFIG_DIR</code> that is deleted when the run ends, and the working directory is the agent server's own. The model server is reached through <code>ANTHROPIC_BASE_URL</code>, which carries the capture prefix, so identity and token capture already work for every call the harness makes. Tools reach the resources server over MCP with a session token minted at seed time. A configured timeout kills the process, and the run is one shot: instruction in, transcript out, then <code>/verify</code>.</p>
+      <p>Codex runs the same way with a per-run <code>CODEX_HOME</code>. OpenCode, anyswe, anyterminal and the other sandboxed agents run their harness inside a sandbox created through the sandbox API. The nine providers implement create, exec, file transfer, status and close; some add endpoints and terminals, and some can reconnect to a live sandbox by id. None can snapshot a filesystem or freeze a process.</p>
+    </div>
+
+    <div class="tier" id="bb-tiers">
+      <h3>Three tiers of continuation</h3>
+      <p>The question "can a blackbox harness pause and resume" has three answers with increasing cost, and the middle one is the useful one.</p>
+
+      <h4>Tier 0 — restart only, what the stack does today by accident</h4>
+      <p class="req">needs: hold-first admission (W2), retire, tombstones</p>
+      <p>At prepare the actor retires the execution, the agent kills the harness, and after restore the rollout is dispatched again from its input under a new attempt. The tokens generated by the abandoned attempt stay in TransferQueue as masked orphans. Nothing about the harness is persisted. This is correct and cheap; its only cost is the lost work of every blackbox rollout in flight at each checkpoint, which at ten-minute checkpoint intervals and hour-long coding tasks is most of them.</p>
+
+      <h4>Tier 1 — harness-native resume at a turn boundary</h4>
+      <p class="req">needs: hold-first admission, per-rollout harness home and workspace, cross-attempt lineage (W1), MCP identity (W4)</p>
+      <p>Claude Code, Codex and OpenCode all persist their own conversation state between turns and can continue a session non-interactively: Claude Code with <code>--resume &lt;session-id&gt;</code> against the transcript it keeps under its config directory, Codex through its session store under <code>CODEX_HOME</code>, OpenCode through the session database the agent already reads. The problem was never persistence; it was finding a moment when the harness is between turns and knowing that it is.</p>
+      <p>Hold-first admission supplies that moment. When the policy model pauses, the harness's next API call is held rather than refused. At that instant the harness is idle at a turn boundary by construction: its transcript contains every completed message and every tool result, and its only pending action is the held request. The model server's status reports the held waiter under the rollout's identity, and the agent participant treats "held at the model" as the blackbox equivalent of a committed boundary. The agent then snapshots the harness's home directory and workspace, records the session id it already parses from the stream, and commits that as the boundary. On a same-process checkpoint nothing more happens: resume releases the held request and the harness continues without ever knowing. On a restart the agent restores the two directories at the same paths, relaunches the harness in resume mode, and the harness reissues the request it was holding. That request resends the full transcript, which W1's cross-attempt resolution matches to the previous attempt's last call, so the token chain continues as <code>token_in</code> rather than restarting as a re-tokenized root.</p>
+      <p>The abandoned held request needs no relay: it was never admitted, so no custody row exists and no staged row is orphaned. The only reissue case is a request that was admitted and mid-generation when the deadline forced an abort; that attempt is tombstoned as today and the harness's reissued call after resume is a fresh child of the last committed parent.</p>
+
+      <h4>Tier 2 — full runtime snapshot</h4>
+      <p class="req">needs: a provider that can freeze and restore a process tree, the egress relay, endpoint and attempt remapping</p>
+      <p>Freezing the harness mid-call and thawing it later requires a sandbox whose provider can checkpoint process memory, an in-runtime relay that owns every socket the harness has open so a frozen request can be captured and reissued, and a remap of the model endpoint and attempt identity at thaw. No current provider offers the first, and tier 1 covers every harness Gym ships today. This plan defers tier 2 to the harnesses that cannot resume natively, if any appear.</p>
+    </div>
+
+    <figure>
+      <div class="figwrap">
+      <svg viewBox="0 0 1000 400" role="img" aria-label="Tier one continuation for a blackbox harness. During prepare the harness's next API call is held at the policy model server, the agent server reads the held waiter from model status, snapshots the harness home directory and workspace, and commits a boundary with the session id. On restart the directories are restored, the harness is relaunched in resume mode, its reissued call resends the full transcript, and the model server resolves the parent across attempts so the token chain continues.">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+          <marker id="arr-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        </defs>
+        <g fill="currentColor" font-family="Source Sans 3, Helvetica, Arial, sans-serif" font-size="12">
+          <g font-family="Archivo, Helvetica, Arial, sans-serif" font-weight="700" font-size="13" letter-spacing="0.06em">
+            <text x="20" y="30">PREPARE · SAVE</text>
+            <text x="540" y="30">RESTORE · RESUME</text>
+          </g>
+          <line x1="510" y1="14" x2="510" y2="390" stroke="var(--rule)"/>
+
+          <!-- left: boxes -->
+          <g stroke="currentColor" stroke-width="1.2" fill="var(--surface)">
+            <rect x="20" y="60" width="150" height="54" rx="3"/>
+            <rect x="330" y="60" width="160" height="54" rx="3"/>
+            <rect x="20" y="220" width="150" height="54" rx="3"/>
+            <rect x="200" y="300" width="290" height="70" rx="3"/>
+          </g>
+          <g text-anchor="middle">
+            <text x="95" y="82" font-weight="600">claude -p</text>
+            <text x="95" y="98" fill="var(--ink-3)">harness subprocess</text>
+            <text x="410" y="82" font-weight="600">policy model server</text>
+            <text x="410" y="98" fill="var(--ink-3)">admission paused</text>
+            <text x="95" y="242" font-weight="600">agent server</text>
+            <text x="95" y="258" fill="var(--ink-3)">agent participant</text>
+            <text x="345" y="322" font-weight="600">boundary record</text>
+            <text x="345" y="338" font-family="JetBrains Mono, monospace" font-size="11">session_id · home dir · workspace</text>
+            <text x="345" y="354" font-family="JetBrains Mono, monospace" font-size="11">last held request identity</text>
+          </g>
+          <!-- held call -->
+          <g stroke="currentColor" stroke-width="1.4" fill="none">
+            <line x1="170" y1="80" x2="328" y2="80" marker-end="url(#arr)" stroke-dasharray="5 4"/>
+          </g>
+          <text x="180" y="72">/v1/messages, full transcript</text>
+          <text x="180" y="100" fill="var(--ink-3)">held, not refused · counted as waiter</text>
+          <!-- status -->
+          <g stroke="currentColor" stroke-width="1.4" fill="none">
+            <line x1="410" y1="114" x2="410" y2="200" />
+            <line x1="410" y1="200" x2="172" y2="240" marker-end="url(#arr)"/>
+          </g>
+          <text x="418" y="150">status: waiter for</text>
+          <text x="418" y="166" font-family="JetBrains Mono, monospace" font-size="11">(rollout, attempt)</text>
+          <!-- snapshot -->
+          <g stroke="currentColor" stroke-width="1.4" fill="none">
+            <line x1="95" y1="220" x2="95" y2="116" marker-end="url(#arr)"/>
+            <line x1="170" y1="260" x2="198" y2="320" marker-end="url(#arr)"/>
+          </g>
+          <text x="102" y="150">snapshot home dir</text>
+          <text x="102" y="166">+ workspace, read</text>
+          <text x="102" y="182">session id from stream</text>
+          <text x="140" y="300" fill="var(--ink-3)">commit as boundary</text>
+
+          <!-- right: boxes -->
+          <g stroke="currentColor" stroke-width="1.2" fill="var(--surface)">
+            <rect x="540" y="60" width="150" height="54" rx="3"/>
+            <rect x="540" y="220" width="150" height="54" rx="3"/>
+            <rect x="820" y="60" width="160" height="54" rx="3"/>
+            <rect x="820" y="220" width="160" height="70" rx="3"/>
+          </g>
+          <g text-anchor="middle">
+            <text x="615" y="242" font-weight="600">agent server</text>
+            <text x="615" y="258" fill="var(--ink-3)">fresh process</text>
+            <text x="615" y="82" font-weight="600">claude -p --resume</text>
+            <text x="615" y="98" fill="var(--ink-3)">same paths, attempt N+1</text>
+            <text x="900" y="82" font-weight="600">policy model server</text>
+            <text x="900" y="98" fill="var(--ink-3)">resumed</text>
+            <text x="900" y="242" font-weight="600">ledgers</text>
+            <text x="900" y="258" font-family="JetBrains Mono, monospace" font-size="11">r · r-a1</text>
+            <text x="900" y="276" fill="var(--ink-3)">parent across attempts</text>
+          </g>
+          <g stroke="currentColor" stroke-width="1.4" fill="none">
+            <line x1="615" y1="220" x2="615" y2="116" marker-end="url(#arr)"/>
+            <line x1="690" y1="80" x2="818" y2="80" marker-end="url(#arr)"/>
+            <line x1="900" y1="116" x2="900" y2="218" marker-end="url(#arr)"/>
+          </g>
+          <g stroke="var(--accent)" stroke-width="1.6" fill="none">
+            <line x1="818" y1="255" x2="700" y2="255" marker-end="url(#arr-acc)" />
+          </g>
+          <text x="622" y="150">restore dirs,</text>
+          <text x="622" y="166">relaunch in resume mode</text>
+          <text x="698" y="72">reissued call, full transcript</text>
+          <text x="905" y="150">resolve parent</text>
+          <text x="905" y="166">(W1)</text>
+          <text x="700" y="248" fill="var(--accent-ink)">token_in child of</text>
+          <text x="700" y="264" fill="var(--accent-ink)">attempt N's last call</text>
+        </g>
+      </svg>
+      </div>
+      <figcaption>Tier 1 for a blackbox harness. The hold at the model server is what makes an opaque process stop at a turn boundary without cooperating; the snapshot of its own session store is what lets it continue; cross-attempt parent resolution is what keeps the token chain whole.</figcaption>
+    </figure>
+
+    <div class="tier" id="bb-hold">
+      <h3>Hold-first admission, precisely</h3>
+      <ul>
+        <li><p><b>Classification.</b> A gated request with identity headers is a parkable caller and receives HTTP 409 <code>checkpoint_parked</code> as today. A gated request identified only by its capture path is a holdable caller.</p></li>
+        <li><p><b>Holding.</b> A holdable request registers a waiter keyed by its identity and awaits the limiter's resume event with a timeout equal to the hold budget. Waiters are reported in status but never counted in flight, so they cannot delay the drain and never need aborting. On resume the waiter is admitted in place and proceeds normally. Past the budget it receives HTTP 503 with <code>retry-after</code>, which every SDK retries.</p></li>
+        <li><p><b>Budget.</b> The budget must stay below the SDK's own request timeout, which is ten minutes for the Anthropic and OpenAI clients by default, and below the harness's per-request timeout if it sets one. Retry behavior on the client side is not something to rely on: the SDKs retry a refused call only twice by default and the CLIs add short loops of their own, so holding on the server is the only mechanism that spans a checkpoint of several minutes.</p></li>
+        <li><p><b>Restart.</b> A held request whose server process exits sees a connection reset; the harness's retry loop reissues it against a server that is gone, and the harness eventually fails. That is why the tier-1 snapshot happens while the request is held and why the harness is killed by the agent after the snapshot rather than left to time out.</p></li>
+      </ul>
+    </div>
+
+    <div class="tier" id="bb-sandbox">
+      <h3>Is a sandbox required to pause and resume?</h3>
+      <p><b>No, for tiers 0 and 1.</b> The harness's continuation state is filesystem state: its own session store and the working directory it edits. What tier 1 needs is that both live in a per-rollout location that survives the checkpoint and is restored at the same absolute path, because the CLIs key their session stores by working directory. For a local subprocess, the agent server owns those directories directly and includes them in the checkpoint through the archive writer of W7; the workspace can be large, so the writer content-addresses files against the task's base image or repository and stores only the delta. Today's per-request temporary config directory and shared working directory must become per-rollout directories with a lifecycle tied to the execution, which is the concrete change to the Claude Code and Codex agents.</p>
+      <p><b>A sandbox changes the cost, not the possibility.</b> With a provider that can reconnect to a live sandbox by id, the sandbox itself outlives the agent server's restart: the boundary stores the serialized handle, restore reconnects, and nothing is copied. That is the existing <code>ConnectableProvider</code> protocol doing exactly what it was built for, and the sandboxed harnesses gain a cheaper tier 1 than the local ones. Without reconnection, the agent must download the two directories from the sandbox before killing it and upload them into a new one, which the provider protocol already supports through file transfer.</p>
+      <p><b>Yes, for tier 2.</b> Freezing a process mid-request is a provider capability, and it needs the egress relay to own the harness's sockets. No provider in the repository has it. Tier 2 is the fallback for a harness with no native resume, not the path for Claude Code.</p>
+    </div>
+
+    <div class="tier" id="bb-claude">
+      <h3>What Claude Code specifically needs</h3>
+      <ol>
+        <li><b>Pin the session id.</b> Launch with <code>--session-id &lt;uuid&gt;</code> derived from the rollout and attempt, or read it from the first stream event as the parser already does, and record it in the boundary.</li>
+        <li><b>Per-rollout home and workspace.</b> Replace the per-request temporary <code>CLAUDE_CONFIG_DIR</code> with a directory keyed by rollout that persists until the execution is acknowledged; give each rollout its own working directory at a path the restore can reproduce. The skills staging and MCP config file move into that home.</li>
+        <li><b>Boundary detection.</b> The agent participant polls the model server's status for a held waiter under the execution's identity, or receives it as a push from the limiter when both run in one deployment, and treats it as the park signal. A harness that is executing a tool when prepare arrives reaches the hold at its next API call, which is the same behavior as a whitebox agent finishing its turn.</li>
+        <li><b>Resume launch.</b> After restore, relaunch with <code>--resume &lt;session-id&gt;</code> in the restored home and workspace, the same instruction context, and the base URL carrying attempt N+1's capture prefix. Claude Code continues from the last completed message and reissues the pending request itself.</li>
+        <li><b>Identity for tools.</b> The MCP session token minted at seed time carries the rollout and attempt (W4), so the resumed harness's tool calls reach the restored resources session under attempt N+1 without any change to the harness.</li>
+        <li><b>Lineage.</b> The reissued request's transcript fingerprints to the previous attempt's last committed call under W1, so the training row continues as a token-in chain. Without W1 a resumed Claude Code run is trainable but only on the tokens it generates after the restart.</li>
+        <li><b>Capability.</b> The agent declares <code>checkpoint_mode: export_restore</code> only once steps 1 to 4 are implemented; until then it declares stateless and prepare retires its executions immediately.</li>
+      </ol>
+      <div class="callout">Codex follows the same seven steps with <code>CODEX_HOME</code> as the home directory and its session resume command as the relaunch. OpenCode already exposes the session database the agent reads for observations, and its resume path is its session flag. Harnesses that run inside a sandbox add one step: serialize the sandbox handle into the boundary when the provider can reconnect, otherwise transfer the two directories out before the kill.</div>
+    </div>
+
+    <h2 id="prs">Landing the changes in the stack</h2>
+    <ol class="fixorder">
+      <li><b>PR 2939 (identity):</b> dispatch-time id fencing and the reused-id error code from W1; the single bearer name from W5.</li>
+      <li><b>PR 2940 (control contracts):</b> hold-first classification and waiters in the limiter, shared status request model, coordinator phase alignment, ticket-id abort, deadline and clock fields, refusal when unmanaged, from W2 and W6.</li>
+      <li><b>PR 2941 (model participant):</b> cross-attempt parent resolution, the split between tombstones and exclusions, idempotent restore, close-after-validation, model-call id on header-identified calls, cancellation to a clean refusal, auxiliary default with startup validation, from W1, W5 and W6.</li>
+      <li><b>New PR after 2941 (checkpoint writer and ack):</b> per-instance namespaces, the archive writer, incremental model commits, the ack route and bookkeeping release, from W7.</li>
+      <li><b>PR 2942 (agent participant):</b> park-now, status route, prepare-loss counting, parked-task cancellation, generation stamps, park-request rollback on failure and resume, continuation shadow refusal, class-level capability, from W2, W3 and W5.</li>
+      <li><b>PRs 2943 and 2944 (SimpleAgent, Gymnasium):</b> checkpoint codes never enter the conversation, the step-budget boundary rule, and the parent hint header once W1 supports it.</li>
+      <li><b>PR 2945 (resources participant):</b> middleware placement and route classification, register-after-success, defensive export, lock-ordered revisions, retire route, start-paused flag, judge fail-safe change, from W2 and W4.</li>
+      <li><b>PR 2946 (adapters):</b> Gymnasium opt-in, MCP identity in the session token, Workplace normalization, mutation-route declarations, adapter tests with the JSON hop.</li>
+      <li><b>New PR (blackbox tier 1):</b> per-rollout home and workspace for Claude Code and Codex, held-waiter boundary detection, resume-mode relaunch, and the boundary schema for harness state; the sandboxed agents add handle serialization.</li>
+      <li><b>NeMo RL:</b> W8's reconciliation, the prepare and resume order, sacrifice as retire plus abort, unique ids, and the ack calls.</li>
+    </ol>
+  </main>
+</div>
