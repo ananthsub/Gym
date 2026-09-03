@@ -13,8 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -30,9 +32,16 @@ _NODE_DIST_URL = f"https://nodejs.org/dist/v{_NODE_VERSION}/node-v{_NODE_VERSION
 _LOCAL_PREFIX = Path(__file__).parent / ".codex_node"
 
 
+def _installed_codex_version(executable: str) -> str | None:
+    result = subprocess.run([executable, "--version"], capture_output=True, text=True, check=False)
+    match = re.search(r"\b(\d+\.\d+\.\d+)\b", result.stdout)
+    return match.group(1) if result.returncode == 0 and match else None
+
+
 def _npm_install(npm_bin: str, version: str | None) -> None:
     pkg = f"{_CODEX_PKG}@{version}" if version else f"{_CODEX_PKG}@latest"
-    subprocess.run([npm_bin, "install", "-g", pkg], check=True)
+    _LOCAL_PREFIX.mkdir(parents=True, exist_ok=True)
+    subprocess.run([npm_bin, "install", "-g", "--prefix", str(_LOCAL_PREFIX), pkg], check=True)
 
 
 def _install_node_locally() -> Path:
@@ -59,7 +68,20 @@ def _install_node_locally() -> Path:
 
 def ensure_codex(version: str | None = None) -> None:
     """Ensure ``codex`` is on PATH, installing it if necessary."""
-    if shutil.which("codex"):
+    existing = shutil.which("codex")
+    if existing and (version is None or _installed_codex_version(existing) == version):
+        return
+
+    component_bin = _LOCAL_PREFIX / "bin"
+    component_codex = component_bin / "codex"
+    if component_codex.is_file():
+        actual_version = _installed_codex_version(str(component_codex))
+        if version is not None and actual_version != version:
+            raise RuntimeError(
+                f"Prebuilt Codex version {actual_version!r} does not match configured version {version!r}; "
+                "update component.build.yaml and rebuild the image"
+            )
+        os.environ["PATH"] = str(component_bin) + os.pathsep + os.environ.get("PATH", "")
         return
 
     # Check ~/.local/bin
@@ -101,3 +123,15 @@ def ensure_codex(version: str | None = None) -> None:
         raise RuntimeError("codex install appeared to succeed but 'codex' is still not on PATH")
 
     LOG.info("codex is ready at %s", shutil.which("codex"))
+
+
+def main() -> None:
+    """Materialize the pinned Codex CLI for an image build."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--version", required=True)
+    args = parser.parse_args()
+    ensure_codex(args.version)
+
+
+if __name__ == "__main__":
+    main()

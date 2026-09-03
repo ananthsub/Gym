@@ -232,15 +232,17 @@ def _install_command(plan: ComponentInstallPlan) -> str:
 
 
 def setup_env_command(dir_path: Path, global_config_dict: DictConfig, prefix: str) -> str:
-    runtime_install_policy = global_config_dict.get(
-        RUNTIME_INSTALL_POLICY_KEY_NAME,
-        os.getenv(NEMO_GYM_RUNTIME_INSTALL_POLICY_ENV_VAR_NAME, "allow-install"),
+    configured_policy = global_config_dict.get(RUNTIME_INSTALL_POLICY_KEY_NAME, "allow-install")
+    image_policy = os.getenv(NEMO_GYM_RUNTIME_INSTALL_POLICY_ENV_VAR_NAME, "allow-install")
+    for source, policy in (("config", configured_policy), ("environment", image_policy)):
+        if policy not in ("allow-install", "require-existing"):
+            raise ConfigError(
+                f"{RUNTIME_INSTALL_POLICY_KEY_NAME} from {source} must be 'allow-install' or "
+                f"'require-existing', got {policy!r}"
+            )
+    runtime_install_policy = (
+        "require-existing" if "require-existing" in (configured_policy, image_policy) else configured_policy
     )
-    if runtime_install_policy not in ("allow-install", "require-existing"):
-        raise ConfigError(
-            f"{RUNTIME_INSTALL_POLICY_KEY_NAME} must be 'allow-install' or 'require-existing', "
-            f"got {runtime_install_policy!r}"
-        )
     if runtime_install_policy == "require-existing":
         component_dir = dir_path.absolute()
         venv_path = get_venv_path(component_dir, global_config_dict)

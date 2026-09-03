@@ -22,7 +22,11 @@ MASKED_VALUE = "****"
 
 
 def looks_like_secret_key(key: str) -> bool:
-    return "token" in key or "key" in key or "header" in key
+    normalized = key.lower().replace("-", "_")
+    return any(
+        secret_word in normalized
+        for secret_word in ("token", "key", "header", "password", "passwd", "secret", "credential", "auth", "cookie")
+    )
 
 
 def hide_secrets_in_overrides(tokens: List[str]) -> List[str]:

@@ -120,6 +120,24 @@ class TestCLISetupCommandSetupEnvCommand:
         assert actual_command == f"cd {server_dir} && source {server_dir}/.venv/bin/activate"
         assert "uv " not in actual_command
 
+    def test_environment_require_existing_policy_cannot_be_weakened_by_config(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        server_dir = self._setup_server_dir(tmp_path)
+        (server_dir / ".venv/bin").mkdir(parents=True)
+        (server_dir / ".venv/bin/python").write_text("")
+        (server_dir / ".venv/bin/activate").write_text("")
+        monkeypatch.setenv("NEMO_GYM_RUNTIME_INSTALL_POLICY", "require-existing")
+
+        actual_command = setup_env_command(
+            dir_path=server_dir,
+            global_config_dict=self._debug_global_config_dict(tmp_path) | {"runtime_install_policy": "allow-install"},
+            prefix="my server name",
+        )
+
+        assert actual_command == f"cd {server_dir} && source {server_dir}/.venv/bin/activate"
+        assert "uv " not in actual_command
+
     def test_require_existing_policy_does_not_read_dependency_inputs(self, tmp_path: Path) -> None:
         server_dir = self._setup_server_dir(tmp_path)
         (server_dir / "requirements.txt").unlink()

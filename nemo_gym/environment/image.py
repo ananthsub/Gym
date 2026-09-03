@@ -36,6 +36,7 @@ from nemo_gym.environment.lock import (
 )
 from nemo_gym.environment.protocol import COMPOSITION_BOM_SCHEMA_VERSION, RUNTIME_PROTOCOL_VERSION
 from nemo_gym.global_config import get_global_config_dict
+from nemo_gym.secret_utils import looks_like_secret_key
 
 
 PACKED_DOCKERFILE = PARENT_DIR / "docker" / "Dockerfile.packed"
@@ -54,6 +55,14 @@ class CompositionImage(BaseModel):
     image: str
     digest: str
     component_content_sha256: str | None = None
+
+    @model_validator(mode="after")
+    def validate_digest_reference(self) -> "CompositionImage":
+        if not self.digest.startswith("sha256:") or len(self.digest) != 71:
+            raise ValueError(f"Invalid composition image digest: {self.digest!r}")
+        if not self.image.endswith(f"@{self.digest}"):
+            raise ValueError("Composition image reference must end with its declared digest")
+        return self
 
 
 class CompositionBOM(BaseModel):
@@ -136,13 +145,12 @@ def load_verified_environment_lock(
     source_root = source_root.resolve()
     if lock.gym.version != __version__:
         raise ConfigError(f"Environment lock requires nemo-gym {lock.gym.version}, but this source is {__version__}")
-    if lock.gym.source_kind == "editable" and lock.gym.source_sha256 is not None:
-        actual_gym_digest = gym_build_source_digest(source_root)
-        if actual_gym_digest != lock.gym.source_sha256:
-            raise ConfigError(
-                f"Gym source changed after locking: expected {lock.gym.source_sha256}, got {actual_gym_digest}. "
-                "Run 'gym env lock' again."
-            )
+    actual_gym_digest = gym_build_source_digest(source_root)
+    if actual_gym_digest != lock.gym_source_sha256:
+        raise ConfigError(
+            f"Gym source changed after locking: expected {lock.gym_source_sha256}, got {actual_gym_digest}. "
+            "Run 'gym env lock' again."
+        )
     selected_components = [
         component
         for component in lock.components
@@ -166,6 +174,14 @@ def load_verified_environment_lock(
                 f"expected {component.content_sha256}, got {actual_digest}. Run 'gym env lock' again."
             )
         _validate_hash_complete_lock(component.requirements_lock, component_dir=component_dir)
+        for dependency in component.source_dependencies:
+            dependency_dir = _component_source_path(source_root, Path(dependency.path))
+            actual_dependency_digest = component_content_digest(dependency_dir)
+            if actual_dependency_digest != dependency.content_sha256:
+                raise ConfigError(
+                    f"Source dependency changed for {dependency.path}: expected {dependency.content_sha256}, "
+                    f"got {actual_dependency_digest}. Run 'gym env lock' again."
+                )
     return lock
 
 
@@ -180,14 +196,21 @@ def _copy_build_context(
         shutil.copy2(source_root / filename, context_root / filename)
     (context_root / "cache").mkdir()
     shutil.copytree(source_root / "nemo_gym", context_root / "nemo_gym", ignore=shutil.ignore_patterns("__pycache__"))
+    sources_to_copy: dict[str, str] = {}
     for component in lock.components:
         if component_selector is not None:
             selector = f"{component.component_type}/{component.implementation}"
             if selector != component_selector:
                 continue
-        destination = context_root / component.source_path
+        sources_to_copy[component.source_path] = component.content_sha256
+        for dependency in component.source_dependencies:
+            previous = sources_to_copy.setdefault(dependency.path, dependency.content_sha256)
+            if previous != dependency.content_sha256:
+                raise ConfigError(f"Conflicting source dependency digests for {dependency.path}")
+    for source_path in sorted(sources_to_copy):
+        destination = context_root / source_path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        component_source = _component_source_path(source_root, Path(component.source_path))
+        component_source = _component_source_path(source_root, Path(source_path))
         shutil.copytree(
             component_source,
             destination,
@@ -199,6 +222,7 @@ def _copy_build_context(
     shutil.copy2(PACKED_DOCKERFILE, docker_dir / PACKED_DOCKERFILE.name)
     shutil.copy2(SERVER_DOCKERFILE, docker_dir / SERVER_DOCKERFILE.name)
     shutil.copy2(PACKED_DOCKERFILE, context_root / "Dockerfile.packed")
+    shutil.copy2(SERVER_DOCKERFILE, context_root / "Dockerfile.server")
     (context_root / "environment.lock.json").write_text(lock.canonical_json() + "\n", encoding="utf-8")
 
 
@@ -232,6 +256,10 @@ def packed_build_command(
         "--build-arg",
         f"PYTHON_VERSION={lock.python_version}",
         "--build-arg",
+        f"UV_VERSION={lock.uv_version}",
+        "--build-arg",
+        f"GYM_SOURCE_SHA256={lock.gym_source_sha256}",
+        "--build-arg",
         f"RUNTIME_PROTOCOL={lock.runtime_protocol}",
         "--build-arg",
         "TARGET_KIND=packed",
@@ -252,16 +280,19 @@ def build_packed_image(
     lock_path: Path,
     *,
     source_root: Path,
-    base_image: str,
+    base_image: str | None,
     tag: str,
     platform: str | None = None,
     load: bool = False,
     push: bool = False,
 ) -> None:
     """Verify a lock and build one packed image without copying runtime configuration."""
+    lock = load_verified_environment_lock(lock_path, source_root=source_root)
+    base_image = base_image or lock.base_image
+    if base_image != lock.base_image:
+        raise ConfigError(f"Requested base image {base_image!r} does not match lock base image {lock.base_image!r}")
     if "://" in base_image and "@" in base_image.split("://", 1)[1].split("/", 1)[0]:
         raise ConfigError("Base image reference must not contain credentials")
-    lock = load_verified_environment_lock(lock_path, source_root=source_root)
     locked_platform = _oci_platform(lock.platform)
     if platform is not None and _oci_platform(platform) != locked_platform:
         raise ConfigError(f"Requested platform {platform!r} does not match lock platform {lock.platform!r}")
@@ -330,6 +361,10 @@ def _split_image_build_command(
         "--build-arg",
         f"PYTHON_VERSION={lock.python_version}",
         "--build-arg",
+        f"UV_VERSION={lock.uv_version}",
+        "--build-arg",
+        f"GYM_SOURCE_SHA256={lock.gym_source_sha256}",
+        "--build-arg",
         f"RUNTIME_PROTOCOL={lock.runtime_protocol}",
         "--build-arg",
         f"TARGET_KIND={target_kind}",
@@ -349,15 +384,18 @@ def build_split_images(
     lock_path: Path,
     *,
     source_root: Path,
-    base_image: str,
+    base_image: str | None,
     repository: str,
     output_path: Path,
     platform: str | None = None,
 ) -> CompositionBOM:
     """Build and push one head image and one image per locked component."""
+    lock = load_verified_environment_lock(lock_path, source_root=source_root)
+    base_image = base_image or lock.base_image
+    if base_image != lock.base_image:
+        raise ConfigError(f"Requested base image {base_image!r} does not match lock base image {lock.base_image!r}")
     if "://" in base_image and "@" in base_image.split("://", 1)[1].split("/", 1)[0]:
         raise ConfigError("Base image reference must not contain credentials")
-    lock = load_verified_environment_lock(lock_path, source_root=source_root)
     locked_platform = _oci_platform(lock.platform)
     if platform is not None and _oci_platform(platform) != locked_platform:
         raise ConfigError(f"Requested platform {platform!r} does not match lock platform {lock.platform!r}")
@@ -433,8 +471,8 @@ def build_image_cli() -> None:
     source_root = Path(config.get("source_root", PARENT_DIR)).expanduser()
     base_image = config.get("base_image")
     tag = config.get("tag")
-    if not isinstance(base_image, str) or not base_image:
-        raise ConfigError("gym env build-image requires --base-image IMAGE")
+    if base_image is not None and not isinstance(base_image, str):
+        raise ConfigError("base_image must be a string")
     if not isinstance(tag, str) or not tag:
         raise ConfigError("gym env build-image requires --tag TAG")
     build_packed_image(
@@ -455,8 +493,8 @@ def build_split_images_cli() -> None:
     source_root = Path(config.get("source_root", PARENT_DIR)).expanduser()
     base_image = config.get("base_image")
     repository = config.get("repository")
-    if not isinstance(base_image, str) or not base_image:
-        raise ConfigError("gym env build-images requires --base-image IMAGE")
+    if base_image is not None and not isinstance(base_image, str):
+        raise ConfigError("base_image must be a string")
     if not isinstance(repository, str) or not repository:
         raise ConfigError("gym env build-images requires --repository PREFIX")
     build_split_images(
@@ -524,6 +562,49 @@ def install_locked_components(
                 env=clean_env,
             )
         requirements_path.unlink()
+    _execute_component_build_steps(
+        lock,
+        source_root=source_root,
+        component_selector=component_selector,
+    )
+
+
+def _execute_component_build_steps(
+    lock: EnvironmentLockRecord,
+    *,
+    source_root: Path,
+    component_selector: str | None,
+) -> None:
+    clean_env = {
+        key: value
+        for key, value in _clean_package_environment().items()
+        if not looks_like_secret_key(key) and not key.startswith("NEMO_GYM_CONFIG")
+    }
+    built: set[str] = set()
+    for component in lock.components:
+        selector = f"{component.component_type}/{component.implementation}"
+        if component_selector is not None and selector != component_selector:
+            continue
+        sources = [
+            *((dependency.path, dependency.build_steps) for dependency in component.source_dependencies),
+            (component.source_path, component.build_steps),
+        ]
+        for source_path, build_steps in sources:
+            if source_path in built:
+                continue
+            source_dir = _component_source_path(source_root, Path(source_path))
+            for step in build_steps:
+                argv = [sys.executable if argument == "{python}" else argument for argument in step.argv]
+                try:
+                    subprocess.run(argv, cwd=source_dir, check=True, env=clean_env)
+                except FileNotFoundError as exc:
+                    raise ConfigError(f"Build step executable does not exist for {source_path}: {argv[0]}") from exc
+                except subprocess.CalledProcessError as exc:
+                    raise ConfigError(f"Build step failed for {source_path} with exit code {exc.returncode}") from exc
+                missing = [path for path in step.expected_paths if not (source_dir / path).exists()]
+                if missing:
+                    raise ConfigError(f"Build step for {source_path} did not materialize expected paths: {missing}")
+            built.add(source_path)
 
 
 def _main() -> None:

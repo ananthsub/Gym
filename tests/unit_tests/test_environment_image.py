@@ -10,6 +10,7 @@ import pytest
 import nemo_gym.environment.image as environment_image
 from nemo_gym import __version__
 from nemo_gym.config_types import ConfigError
+from nemo_gym.environment.build_manifest import ComponentBuildStep
 from nemo_gym.environment.image import (
     build_packed_image,
     build_split_images,
@@ -21,12 +22,15 @@ from nemo_gym.environment.lock import (
     EnvironmentLockRecord,
     GymIdentity,
     PackageIdentity,
+    SourceDependencyLock,
     component_content_digest,
+    gym_build_source_digest,
 )
 
 
 _HASH = "0" * 64
 _REQUIREMENTS_LOCK = f"example-package==1.0 --hash=sha256:{_HASH}\n"
+_BASE_IMAGE = f"registry.example/gym-base@sha256:{_HASH}"
 
 
 def _write_lock(tmp_path: Path) -> tuple[Path, Path, EnvironmentLockRecord]:
@@ -54,9 +58,11 @@ def _write_lock(tmp_path: Path) -> tuple[Path, Path, EnvironmentLockRecord]:
         requirements_lock=_REQUIREMENTS_LOCK,
     )
     lock = EnvironmentLockRecord(
+        base_image=_BASE_IMAGE,
         platform="linux/amd64",
         python_version="3.13.14",
         uv_version="0.11.29",
+        gym_source_sha256=gym_build_source_digest(source_root),
         gym=GymIdentity(name="nemo-gym", version=__version__, source_kind="registry"),
         parent_packages=(
             PackageIdentity(name="ray", version="2.56.1"),
@@ -75,6 +81,14 @@ def test_load_verified_environment_lock_rejects_changed_component(tmp_path: Path
     (source_root / "resources_servers/example/app.py").write_text("changed = True\n", encoding="utf-8")
 
     with pytest.raises(ConfigError, match="Component content changed"):
+        load_verified_environment_lock(lock_path, source_root=source_root)
+
+
+def test_load_verified_environment_lock_binds_registry_gym_source(tmp_path: Path) -> None:
+    lock_path, source_root, _ = _write_lock(tmp_path)
+    (source_root / "nemo_gym/runtime.py").write_text("CHANGED = True\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="Gym source changed"):
         load_verified_environment_lock(lock_path, source_root=source_root)
 
 
@@ -110,7 +124,7 @@ def test_packed_build_command_carries_reproducibility_labels(tmp_path: Path) -> 
     command = packed_build_command(
         context_root=tmp_path,
         lock=lock,
-        base_image="registry.example/gym-base@sha256:abc",
+        base_image=_BASE_IMAGE,
         tag="registry.example/example:locked",
         platform="linux/amd64",
         load=True,
@@ -119,6 +133,8 @@ def test_packed_build_command_carries_reproducibility_labels(tmp_path: Path) -> 
     rendered = " ".join(command)
     assert "LOCK_IDENTITY=" + lock.identity in rendered
     assert "LOCK_SCHEMA=nemo-gym/environment-lock/v1" in rendered
+    assert f"UV_VERSION={lock.uv_version}" in rendered
+    assert f"GYM_SOURCE_SHA256={lock.gym_source_sha256}" in rendered
     assert "--platform linux/amd64" in rendered
     assert "--load" in command
 
@@ -142,7 +158,7 @@ def test_build_packed_image_verifies_before_docker(monkeypatch, tmp_path: Path) 
     build_packed_image(
         lock_path,
         source_root=source_root,
-        base_image="registry.example/gym-base@sha256:abc",
+        base_image=_BASE_IMAGE,
         tag="example:locked",
         platform="linux/amd64",
     )
@@ -152,10 +168,24 @@ def test_build_packed_image_verifies_before_docker(monkeypatch, tmp_path: Path) 
     assert f"LOCK_IDENTITY={lock.identity}" in command
 
 
+def test_build_packed_image_rejects_base_that_differs_from_lock(tmp_path: Path) -> None:
+    lock_path, source_root, _ = _write_lock(tmp_path)
+
+    with pytest.raises(ConfigError, match="does not match lock base image"):
+        build_packed_image(
+            lock_path,
+            source_root=source_root,
+            base_image=f"registry.example/other@sha256:{'f' * 64}",
+            tag="example:locked",
+            platform="linux/amd64",
+        )
+
+
 def test_packed_dockerfile_has_immutable_runtime_contract() -> None:
     dockerfile = (Path(environment_image.__file__).parents[2] / "docker/Dockerfile.packed").read_text(encoding="utf-8")
 
     assert "NEMO_GYM_RUNTIME_INSTALL_POLICY=require-existing" in dockerfile
+    assert 'test "$(uv --version | cut -d \' \' -f 2)" = "${UV_VERSION}"' in dockerfile
     assert 'LABEL io.nvidia.nemo-gym.runtime.protocol="${RUNTIME_PROTOCOL}"' in dockerfile
     assert "USER 65532:65532" in dockerfile
     assert 'ENTRYPOINT ["gym", "env", "start"]' in dockerfile
@@ -183,7 +213,7 @@ def test_build_split_images_writes_digest_pinned_bom(monkeypatch, tmp_path: Path
     bom = build_split_images(
         lock_path,
         source_root=source_root,
-        base_image="registry.example/gym-base@sha256:abc",
+        base_image=_BASE_IMAGE,
         repository="registry.example/gym/example",
         output_path=bom_path,
         platform="linux/amd64",
@@ -203,3 +233,48 @@ def test_server_dockerfile_has_distinct_foreground_targets() -> None:
     assert 'ENTRYPOINT ["gym", "env", "start-server"]' in dockerfile
     assert "FROM runtime AS head" in dockerfile
     assert 'ENTRYPOINT ["gym", "env", "start-head"]' in dockerfile
+
+
+def test_build_context_copies_transitive_source_dependencies(tmp_path: Path) -> None:
+    _, source_root, lock = _write_lock(tmp_path)
+    dependency_dir = source_root / "responses_api_models" / "shared"
+    dependency_dir.mkdir(parents=True)
+    (dependency_dir / "app.py").write_text("SHARED = True\n", encoding="utf-8")
+    dependency = SourceDependencyLock(
+        path="responses_api_models/shared",
+        content_sha256=component_content_digest(dependency_dir),
+    )
+    component = lock.components[0].model_copy(update={"source_dependencies": (dependency,)})
+    lock = lock.model_copy(update={"components": (component,)})
+    context_root = tmp_path / "context"
+    context_root.mkdir()
+
+    environment_image._copy_build_context(source_root, context_root, lock)
+
+    assert (context_root / "resources_servers/example").is_dir()
+    assert (context_root / "responses_api_models/shared/app.py").is_file()
+
+
+def test_component_build_steps_run_without_secret_environment(monkeypatch, tmp_path: Path) -> None:
+    _, source_root, lock = _write_lock(tmp_path)
+    component = lock.components[0].model_copy(
+        update={"build_steps": (ComponentBuildStep(argv=("builder",), expected_paths=(".built/tool",)),)}
+    )
+    lock = lock.model_copy(update={"components": (component,)})
+    monkeypatch.setenv("BUILD_PASSWORD", "must-not-be-forwarded")
+
+    def fake_run(argv, *, cwd, check, env):
+        assert argv == ["builder"]
+        assert check is True
+        assert "BUILD_PASSWORD" not in env
+        output = cwd / ".built/tool"
+        output.parent.mkdir()
+        output.write_text("ready\n", encoding="utf-8")
+
+    monkeypatch.setattr(environment_image.subprocess, "run", fake_run)
+
+    environment_image._execute_component_build_steps(
+        lock,
+        source_root=source_root,
+        component_selector=None,
+    )

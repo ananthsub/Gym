@@ -35,6 +35,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from nemo_gym import PARENT_DIR
 from nemo_gym.cli.setup_command import ComponentInstallPlan, component_install_plan
 from nemo_gym.config_types import ConfigError, ServerInstanceConfig
+from nemo_gym.environment.build_manifest import (
+    ComponentBuildStep,
+    component_source_closure,
+    load_component_build_manifest,
+)
 from nemo_gym.environment.protocol import ENVIRONMENT_LOCK_SCHEMA_VERSION, RUNTIME_PROTOCOL_VERSION
 from nemo_gym.global_config import (
     HEAD_SERVER_DEPS_KEY_NAME,
@@ -59,6 +64,7 @@ _SECRET_QUERY = re.compile(r"[?&](?:token|api[_-]?key|password|secret)=", re.IGN
 _SECRET_INTERPOLATION = re.compile(r"\$\{[^}]*(?:token|api[_-]?key|password|secret)[^}]*}", re.IGNORECASE)
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _REQUIREMENT_HASH = re.compile(r"--hash=sha256:[0-9a-f]{64}\b", re.IGNORECASE)
+_DIGEST_PINNED_IMAGE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 
 
 def _canonical_json(value: Any) -> str:
@@ -107,8 +113,20 @@ class ComponentLockRecord(_CanonicalLockModel):
     parent_constraints: tuple[str, ...]
     config_sha256: str = Field(pattern=_HASH_PATTERN)
     content_sha256: str = Field(pattern=_HASH_PATTERN)
+    source_dependencies: tuple["SourceDependencyLock", ...] = ()
+    build_steps: tuple[ComponentBuildStep, ...] = ()
     requirements_sha256: str = Field(pattern=_HASH_PATTERN)
     requirements_lock: str
+
+
+class SourceDependencyLock(BaseModel):
+    """A source-only component needed by a selected runtime component."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: str
+    content_sha256: str = Field(pattern=_HASH_PATTERN)
+    build_steps: tuple[ComponentBuildStep, ...] = ()
 
 
 class PackageIdentity(BaseModel):
@@ -134,9 +152,12 @@ class EnvironmentLockRecord(_CanonicalLockModel):
 
     schema_version: Literal["nemo-gym/environment-lock/v1"] = ENVIRONMENT_LOCK_SCHEMA_VERSION
     runtime_protocol: Literal["nemo-gym/runtime/v1"] = RUNTIME_PROTOCOL_VERSION
+    strict: bool = True
+    base_image: str
     platform: str
     python_version: str
     uv_version: str
+    gym_source_sha256: str = Field(pattern=_HASH_PATTERN)
     gym: GymIdentity
     parent_packages: tuple[PackageIdentity, ...]
     config_sha256: str = Field(pattern=_HASH_PATTERN)
@@ -168,6 +189,36 @@ def redacted_config_digest(value: Any) -> str:
         OmegaConf.to_container(value, resolve=True) if isinstance(value, (DictConfig, ListConfig)) else deepcopy(value)
     )
     return _sha256_text(_canonical_json(_redacted_value(plain)))
+
+
+def _is_deployment_key(key: str) -> bool:
+    normalized = key.lower().replace("-", "_")
+    return normalized in {"host", "port"} or normalized.endswith(
+        ("_host", "_port", "_url", "_base_url", "_address", "_endpoint")
+    )
+
+
+def _build_config_value(value: Any, key: str | None = None) -> Any:
+    if key is not None and (looks_like_secret_key(key) or _is_deployment_key(key)):
+        return MASKED_VALUE
+    if isinstance(value, (DictConfig, Mapping)):
+        return {
+            str(child_key): _build_config_value(child_value, str(child_key))
+            for child_key, child_value in value.items()
+        }
+    if isinstance(value, (ListConfig, list, tuple)):
+        return [_build_config_value(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+def build_config_digest(value: Any) -> str:
+    """Hash behavior-affecting configuration without secrets or deployment locations."""
+    plain = (
+        OmegaConf.to_container(value, resolve=True) if isinstance(value, (DictConfig, ListConfig)) else deepcopy(value)
+    )
+    return _sha256_text(_canonical_json(_build_config_value(plain)))
 
 
 def component_content_digest(component_dir: Path) -> str:
@@ -603,16 +654,23 @@ def _environment_config_digest(global_config_dict: DictConfig, servers: Sequence
             server.name: OmegaConf.to_container(server.server_type_config_dict, resolve=True) for server in servers
         },
     }
-    return redacted_config_digest(digest_input)
+    return build_config_digest(digest_input)
 
 
 def build_environment_lock(
     global_config_dict: DictConfig,
     *,
+    base_image: str,
     platform: str,
+    source_root: Path = PARENT_DIR,
     strict: bool = True,
 ) -> EnvironmentLockRecord:
     """Resolve and compile dependency locks for every configured server component."""
+    if strict and _DIGEST_PINNED_IMAGE.fullmatch(base_image) is None:
+        raise ConfigError("Strict environment locks require --base-image to use an OCI sha256 digest")
+    source_root = source_root.resolve()
+    if not (source_root / "nemo_gym").is_dir():
+        raise ConfigError(f"Gym source root does not contain nemo_gym/: {source_root}")
     parser = GlobalConfigDictParser()
     servers = parser.filter_for_server_instance_configs(global_config_dict)
     parser.raise_on_no_server_instances(global_config_dict)
@@ -623,6 +681,13 @@ def build_environment_lock(
 
     from nemo_gym.cli.env import _resolve_server_dir
 
+    resolved_components: dict[str, Path] = {}
+
+    def resolve_component(path: str) -> Path:
+        if path not in resolved_components:
+            resolved_components[path] = _resolve_server_dir(Path(path))
+        return resolved_components[path]
+
     grouped_servers: dict[tuple[str, str], list[ServerInstanceConfig]] = {}
     for server in servers:
         coordinates = _component_coordinates(server)
@@ -631,7 +696,7 @@ def build_environment_lock(
     components: list[ComponentLockRecord] = []
     for (component_type, implementation), component_servers in sorted(grouped_servers.items()):
         relative_source = Path(component_type, implementation)
-        component_dir = _resolve_server_dir(relative_source)
+        component_dir = resolve_component(relative_source.as_posix())
         plan = component_install_plan(component_dir, global_config_dict, respect_existing_venv=False)
         constraints = _exact_parent_constraints(global_config_dict, gym, parent_packages)
         if plan.is_editable_gym_install:
@@ -647,6 +712,18 @@ def build_environment_lock(
         if source_kind is None:
             raise ConfigError(f"Component {component_dir} has no dependency source")
         sorted_servers = sorted(component_servers, key=lambda item: item.name)
+        source_dependencies = tuple(
+            SourceDependencyLock(
+                path=dependency,
+                content_sha256=component_content_digest(resolve_component(dependency)),
+                build_steps=load_component_build_manifest(resolve_component(dependency)).build_steps,
+            )
+            for dependency in component_source_closure(
+                relative_source.as_posix(),
+                resolve_component=resolve_component,
+            )
+        )
+        build_steps = load_component_build_manifest(component_dir).build_steps
         components.append(
             ComponentLockRecord(
                 instances=tuple(server.name for server in sorted_servers),
@@ -658,22 +735,27 @@ def build_environment_lock(
                 python_version=plan.python_version,
                 uv_version=uv_version,
                 parent_constraints=constraints,
-                config_sha256=redacted_config_digest(
+                config_sha256=build_config_digest(
                     {
                         server.name: OmegaConf.to_container(server.server_type_config_dict, resolve=True)
                         for server in sorted_servers
                     }
                 ),
                 content_sha256=component_content_digest(component_dir),
+                source_dependencies=source_dependencies,
+                build_steps=build_steps,
                 requirements_sha256=_sha256_text(requirements_lock),
                 requirements_lock=requirements_lock,
             )
         )
 
     return EnvironmentLockRecord(
+        strict=strict,
+        base_image=base_image,
         platform=platform,
         python_version=str(global_config_dict[PYTHON_VERSION_KEY_NAME]),
         uv_version=uv_version,
+        gym_source_sha256=gym_build_source_digest(source_root),
         gym=gym,
         parent_packages=parent_packages,
         config_sha256=_environment_config_digest(global_config_dict, servers),
@@ -695,7 +777,18 @@ def lock_environment() -> None:
     if not isinstance(strict, bool):
         raise ConfigError("strict must be a boolean")
 
-    lock = build_environment_lock(global_config_dict, platform=platform, strict=strict)
+    base_image = global_config_dict.get("base_image")
+    if not isinstance(base_image, str) or not base_image:
+        raise ConfigError("gym env lock requires --base-image IMAGE@sha256:DIGEST")
+    source_root = Path(global_config_dict.get("source_root", PARENT_DIR))
+
+    lock = build_environment_lock(
+        global_config_dict,
+        base_image=base_image,
+        platform=platform,
+        source_root=source_root,
+        strict=strict,
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(lock.canonical_json() + "\n", encoding="utf-8")
     print(f"Wrote {output} ({lock.identity})")

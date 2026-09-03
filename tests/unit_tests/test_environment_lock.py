@@ -30,6 +30,7 @@ from nemo_gym.environment.lock import (
     EnvironmentLockRecord,
     GymIdentity,
     PackageIdentity,
+    build_config_digest,
     build_environment_lock,
     compile_component_requirements,
     gym_build_source_digest,
@@ -41,6 +42,7 @@ from nemo_gym.environment.lock import (
 
 _HASH = "a" * 64
 _HASHED_REQUIREMENT = f"demo==1 \\\n    --hash=sha256:{_HASH}\n"
+_BASE_IMAGE = f"registry.example/gym-base@sha256:{_HASH}"
 
 
 def _plan(component_dir: Path, source_kind: str = "requirements") -> ComponentInstallPlan:
@@ -86,9 +88,11 @@ def test_lock_records_have_stable_canonical_identity() -> None:
     first_component = _component_record()
     second_component = _component_record()
     first = EnvironmentLockRecord(
+        base_image=_BASE_IMAGE,
         platform="x86_64-unknown-linux-gnu",
         python_version="3.13.14",
         uv_version="0.12.2",
+        gym_source_sha256=_HASH,
         gym=GymIdentity(name="nemo-gym", version="0.7.0", source_kind="registry"),
         parent_packages=(
             PackageIdentity(name="ray", version="2.49.0"),
@@ -129,11 +133,56 @@ def test_gym_build_source_digest_covers_runtime_lock_and_image_recipe(tmp_path: 
     assert gym_build_source_digest(tmp_path) != original
 
 
+def test_strict_lock_rejects_mutable_base_image(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="OCI sha256 digest"):
+        build_environment_lock(
+            DictConfig({}),
+            base_image="registry.example/gym-base:latest",
+            platform="linux/amd64",
+            source_root=tmp_path,
+            strict=True,
+        )
+
+
 def test_redacted_config_digest_does_not_depend_on_secret_values() -> None:
-    first = {"model": {"api_key": "secret-one", "headers": ["Bearer secret-two"], "name": "same"}}
-    second = {"model": {"api_key": "different", "headers": ["different"], "name": "same"}}
+    secret_keys = (
+        "api_key",
+        "token",
+        "headers",
+        "password",
+        "client_secret",
+        "credential",
+        "authorization",
+        "session_cookie",
+        "private_header",
+    )
+    first = {"model": {**dict.fromkeys(secret_keys, "secret-one"), "name": "same"}}
+    second = {"model": {**dict.fromkeys(secret_keys, "different"), "name": "same"}}
 
     assert redacted_config_digest(first) == redacted_config_digest(second)
+
+
+def test_build_config_digest_excludes_deployment_locations_but_keeps_behavior() -> None:
+    first = {
+        "model": {
+            "host": "127.0.0.1",
+            "port": 10001,
+            "openai_base_url": "https://first.example/v1",
+            "openai_model": "same-model",
+        }
+    }
+    second = {
+        "model": {
+            "host": "0.0.0.0",
+            "port": 20002,
+            "openai_base_url": "https://second.example/v1",
+            "openai_model": "same-model",
+        }
+    }
+
+    assert build_config_digest(first) == build_config_digest(second)
+    second["model"]["openai_model"] = "different-model"
+    assert build_config_digest(first) != build_config_digest(second)
 
 
 @pytest.mark.parametrize(
@@ -347,7 +396,12 @@ def test_build_lock_uses_current_component_search_resolution(monkeypatch, tmp_pa
     monkeypatch.setattr(environment_lock.shutil, "which", lambda name: "/venv/bin/uv")
     monkeypatch.setattr(environment_lock.subprocess, "run", fake_run)
 
-    lock = build_environment_lock(config, platform="x86_64-unknown-linux-gnu", strict=True)
+    lock = build_environment_lock(
+        config,
+        base_image=_BASE_IMAGE,
+        platform="x86_64-unknown-linux-gnu",
+        strict=True,
+    )
 
     assert resolved_paths == [Path("resources_servers/demo")]
     assert len(lock.components) == 1
@@ -367,11 +421,13 @@ def test_build_lock_uses_current_component_search_resolution(monkeypatch, tmp_pa
 
 
 def test_lock_environment_is_strict_and_uses_canonical_default_filename(monkeypatch, tmp_path: Path) -> None:
-    config = DictConfig({"platform": "x86_64-unknown-linux-gnu"})
+    config = DictConfig({"platform": "x86_64-unknown-linux-gnu", "base_image": _BASE_IMAGE})
     expected = EnvironmentLockRecord(
+        base_image=_BASE_IMAGE,
         platform="x86_64-unknown-linux-gnu",
         python_version="3.13.14",
         uv_version="0.12.2",
+        gym_source_sha256=_HASH,
         gym=GymIdentity(name="nemo-gym", version="0.7.0", source_kind="registry"),
         parent_packages=(
             PackageIdentity(name="ray", version="2.49.0"),
@@ -380,10 +436,10 @@ def test_lock_environment_is_strict_and_uses_canonical_default_filename(monkeypa
         config_sha256="4" * 64,
         components=(),
     )
-    calls: list[tuple[str, bool]] = []
+    calls: list[tuple[str, str, bool]] = []
 
-    def fake_build(global_config_dict, *, platform, strict):
-        calls.append((platform, strict))
+    def fake_build(global_config_dict, *, base_image, platform, source_root, strict):
+        calls.append((base_image, platform, strict))
         return expected
 
     monkeypatch.chdir(tmp_path)
@@ -393,5 +449,5 @@ def test_lock_environment_is_strict_and_uses_canonical_default_filename(monkeypa
     lock_environment()
 
     output = tmp_path / "environment.lock.json"
-    assert calls == [("x86_64-unknown-linux-gnu", True)]
+    assert calls == [(_BASE_IMAGE, "x86_64-unknown-linux-gnu", True)]
     assert output.read_text(encoding="utf-8") == expected.canonical_json() + "\n"

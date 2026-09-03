@@ -20,6 +20,7 @@ from nemo_gym.global_config import get_global_config_dict
 
 PREPARED_ARTIFACT_MANIFEST = "manifest.json"
 TASK_ID_KEY = "task_id"
+NEMO_GYM_ENVIRONMENT_LOCK_ENV_VAR = "NEMO_GYM_ENVIRONMENT_LOCK"
 _RUNTIME_ROW_KEYS = frozenset({"_ng_task_index", "_ng_rollout_index"})
 
 
@@ -39,12 +40,13 @@ class PreparedArtifactManifest(BaseModel):
     data_file: str
     data_sha256: str
     row_count: int = Field(ge=0)
-    source_sha256: str
+    input_sha256: str
     config_sha256: str | None = None
     environment_lock_identity: str | None = None
 
     def canonical_payload(self) -> bytes:
-        payload = self.model_dump(mode="json", exclude={"artifact_id"})
+        # Original bytes are provenance, while artifact identity follows normalized task content.
+        payload = self.model_dump(mode="json", exclude={"artifact_id", "input_sha256"})
         return orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)
 
     @model_validator(mode="after")
@@ -120,7 +122,7 @@ def create_prepared_artifact(
         data_file=data_file,
         data_sha256=_sha256(data),
         row_count=row_count,
-        source_sha256=_sha256(data),
+        input_sha256=_sha256(source_path.read_bytes()),
         config_sha256=config_sha256,
         environment_lock_identity=environment_lock_identity,
     )
@@ -174,6 +176,32 @@ def load_prepared_artifact(path: Path) -> tuple[PreparedArtifactManifest, Path]:
             f"Prepared artifact directory must equal its digest: expected {manifest.artifact_id}, got {artifact_dir.name}"
         )
     return manifest, data_path
+
+
+def validate_prepared_artifact_lock(
+    manifest: PreparedArtifactManifest,
+    *,
+    environment_lock_path: Path | None,
+) -> None:
+    """Require artifact and runtime lock identities to be declared together and match."""
+    artifact_identity = manifest.environment_lock_identity
+    if environment_lock_path is None:
+        if artifact_identity is not None:
+            raise ConfigError(
+                "Prepared artifact declares an environment lock, but the runtime has no environment lock to verify"
+            )
+        return
+    try:
+        runtime_lock = EnvironmentLockRecord.model_validate_json(environment_lock_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ConfigError(f"Runtime environment lock is invalid: {exc}") from exc
+    if artifact_identity is None:
+        raise ConfigError("Prepared artifact is not bound to the runtime environment lock")
+    if artifact_identity != runtime_lock.identity:
+        raise ConfigError(
+            f"Prepared artifact lock mismatch: artifact requires {artifact_identity}, "
+            f"runtime provides {runtime_lock.identity}"
+        )
 
 
 def prepare_artifact_cli() -> None:

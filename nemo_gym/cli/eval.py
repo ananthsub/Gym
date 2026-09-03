@@ -16,6 +16,7 @@ import asyncio
 import importlib
 import json
 import logging
+import os
 from collections.abc import Sequence
 from copy import deepcopy
 from multiprocessing import Pool
@@ -395,7 +396,11 @@ def _validate_prepared_split_file_exists(input_jsonl_fpath: Path, split: str, ou
 
 @exit_cleanly_on_config_error
 def e2e_rollout_collection():  # pragma: no cover
-    from nemo_gym.environment.artifact import load_prepared_artifact
+    from nemo_gym.environment.artifact import (
+        NEMO_GYM_ENVIRONMENT_LOCK_ENV_VAR,
+        load_prepared_artifact,
+        validate_prepared_artifact_lock,
+    )
     from nemo_gym.rollout_collection import (
         E2ERolloutCollectionConfig,
         RolloutCollectionConfig,
@@ -421,6 +426,11 @@ def e2e_rollout_collection():  # pragma: no cover
                 f"Prepared artifact split {artifact_manifest.split!r} does not match "
                 f"the requested split {e2e_rollout_collection_config.split!r}"
             )
+        lock_path_value = global_config_dict.get("environment_lock") or os.getenv(NEMO_GYM_ENVIRONMENT_LOCK_ENV_VAR)
+        validate_prepared_artifact_lock(
+            artifact_manifest,
+            environment_lock_path=Path(lock_path_value) if lock_path_value else None,
+        )
         preparation_description = f"Prepared artifact: {Path(prepared_artifact).resolve()}"
     else:
         data_processor_config_dict = deepcopy(global_config_dict)

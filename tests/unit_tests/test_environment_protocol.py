@@ -21,8 +21,12 @@ def test_runtime_capabilities_publish_versioned_offline_contract() -> None:
     assert capabilities.environment_lock_schema == "nemo-gym/environment-lock/v1"
     assert capabilities.prepared_artifact_schema == "nemo-gym/prepared-artifact/v1"
     assert capabilities.composition_bom_schema == "nemo-gym/composition-bom/v1"
+    assert capabilities.launch_plan_schema == "nemo-gym/launch-plan/v1"
     assert capabilities.require_existing_runtime_policy is True
-    assert capabilities.offline_runtime_installation is True
+    assert capabilities.digest_pinned_base_images is True
+    assert capabilities.prepared_artifact_lock_enforcement is True
+    assert capabilities.launch_plan_rendering is True
+    assert capabilities.offline_runtime_installation is False
 
 
 def test_unknown_runtime_protocol_is_rejected() -> None:

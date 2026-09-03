@@ -167,6 +167,32 @@ def test_split_image_and_standalone_commands_dispatch(monkeypatch: MonkeyPatch) 
     assert overrides == []
 
 
+def test_render_launch_plan_dispatches_build_and_runtime_inputs(monkeypatch: MonkeyPatch) -> None:
+    target, overrides = _dispatch_for(
+        monkeypatch,
+        [
+            "env",
+            "render-launch-plan",
+            "--config",
+            "runtime.yaml",
+            "--bom",
+            "composition.bom.json",
+            "--lock",
+            "environment.lock.json",
+            "--output",
+            "launch-plan.json",
+        ],
+    )
+
+    assert target == "nemo_gym.environment.launch_plan:render_launch_plan_cli"
+    assert set(overrides) == {
+        "+config_paths=[runtime.yaml]",
+        '+bom="composition.bom.json"',
+        '+lock="environment.lock.json"',
+        '+output="launch-plan.json"',
+    }
+
+
 class TestConfigFlag:
     @pytest.mark.parametrize("command, expected_target", CONFIG_COMMANDS)
     def test_config_becomes_config_paths(self, monkeypatch: MonkeyPatch, command, expected_target) -> None:

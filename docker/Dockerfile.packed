@@ -10,6 +10,8 @@ ARG LOCK_IDENTITY
 ARG LOCK_SCHEMA
 ARG GYM_VERSION
 ARG PYTHON_VERSION
+ARG UV_VERSION
+ARG GYM_SOURCE_SHA256
 ARG RUNTIME_PROTOCOL
 ARG TARGET_KIND=packed
 
@@ -26,9 +28,12 @@ RUN test -n "${LOCK_IDENTITY}" \
     && test -n "${LOCK_SCHEMA}" \
     && test -n "${GYM_VERSION}" \
     && test -n "${PYTHON_VERSION}" \
+    && test -n "${UV_VERSION}" \
+    && test -n "${GYM_SOURCE_SHA256}" \
     && test -n "${RUNTIME_PROTOCOL}" \
     && command -v uv >/dev/null \
-    && python -c 'import platform, sys; expected = sys.argv[1]; actual = platform.python_version(); assert actual == expected, f"Python {actual} != locked {expected}"' "${PYTHON_VERSION}"
+    && python -c 'import platform, sys; expected = sys.argv[1]; actual = platform.python_version(); assert actual == expected, f"Python {actual} != locked {expected}"' "${PYTHON_VERSION}" \
+    && test "$(uv --version | cut -d ' ' -f 2)" = "${UV_VERSION}"
 
 RUN uv sync --locked --no-dev --python /opt/python/bin/python
 ENV PATH="/opt/nemo-gym/.venv-root/bin:/opt/python/bin:${PATH}"
@@ -47,6 +52,8 @@ ARG LOCK_IDENTITY
 ARG LOCK_SCHEMA
 ARG GYM_VERSION
 ARG PYTHON_VERSION
+ARG UV_VERSION
+ARG GYM_SOURCE_SHA256
 ARG RUNTIME_PROTOCOL
 ARG TARGET_KIND=packed
 
@@ -56,6 +63,8 @@ LABEL io.nvidia.nemo-gym.lock.digest="${LOCK_IDENTITY}"
 LABEL io.nvidia.nemo-gym.lock.schema="${LOCK_SCHEMA}"
 LABEL io.nvidia.nemo-gym.core.version="${GYM_VERSION}"
 LABEL io.nvidia.nemo-gym.python.version="${PYTHON_VERSION}"
+LABEL io.nvidia.nemo-gym.uv.version="${UV_VERSION}"
+LABEL io.nvidia.nemo-gym.source.digest="${GYM_SOURCE_SHA256}"
 LABEL io.nvidia.nemo-gym.runtime.protocol="${RUNTIME_PROTOCOL}"
 
 USER root
@@ -68,6 +77,7 @@ COPY --from=build --chown=65532:65532 /opt/nemo-gym /opt/nemo-gym
 ENV UV_PROJECT_ENVIRONMENT=/opt/nemo-gym/.venv-root
 ENV PATH="/opt/nemo-gym/.venv-root/bin:/opt/python/bin:${PATH}"
 ENV NEMO_GYM_RUNTIME_INSTALL_POLICY=require-existing
+ENV NEMO_GYM_ENVIRONMENT_LOCK=/opt/nemo-gym/environment.lock.json
 ENV HOME=/tmp/nemo-gym-home
 ENV XDG_CACHE_HOME=/tmp/nemo-gym-cache
 ENV UV_CACHE_DIR=/tmp/nemo-gym-cache/uv

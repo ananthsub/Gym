@@ -1,13 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
 from nemo_gym.config_types import ConfigError
-from nemo_gym.environment.artifact import create_prepared_artifact, load_prepared_artifact
+from nemo_gym.environment.artifact import (
+    create_prepared_artifact,
+    load_prepared_artifact,
+    validate_prepared_artifact_lock,
+)
+from nemo_gym.environment.lock import EnvironmentLockRecord, GymIdentity
 
 
 def _write_source(path: Path) -> None:
@@ -42,6 +48,7 @@ def test_create_prepared_artifact_is_content_addressed_and_reusable(tmp_path: Pa
     assert first.name == manifest.artifact_id
     assert manifest.row_count == 2
     assert manifest.environment_lock_identity == "b" * 64
+    assert manifest.input_sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
     rows = [json.loads(line) for line in data_path.read_text(encoding="utf-8").splitlines()]
     assert all(row["task_id"].startswith("ng:") for row in rows)
     assert len({row["task_id"] for row in rows}) == 2
@@ -92,3 +99,54 @@ def test_create_prepared_artifact_rejects_unsafe_split(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Prepared artifact split"):
         create_prepared_artifact(source, output_root=tmp_path / "artifacts", split="../../escape")
+
+
+def _write_environment_lock(path: Path) -> EnvironmentLockRecord:
+    lock = EnvironmentLockRecord(
+        base_image=f"registry.example/base@sha256:{'1' * 64}",
+        platform="linux/amd64",
+        python_version="3.13.14",
+        uv_version="0.12.2",
+        gym_source_sha256="2" * 64,
+        gym=GymIdentity(name="nemo-gym", version="0.7.0", source_kind="registry"),
+        parent_packages=(),
+        config_sha256="3" * 64,
+        components=(),
+    )
+    path.write_text(lock.canonical_json(), encoding="utf-8")
+    return lock
+
+
+def test_prepared_artifact_requires_matching_runtime_lock(tmp_path: Path) -> None:
+    lock_path = tmp_path / "environment.lock.json"
+    lock = _write_environment_lock(lock_path)
+    source = tmp_path / "input.jsonl"
+    _write_source(source)
+    artifact = create_prepared_artifact(
+        source,
+        output_root=tmp_path / "artifacts",
+        split="benchmark",
+        environment_lock_identity=lock.identity,
+    )
+    manifest, _ = load_prepared_artifact(artifact)
+
+    validate_prepared_artifact_lock(manifest, environment_lock_path=lock_path)
+
+    mismatched = manifest.model_copy(update={"environment_lock_identity": "f" * 64})
+    with pytest.raises(ConfigError, match="lock mismatch"):
+        validate_prepared_artifact_lock(mismatched, environment_lock_path=lock_path)
+
+
+def test_bound_artifact_rejects_runtime_without_lock(tmp_path: Path) -> None:
+    source = tmp_path / "input.jsonl"
+    _write_source(source)
+    artifact = create_prepared_artifact(
+        source,
+        output_root=tmp_path / "artifacts",
+        split="benchmark",
+        environment_lock_identity="b" * 64,
+    )
+    manifest, _ = load_prepared_artifact(artifact)
+
+    with pytest.raises(ConfigError, match="runtime has no environment lock"):
+        validate_prepared_artifact_lock(manifest, environment_lock_path=None)
