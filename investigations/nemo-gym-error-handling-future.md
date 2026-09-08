@@ -1,6 +1,6 @@
 # Proposed error handling in NeMo Gym
 
-This document proposes how NeMo Gym should report failures, retry temporary errors, and stop work without hanging. Read it with the [current-state summary](./nemo-gym-error-handling-today.md) and the detailed [rollout failure catalogue](./nemo-gym-rollout-error-catalogue.md). Tracking issue: [#2750](https://github.com/NVIDIA-NeMo/Gym/issues/2750). Implementation status and pull-request dispositions below are as of upstream `main` @ `98713f8e9` (2026-09-02).
+This document proposes how NeMo Gym should report failures, retry temporary errors, and stop work without hanging. Read it with the [current-state summary](./nemo-gym-error-handling-today.md), the detailed [rollout failure catalogue](./nemo-gym-rollout-error-catalogue.md), and the [resources-session API design](./nemo-gym-close-session-design.md). Tracking issue: [#2750](https://github.com/NVIDIA-NeMo/Gym/issues/2750).
 
 ## Goals and responsibility boundaries
 
@@ -53,11 +53,11 @@ A context manager such as `RunHelper.running()` can pair startup and shutdown fo
 
 Process shutdown does not release resources allocated for one rollout on a remote resources server. A stateful environment may allocate a browser, container, provider session, or quota slot during `/seed_session`. The rollout may then fail or be cancelled before `/verify`, which is where some environments currently perform cleanup. Retrying the rollout can allocate another session while the first remains live.
 
-`SimpleResourcesServer` should expose an idempotent `/close_session` operation. Agent code should put `/seed_session`, model and tool work, `/verify`, and `/close_session` in one lifecycle scope. The release belongs in `finally`, and its bounded failure must not hide the rollout's original result or failure.
+`SimpleResourcesServer` should expose an idempotent `POST /close_session`. The endpoint has dedicated request and response models and never returns or changes reward. Agent code should put `/seed_session`, model and tool work, `/verify`, and `/close_session` in one lifecycle scope. The release belongs in `finally`, and its bounded failure must not hide the rollout's original result or failure.
 
 Caller-driven release cannot handle a killed agent or collector. Stateful environments therefore also need an optional idle-session deadline and a server-side sweeper. The sweeper is a backstop, not the normal release path. Environments that do not allocate per-rollout resources can keep the default no-op release and no sweeper.
 
-The rollout dispatcher must create the logical session identifier before it sends `/run`. The agent forwards that identifier to `/seed_session` and `/close_session`. One rollout attempt uses one identifier across every HTTP transmission of the seed operation. A new rollout attempt uses a new identifier. The resources server stores the seed result by identifier, so a repeated `/seed_session` returns the same logical session instead of allocating another resource. Because the dispatcher and agent already know the identifier, either can record it when a response is lost.
+The rollout dispatcher creates a high-entropy `_ng_session_id` and a separate one-session close capability before it sends `/run`. The agent forwards them to `/seed_session` and uses them for `/close_session` when the signed cookie is unavailable. One rollout attempt uses the same values across every HTTP transmission of the seed operation. A new rollout attempt creates new values. The resources server stores the seed result by identifier, so a repeated `/seed_session` returns the same logical session instead of allocating another resource. Because the dispatcher and agent already know the identifier and close capability, they can request release when a response is lost without letting a public session ID authorize cross-session cleanup.
 
 An environment may have a separate provider-side handle, such as a cloud browser identifier. It may return that opaque handle for diagnostics, but that handle cannot be the only release key because the caller does not receive it when the seed response is lost.
 
@@ -80,13 +80,13 @@ sequenceDiagram
     Note over R,P: Idle deadline releases it if the caller disappears
 ```
 
-[Issue #2609: add a teardown hook for stateful resources servers](https://github.com/NVIDIA-NeMo/Gym/issues/2609) describes the missing release boundary. [PR #2612: add an idempotent close hook and idle sweeper](https://github.com/NVIDIA-NeMo/Gym/pull/2612) provides an implementation direction. [PR #2613: expose environment-session identity](https://github.com/NVIDIA-NeMo/Gym/pull/2613) provides correlation fields, but replay-safe seeding additionally requires the caller-created identifier described above.
+The [resources-session API design](./nemo-gym-close-session-design.md) defines identity resolution, response status, cancellation behavior, compatibility, and the resources servers that need to adopt the hook. [Issue #2609](https://github.com/NVIDIA-NeMo/Gym/issues/2609) tracks the explicit endpoint, [issue #3037](https://github.com/NVIDIA-NeMo/Gym/issues/3037) tracks the common lifecycle and adoption audit, and [issue #3039](https://github.com/NVIDIA-NeMo/Gym/issues/3039) separately tracks multi-worker state placement.
 
 ## Failure records and shared names
 
 ### Failure-kind registry
 
-`nemo_gym/failure_kinds.py` defines stable strings for failures shared across components. The field remains a string so an environment can add a namespaced value such as `<server>:<kind>`.
+[Issue #3179](https://github.com/NVIDIA-NeMo/Gym/issues/3179) owns a small `nemo_gym/failure_kinds.py` registry of stable strings shared across components. The field remains a string so an environment can add a namespaced value such as `<server>:<kind>`.
 
 The registry does not decide whether a failure is retryable or whether a result should be masked. Those facts depend on the specific operation and belong on the failure record or returned result.
 
@@ -116,7 +116,7 @@ Verifier responses use three top-level fields:
 - `failure_kind` provides a stable machine-readable category.
 - `failure_reason` explains the specific occurrence to a person.
 
-The fields stay separate because they answer different questions. A caller should not infer masking or retry policy from a failure name alone.
+The fields stay separate because they answer different questions. A caller should not infer masking or retry policy from a failure name alone. [Issue #2608](https://github.com/NVIDIA-NeMo/Gym/issues/2608) owns these Gym fields. [NVIDIA-NeMo/RL issue #4061](https://github.com/NVIDIA-NeMo/RL/issues/4061) owns their propagation through training and their effect on prompt-group statistics.
 
 ## Transport retry policy
 
@@ -192,7 +192,7 @@ The remaining work in this area:
 
 - The sidecar row is a dictionary with `_ng_failure_*` keys. It should become the `RolloutFailureRecord` model above, so it gains delivery state, retry guidance, the stage that failed, and rollout identity, and so library callers can receive the same record through `run_outcomes()` instead of a raw exception.
 - A 4xx status the agent itself returned is recorded as `agent_run_error` and retried on resume. Deterministic client errors (400, 401, 403, 404, 422) should set `_ng_failure_terminal=True` so resume does not repeat them; 408 and 429 stay retryable.
-- Reverification `/verify` requests still raise on failure and end the reverification run. They need the same conversion under a verify-specific class such as `verify_request_failed`, which is the only part of [PR #2363](https://github.com/NVIDIA-NeMo/Gym/pull/2363) that #2017 did not supersede.
+- Reverification `/verify` requests still raise on failure and end the reverification run. They need the same conversion under a verify-specific kind such as `verify_request_failed`. [PR #2363](https://github.com/NVIDIA-NeMo/Gym/pull/2363) is closed as superseded; [issue #2135](https://github.com/NVIDIA-NeMo/Gym/issues/2135) owns the remaining behavior.
 - The transport below the collector still re-sends a request after a disconnect or socket error without checking delivery. The transport phase below fixes that.
 
 ### The default for managed evaluation
@@ -250,110 +250,90 @@ A run manifest stores the run identifier and digests of the materialized input a
 
 Aggregation reports expected, completed, failed by category, omitted, and unknown counts next to metrics computed from valid results. Failure records bypass token-capture finalization because they do not contain valid token payloads.
 
-## Implementation sequence
+## Delivery sequence and parallel work
 
-The order matters because a finite lower-layer retry must have a consuming layer that can record its final failure.
+The tracking graph uses issue hierarchy for ownership and explicit dependency sections for merge order. [Issue #2750](https://github.com/NVIDIA-NeMo/Gym/issues/2750) is a standalone reliability epic. [Issue #2831](https://github.com/NVIDIA-NeMo/Gym/issues/2831) remains the observability epic and owns the telemetry work in [issue #3182](https://github.com/NVIDIA-NeMo/Gym/issues/3182).
 
-### Build on landed foundations and independent fixes
+### Work that can start now
 
-Landed: [PR #2723: clear the failure sidecar on fresh runs](https://github.com/NVIDIA-NeMo/Gym/pull/2723), [PR #2726: preserve HTTP errors across process boundaries](https://github.com/NVIDIA-NeMo/Gym/pull/2726) (which extracted the fix from [PR #1788](https://github.com/NVIDIA-NeMo/Gym/pull/1788), now closed), [PR #2552: add human-readable verifier diagnosis](https://github.com/NVIDIA-NeMo/Gym/pull/2552), and [PR #2383: recover judge endpoint changes](https://github.com/NVIDIA-NeMo/Gym/pull/2383), which also added the opt-in `max_connection_retries` bound on the transport's disconnect and socket-error branches.
+The first wave can proceed in parallel because each item defines a separate contract:
 
-Open: [PR #2728: define shared failure names](https://github.com/NVIDIA-NeMo/Gym/pull/2728), the registry above; its vocabulary must include the framework classes `agent_run_error` and `agent_request_failed` that #2017 introduced. [PR #2361: classify transport failures](https://github.com/NVIDIA-NeMo/Gym/pull/2361) needs a rebase onto `_request_with_retries()` that keeps the `max_connection_retries` check, the six-kind split above (its head has five kinds and folds connect and response timeouts together), and a delivery-state mapping per kind. [PR #1005](https://github.com/NVIDIA-NeMo/Gym/pull/1005) is closed.
-
-This foundation is complete when HTTP errors preserve their useful details across process boundaries, the first network failure produces a useful category with a delivery state, and verifier responses can explain unusable results consistently.
-
-### Keep one agent request failure from ending collection
-
-Partly landed. [PR #2017](https://github.com/NVIDIA-NeMo/Gym/pull/2017) records a failed agent `/run` as a row-associated sidecar entry without a reward or response, and [PR #2883](https://github.com/NVIDIA-NeMo/Gym/pull/2883) reports coverage against the materialized input; see "What `main` has today, and what remains" above. [PR #2363](https://github.com/NVIDIA-NeMo/Gym/pull/2363) is superseded and should be closed; its reverification routing becomes a small new PR.
-
-Remaining: `RolloutFailureRecord` as the schema behind the sidecar row, `run_outcomes()` and the `run_examples()` compatibility behavior for library callers, terminal marking for deterministic 4xx responses, reverification `/verify` routing, and the default decision above.
-
-This phase is complete when an agent HTTP error produces a failure sidecar row, independent rollouts continue, resume creates a new attempt identity, output metrics report exact coverage, and a library caller can receive the same failure as a serializable record.
-
-### Close remote sessions before rollout retry can multiply them
-
-Add the dispatcher-created session identifier, propagation through `/run`, receiver-side seed deduplication, idempotent `/close_session`, an agent lifecycle scope, and an optional idle-session deadline. Keep a provider-side environment handle separate from the logical identifier when both are useful.
-
-[Issue #2609: define teardown for stateful resources servers](https://github.com/NVIDIA-NeMo/Gym/issues/2609), [PR #2612: add explicit release and idle reclamation](https://github.com/NVIDIA-NeMo/Gym/pull/2612), and [PR #2613: return environment-session identity](https://github.com/NVIDIA-NeMo/Gym/pull/2613) provide the current design inputs. The final API must let `/close_session` identify the session even if `/seed_session` returned no response, and the sweeper must be able to release that same session without caller state.
-
-Review of the current PR heads against this contract:
-
-- #2612 has the right shape for the hook, the `finally` scope, and the sweeper, but its session key is the cookie session id that the server mints on the first request. The caller learns that id only from the seed response. When the seed response is lost, `/close_session` without the cookie resolves a fresh id and releases nothing, and a replayed `/seed_session` allocates a second session; with the cookie, a replay re-runs the environment's allocation. The PR does not change `/seed_session` at all. It also does not bound the close call (a hung `/close_session` pins a cancelled rollout), returns no cleanup status on the result, adopts the scope in one agent out of thirty that call `/seed_session`, starts the sweeper with a bare `create_task` whose reference is not held, never calls `touch_session` from the base `seed_session` or `forget_session` from the close route, and silently collides with the existing `close_session(self, session_id)` methods on the gymnasium, tales, and openair servers. The changes needed: a `session_id` field on the seed and close request bodies, filled by the agent from the dispatcher's `{task}-{rollout}[-a{n}]` identity; server-side resolution of body id before cookie; a seed result store keyed by that id so a replay returns the stored response; a timeout on the close call with a finite `max_connection_retries`; a `resource_cleanup` object on the `/run` result; sweeper lifetime managed in a lifespan with `touch_session` and `forget_session` called from the base routes; and a rename of the hook or a migration of the three colliding servers.
-- #2613's head adds only `env_session_id` to the seed and verify responses. Its description still claims a `rollout_correlation_enabled` setting and tests that are no longer in the branch; the description must be corrected or that change restored separately, because `main` still applies the rollout id prefix to resources servers only when model-call capture is on. `env_session_id` is the provider handle for diagnostics and must not become the release or deduplication key; the logical session id above lives on the request side.
-
-This phase is complete when every session-allocating agent releases on success, failure, and cancellation; a lost seed response cannot create an unaddressable resource; repeating one seed operation does not allocate twice; caller death is covered by an environment-side deadline; and cleanup failures are visible without replacing the primary rollout outcome.
-
-### Bound transport retries and connection setup
-
-[PR #2365: limit socket connection setup](https://github.com/NVIDIA-NeMo/Gym/pull/2365) applies cleanly to `main` on its own and should land first, rebased directly rather than through the older stack. Until the budget loop lands, a connect timeout from this deadline falls into the generic branch of `_request_with_retries()`: external callers stop after three tries, internal callers still retry forever, but each attempt is now finite.
-
-[PR #2373: apply classified retry limits](https://github.com/NVIDIA-NeMo/Gym/pull/2373) provides the budget loop and `RequestFailedError`. Its earlier blocking defect, a `post` call outside the `try` in the collector, no longer applies because #2017 moved the call inside; `RequestFailedError` subclasses `aiohttp.ClientError`, so the collector already routes it as `agent_request_failed`. Its collector and reverification hunks should be dropped. What it still needs: a rebase onto `_request_with_retries()` that honors `max_connection_retries` as a caller override; a `connect_timeout` kind for #2365's deadline; `ReplayPolicy` gating, because its head replays `peer_drop` and `timeout` failures for every method including POST `/run`, `/verify`, tool, and sandbox calls; plain-data fields on `RequestFailedError` (kind, attempts, elapsed seconds, method, sanitized URL, delivery state, last error type) so the record can be built from it; and a note that removing the internal retry-forever branch changes every agent-to-server hop. [PR #1005](https://github.com/NVIDIA-NeMo/Gym/pull/1005) is closed. The required behavior is defined by the retry and replay contracts above rather than by any one branch.
-
-This phase is complete when every branch in `request()` stops within configured limits, a dead endpoint produces one failure record for each affected rollout, and a possibly delivered POST is not repeated without an explicit safe-replay rule.
-
-### Bound model-response retries
-
-[PR #2527: add a model retry window and backoff](https://github.com/NVIDIA-NeMo/Gym/pull/2527) is the vehicle; [PR #2366: limit attempts and preserve the final response body](https://github.com/NVIDIA-NeMo/Gym/pull/2366) contributes the pieces #2527 lacks and then closes. #2527's only change since August gates its bounds behind `_internal`, so internal callers keep the fixed 0.5-second unbounded loop; that gate should become a client configuration field instead. It still lacks the consumed-body fix (its final `raise_for_status()` re-reads a stream the loop already consumed, and its own test asserts the empty-body call), an attempt ceiling (its `max_num_tries` still grows on every rate-limit response, and a `Retry-After` of zero or one second reproduces the near-zero-delay amplification), a delay floor, and a window that starts at the first retryable failure rather than before the first request. The grafts from #2366 are the `response_content` parameter on `raise_for_status()`, the explicit attempt ceiling, and its fake-clock tests. The final implementation must satisfy the shared `RetryContext` contract above; sharing the window with the transport layer can follow in a separate change if the PR says so.
-
-This phase is complete when permanent throttling stops within configured limits, changing error shapes does not reset the allowance, and the final error retains the provider's response details.
-
-### Apply the shared failure contract across components
-
-[PR #2611: report unusable verifier results](https://github.com/NVIDIA-NeMo/Gym/pull/2611), [PR #1797: preserve provider error details](https://github.com/NVIDIA-NeMo/Gym/pull/1797), [PR #2385: harden judge cohorts](https://github.com/NVIDIA-NeMo/Gym/pull/2385), [PR #2384: distinguish proof-judge failures](https://github.com/NVIDIA-NeMo/Gym/pull/2384), and [PR #2044: unify judge failure handling](https://github.com/NVIDIA-NeMo/Gym/pull/2044) identify component-specific gaps. Migrate judge and provider paths that silently convert infrastructure errors into scores while applying the shared fields and cohort contract above.
-
-Review of the current PR heads against this contract (2026-09-02):
-
-- #2611 now adds only `mask_sample` to `BaseVerifyResponse` and reports `masked_pct` and `reward_unmasked` during collection plus `coverage/measured_rollouts` and `coverage/masked_rollouts` in aggregate metrics. The two anyswe defects from the earlier review are fixed: `mask_sample` is passed once, and anyswe reads `metrics.mask_sample`, which is the value its own masking logic writes. Its coverage keys do not double-count #2883's `coverage/scored` (scored includes masked rows; measured is scored minus masked) or #2017's count-as-zero rows (those carry no mask, so they count as scored). Remaining requests: replace the `model_fields[...]` default idiom on the anyswe response with an explicit field or drop `mask_sample` from anyswe's metrics model; stamp `failure_reason` now and `failure_kind` after #2728 from the agents' existing `error_kind`, `agent_error_kind`, and OOM flags; document that a fully masked run reports coverage and no `mean/reward`; decide whether the token-capture mask should also count toward `coverage/masked_rollouts`.
-- #2728, the registry, needs correction against `main` before it merges: it lacks `agent_run_error` and stirrup's `incomplete`; it lists `agent_request_failed` as reserved although #2017 made it active; `eval_timeout`, `sandbox`, and `oom_killed` are metric values in the SWE agents, not failure classes anyone stamps; and `session_lost` points at a PR that no longer contains it. No producer imports the registry, and there is no validator, so an unregistered bare string passes silently. Requests: rebase over #2552, fix the entries, have `rollout_collection`, `judge.py`, and the agent producers import the constants, add a validator that accepts registry names and `<namespace>:<kind>` and warns on bare unregistered names, and add a test that scans producers for `_ng_failure_class` stamps and asserts each is registered.
-- #2384 is now a proof-judge-only change: it requires `problem` on the request, fixes a real bug where a parsed score of zero was indistinguishable from no score, and stamps `failure_reason` with `empty_response`, format reasons, or `judge_unparseable`. It should drop its own `failure_reason` declaration (the base field exists) and, once #2611 and #2728 land, set `mask_sample=True` and `failure_kind=judge_failed` for `judge_unparseable`, because a judge that returned no parseable score is an unusable result, not a legitimate zero. Format failures stay unmasked. The `problem` requirement is a breaking change for external datasets and needs a README note.
-- #2385 adds the cohort deadline and resolves every waiter, and it fixes a pre-existing deadlock, but it does not implement the cohort contract: there is no `cohort_id` or `cohort_member_id`, members are counted by arrival rather than by unique identity (a retried member either changes the scored population or trips an assertion), there is no terminal record for late arrivals, the deadline runs from each waiter's arrival rather than from cohort creation, partial scoring on timeout is unconditional, and a member whose own judge call raises leaves the rest of the cohort stranded. Its `failure_reason` string is invisible to aggregate metrics, and `cohort_timeout` is also assigned to a one-member cohort that had nothing to compare. Requests: implement the contract above; make partial scoring opt-in and default to a masked structured failure; emit a numeric partial indicator; add a partial-cohort test that runs real aggregation; remove a member whose judge call fails and resolve its future.
-- Merge order for this group: #2728 after its fixes, then #2611 rebased on it and stamping `failure_kind`, then #2384, then the redesigned #2385. #2611 and #2728 edit adjacent lines of `BaseVerifyResponse` and the same test class, so the second one rebases.
-- Producers that still need the shared fields after these land: `judge_failsafe` (import the registry constant and stop fabricating `reward: 0.0` on its no-result path), the `rollout_collection` framework classes, stirrup, remote_agent, pinchbench, browsecomp, conversational_tool_use, and the two SWE agents for `failure_kind`.
-
-This phase is complete when every producer uses the shared fields, no known judge infrastructure failure becomes a legitimate score, cohort membership remains exact under retries and duplicate delivery, incomplete cohorts resolve within a configured deadline, and environment authors have one documented reporting contract.
-
-### Add lifecycle control, identity, and observability
-
-Add rollback after partial startup, bounded shutdown, progress reporting, omission records, the run manifest, and incomplete-run records. Add operation identifiers and receiver-side duplicate protection before allowing replay after possible delivery.
-
-Build on the OpenTelemetry integration that landed in `nemo_gym/telemetry` ([PR #2646](https://github.com/NVIDIA-NeMo/Gym/pull/2646), [PR #2647](https://github.com/NVIDIA-NeMo/Gym/pull/2647), [PR #2790](https://github.com/NVIDIA-NeMo/Gym/pull/2790)). It already propagates trace context across HTTP hops, emits `gym.job`, `gym.rollout`, `gym.verify`, `gym.model.*`, and sandbox start and exec spans, and records rollout and verify durations. What it does not yet record is what this contract needs: one span or event per HTTP transmission with the attempt number and failure kind, spans or events for sidecar routing and `_ng_failure_class` values, a driver-side span per rollout attempt around the dispatch call, spans for release and shutdown, trace context across Ray, and the coverage counts as OpenTelemetry metrics rather than only as run-exporter values. Metric labels must come from a fixed, limited set so task or request identifiers cannot create unbounded time series. The post-run rollout quality checks from [PR #2705](https://github.com/NVIDIA-NeMo/Gym/pull/2705) are report-only and do not replace the live stall signal described in the startup section. Add endpoint backpressure and a disabled-by-default circuit breaker only after the underlying calls always return.
+- [Issue #3179](https://github.com/NVIDIA-NeMo/Gym/issues/3179) defines registered `failure_kind` values.
+- [Issue #2135](https://github.com/NVIDIA-NeMo/Gym/issues/2135) defines typed rollout outcomes, attempt identity, resume manifests, persistence, and exact reconciliation.
+- [Issue #3159](https://github.com/NVIDIA-NeMo/Gym/issues/3159) defines the shared request budget, transport classification, delivery state, and replay policy.
+- [Issue #2609](https://github.com/NVIDIA-NeMo/Gym/issues/2609) defines resources-session identity, seed deduplication, close capability, wire models, and the release hook.
+- [Issue #2608](https://github.com/NVIDIA-NeMo/Gym/issues/2608) adds completed verifier-result fields and migrates Gym producers.
+- [Issue #3160](https://github.com/NVIDIA-NeMo/Gym/issues/3160) fixes partial-startup ownership, readiness deadlines, cancellation, and local shutdown.
+- [Issue #3157](https://github.com/NVIDIA-NeMo/Gym/issues/3157) fixes the known Gymnasium subclass leak without waiting for the shared session API.
+- [NVIDIA-NeMo/RL issue #4061](https://github.com/NVIDIA-NeMo/RL/issues/4061) can define prompt-group masking policy and compatibility tests while the Gym schema stabilizes.
+- [Issue #3180](https://github.com/NVIDIA-NeMo/Gym/issues/3180) and [issue #3181](https://github.com/NVIDIA-NeMo/Gym/issues/3181) can complete producer inventories and test matrices before their shared schemas merge.
+- [Issue #3182](https://github.com/NVIDIA-NeMo/Gym/issues/3182) can define telemetry names and instrument behavior whose semantics have already landed.
 
 ```mermaid
 flowchart TD
-    FOUNDATION["Shared fields, process-safe errors, and failure classification"] --> OUTCOMES["Row-associated rollout outcomes"]
-    FOUNDATION --> SESSIONID["Caller-created session identity and seed deduplication"]
-    SESSIONID --> RELEASE["Idempotent release and idle-session deadline"]
-    OUTCOMES --> TRANSPORT["Finite transport retries and connection setup"]
-    RELEASE --> TRANSPORT
-    OUTCOMES --> MODEL["Finite model-response retries"]
-    TRANSPORT --> IDENTITY["Operation identity and duplicate protection"]
-    MODEL --> IDENTITY
-    OUTCOMES --> COMPONENTS["Shared verifier, judge, provider, and agent fields"]
-    TRANSPORT --> LIFECYCLE["Local process lifecycle and progress supervision"]
-    RELEASE --> LIFECYCLE
-    COMPONENTS --> OBSERVE["Cross-stack tracing and recovery metrics"]
-    IDENTITY --> OBSERVE
-    LIFECYCLE --> OBSERVE
-    OBSERVE --> LOAD["Backpressure and circuit breaking"]
+    subgraph wave0 [Parallel foundation work]
+        Taxonomy["#3179 Failure-kind registry"]
+        Outcome["#2135 Typed rollout outcomes"]
+        RequestBudget["#3159 Request budget and replay"]
+        SessionProtocol["#2609 Session wire protocol"]
+        VerifierSchema["#2608 Verifier result fields"]
+        LocalLifecycle["#3160 Local lifecycle fixes"]
+        ImmediateLeak["#3157 Gymnasium leak fix"]
+    end
+
+    Taxonomy --> Outcome
+    Taxonomy --> VerifierSchema
+    RequestBudget --> ProviderPolicy["#2845 Provider response policy"]
+    SessionProtocol --> SessionLifecycle["#3037 TTL and server adoption"]
+    ImmediateLeak -.->|"adapts to shared hook"| SessionLifecycle
+    VerifierSchema --> RLMasking["RL#4061 Training masking policy"]
+    Outcome --> CollectorContract["Persistence, resume, reconciliation"]
+    Outcome --> LegacyMigration["#3180 Sentinel migration"]
+    VerifierSchema --> LegacyMigration
+    Outcome --> CohortPolicy["#3181 Cohort completion policy"]
+    SessionProtocol --> CleanupReporting["Remote cleanup reporting"]
+    LocalLifecycle --> CleanupReporting
+    CollectorContract --> Integration["Cross-caller integration"]
+    ProviderPolicy --> Integration
+    SessionLifecycle --> Integration
+    RLMasking --> Integration
+    LegacyMigration --> Integration
+    CohortPolicy --> Integration
+    Integration --> TelemetryDocs["#3182 Telemetry and documentation"]
 ```
 
-## Status against the tracking issue
+### Hard merge gates
 
-Completion criteria from [issue #2750](https://github.com/NVIDIA-NeMo/Gym/issues/2750), checked against `main` @ `98713f8e9` on 2026-09-02:
+- #3179 merges before #2135 or #2608 relies on stable `failure_kind` values.
+- #3159's request-budget interface merges before [issue #2845](https://github.com/NVIDIA-NeMo/Gym/issues/2845) integrates provider retries. Provider policy can be developed against the agreed interface in parallel.
+- #2609's identity, close, and release-hook contract merges before [issue #3037](https://github.com/NVIDIA-NeMo/Gym/issues/3037) adds the common TTL lifecycle and broad server adoption.
+- #2608's top-level verifier fields merge before NVIDIA-NeMo/RL#4061 consumes them.
+- #2135, #2608, and #3179 stabilize before #3180 migrates reward-zero judge and agent sentinels.
+- #2135 and #3179 stabilize before #3181 persists incomplete cohort outcomes.
 
-| Criterion | Status | Evidence |
-|---|---|---|
-| No branch in the shared request path retries forever | Partial | `max_connection_retries` bounds the disconnect and socket-error branches only when a caller sets it (#2383); the generic branch still retries forever for internal callers; the model loop still grows its own limit on rate-limit statuses; no connect deadline |
-| A failed agent `/run` becomes a row-associated failure and others continue | Partial | Implemented by #2017; off by default since #2883; reverification not covered; no terminal marking for deterministic 4xx |
-| A possibly delivered POST is not repeated without a safe-replay policy | Not started | The transport re-sends any request after a disconnect or socket error with no delivery check; no `ReplayPolicy` |
-| Failure records and exceptions pass pickle and Ray tests | Partial | `ClientResponseError` survives a spawned-process round trip (#2726); the sidecar row survives pickle; no Ray test for either |
-| Coverage totals reconcile with the materialized input | Done for collection; partial for aggregate and reverify | #2883 measures collection coverage against the materialized file; `gym eval aggregate` and reverification measure against scored rows plus sidecar rows |
-| Resume verifies run, input, and configuration | Not started | Resume checks only that the materialized and output files exist |
-| A startup failure cleans up every service started before it | Partial | Only the model-endpoint timeout path shuts down; other failures inside `RunHelper.start()` leave processes running; no process groups |
-| A lost `/seed_session` response cannot create an unaddressable resource or allocate twice on replay | Not started | `/seed_session` unchanged; #2612 and #2613 as written do not meet it (see the session phase) |
-| Failed, cancelled, and abandoned rollouts release remote sessions explicitly or by expiry | Not started in the framework | No release route; OpenSandbox close is now idempotent and a run-scoped cleanup job exists for sandboxes |
-| Status output identifies a collector that is alive but not progressing | Not started | Supervision checks process exit only; telemetry is opt-in and has no stall signal; health checks run after the run |
-| Documentation explains the contract for CLI evaluation and direct callers | Partial | The routing flag and classes are documented in the CLI reference and observability pages exist; no page describes the overall contract, the marker semantics, or the default-off decision |
+### Active implementation candidates
+
+- [PR #2728](https://github.com/NVIDIA-NeMo/Gym/pull/2728) is the registry candidate for #3179. It needs a rebase and corrected entries before consumers merge.
+- [PR #2611](https://github.com/NVIDIA-NeMo/Gym/pull/2611) is the Gym verifier-field candidate for #2608. It follows #2728 and does not own NeMo-RL policy.
+- [PR #2527](https://github.com/NVIDIA-NeMo/Gym/pull/2527) is the provider-response candidate for #2845. It must consume #3159's request budget.
+- [PR #2612](https://github.com/NVIDIA-NeMo/Gym/pull/2612) contains useful lifecycle and sweeper code, but it must be replaced or refactored around #2609's caller-created identity, close capability, seed deduplication, and close outcomes.
+- [PR #2613](https://github.com/NVIDIA-NeMo/Gym/pull/2613) remains diagnostic `env_session_id` work under #2610/#2831. It must not become the cleanup or authorization identity.
+- [PR #2384](https://github.com/NVIDIA-NeMo/Gym/pull/2384) maps to #3180. [PR #2385](https://github.com/NVIDIA-NeMo/Gym/pull/2385) maps to #3181. [PR #2964](https://github.com/NVIDIA-NeMo/Gym/pull/2964) is a terminal input-error change related to #2845 and should not retry.
+
+The older #2361, #2363, #2365, #2366, and #2373 stack is closed as superseded. Its classification, socket deadline, response-body preservation, fake-clock, and retry-budget tests remain implementation evidence for #3159 and #2845. [PR #2044](https://github.com/NVIDIA-NeMo/Gym/pull/2044) is also closed because merged #2113 provides the current judge helper and #3180 owns the remaining semantic migration.
+
+## Progress against the tracking issue
+
+- **Bound every request path:** Partial. External provider retries and optional connection limits have landed, but internal transport and provider loops can still continue indefinitely.
+- **Record one outcome per rollout:** Partial. Opt-in `/run` failures are row-associated and persisted, but there is no typed union, complete omission/unknown record, or manifest-validated resume.
+- **Preserve failure details across boundaries:** Partial. HTTP errors survive a spawned process, but the final outcome still lacks a real Ray round-trip test.
+- **Prevent unsafe replay:** Not implemented. Call sites do not declare replay policy or delivery state.
+- **Separate completed masked results from no-result failures:** Partial. `failure_reason` has landed; common `mask_sample`, `failure_kind`, producer migration, and NeMo-RL handling remain open.
+- **Release remote sessions:** Not implemented in the framework. Local cleanup precedents exist, but there is no caller-created session identity, deduplicated seed, close capability, common route, or TTL policy.
+- **Bound startup and shutdown:** Partial. Client disconnect cancellation has landed, but readiness, partial-startup rollback, cancellation propagation, descendant ownership, and progress supervision remain open.
+- **Resolve incomplete cohorts:** Not implemented. The current GenRM path can wait indefinitely and has no explicit member identity.
+- **Report recovery telemetry:** Partial. OpenTelemetry foundations exist, but retry, failure kind, masking, cleanup, cohort, cancellation, and stall signals remain open under #3182.
+- **Document caller policy:** Partial. Existing flags and fields are documented individually; the full managed-versus-library contract still needs user documentation.
 
 ## Required validation
 
