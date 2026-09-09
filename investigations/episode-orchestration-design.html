@@ -141,18 +141,56 @@
 </ul>
 <p>The compatibility endpoint is a facade, not a second implementation. When the runner and agent share a process, the runner calls the agent service directly. When they are in separate processes, it uses the private transport endpoint. Tests must prove that the in-process facade and explicit processor endpoint produce the same phase order, requests, result shape, cleanup behavior, and failure classification.</p>
 <p>This arrangement gives simple evaluations one lifecycle without forcing a fourth process. It also gives staged, external, or operationally isolated flows a dedicated deployment when they need one.</p>
-<figure class="fig"><div class="mermaid">flowchart LR
-    Collector --> Legacy["Legacy agent /run facade"]
-    Collector --> Processor["Explicit processor endpoint"]
-    Legacy --> Runner["EpisodeRunner"]
-    Processor --> Runner
-    Runner --> Environment
-    Runner --> RuntimeAuthority
-    Runner --> AgentService
-    AgentService --> Agent["Agent.run(request, context)"]
-    RuntimeAuthority --> Placement["Agent execution placement"]
-    RuntimeAuthority --> Workspace["Environment workspace"]
-</div><figcaption>Both public endpoints use the same logical runner. Agent placement and environment workspaces remain separate runtime bindings.</figcaption></figure>
+<figure class="fig">
+<svg viewBox="0 0 1040 330" role="img" aria-label="The collector reaches either the legacy agent /run facade or an explicit processor endpoint. Both call the same EpisodeRunner. The runner calls the environment, the RuntimeAuthority, and the AgentService; the AgentService calls Agent.run(request, context). The RuntimeAuthority issues separate bindings for agent execution placement and the environment workspace." style="max-width:100%;height:auto;font-family:'Source Sans 3',system-ui,sans-serif;font-size:12px">
+  <defs><marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.2">
+    <rect x="20" y="130" width="110" height="44" rx="3"/>
+    <text x="75" y="156" text-anchor="middle" fill="currentColor" stroke="none">collector</text>
+    <rect x="200" y="60" width="180" height="44" rx="3"/>
+    <text x="290" y="78" text-anchor="middle" fill="currentColor" stroke="none">legacy agent</text>
+    <text x="290" y="94" text-anchor="middle" fill="currentColor" stroke="none">POST /run facade</text>
+    <rect x="200" y="200" width="180" height="44" rx="3"/>
+    <text x="290" y="218" text-anchor="middle" fill="currentColor" stroke="none">explicit processor</text>
+    <text x="290" y="234" text-anchor="middle" fill="currentColor" stroke="none">endpoint</text>
+    <rect x="450" y="130" width="140" height="44" rx="3" stroke="var(--accent)" stroke-width="1.8"/>
+    <text x="520" y="156" text-anchor="middle" fill="currentColor" stroke="none" font-weight="600">EpisodeRunner</text>
+    <rect x="660" y="30" width="150" height="40" rx="3"/>
+    <text x="735" y="54" text-anchor="middle" fill="currentColor" stroke="none">environment</text>
+    <rect x="660" y="130" width="150" height="44" rx="3" stroke="var(--accent)" stroke-width="1.8"/>
+    <text x="735" y="156" text-anchor="middle" fill="currentColor" stroke="none" font-weight="600">RuntimeAuthority</text>
+    <rect x="660" y="250" width="150" height="40" rx="3"/>
+    <text x="735" y="274" text-anchor="middle" fill="currentColor" stroke="none">AgentService</text>
+    <rect x="870" y="250" width="150" height="40" rx="3"/>
+    <text x="945" y="268" text-anchor="middle" fill="currentColor" stroke="none">Agent.run(</text>
+    <text x="945" y="282" text-anchor="middle" fill="currentColor" stroke="none">request, context)</text>
+    <rect x="870" y="100" width="150" height="40" rx="3" stroke-dasharray="4 3"/>
+    <text x="945" y="124" text-anchor="middle" fill="currentColor" stroke="none">agent execution placement</text>
+    <rect x="870" y="160" width="150" height="40" rx="3" stroke-dasharray="4 3"/>
+    <text x="945" y="184" text-anchor="middle" fill="currentColor" stroke="none">environment workspace</text>
+    <path d="M130 145 L165 145 L165 82 L200 82" marker-end="url(#ahr)"/>
+    <path d="M130 159 L165 159 L165 222 L200 222" marker-end="url(#ahr)"/>
+    <path d="M380 82 L415 82 L415 145 L450 145" marker-end="url(#ahr)"/>
+    <path d="M380 222 L415 222 L415 159 L450 159" marker-end="url(#ahr)"/>
+    <text x="415" y="120" text-anchor="middle" fill="var(--muted)" stroke="none" font-size="11">same</text>
+    <text x="415" y="134" text-anchor="middle" fill="var(--muted)" stroke="none" font-size="11">runner</text>
+    <path d="M590 145 L625 145 L625 50 L660 50" marker-end="url(#ahr)"/>
+    <text x="628" y="96" fill="currentColor" stroke="none" font-size="11">sandbox_spec, seed,</text>
+    <text x="628" y="110" fill="currentColor" stroke="none" font-size="11">verify, close</text>
+    <line x1="590" y1="152" x2="660" y2="152" marker-end="url(#ahr)"/>
+    <text x="625" y="166" text-anchor="middle" fill="currentColor" stroke="none" font-size="11">allocate, grant</text>
+    <path d="M590 159 L625 159 L625 270 L660 270" marker-end="url(#ahr)"/>
+    <text x="628" y="230" fill="currentColor" stroke="none" font-size="11">invoke (in-process</text>
+    <text x="628" y="244" fill="currentColor" stroke="none" font-size="11">or POST /invoke)</text>
+    <line x1="810" y1="270" x2="870" y2="270" marker-end="url(#ahr)"/>
+    <path d="M810 145 L840 145 L840 120 L870 120" marker-end="url(#ahr)"/>
+    <path d="M810 159 L840 159 L840 180 L870 180" marker-end="url(#ahr)"/>
+    <text x="848" y="90" text-anchor="middle" fill="currentColor" stroke="none" font-size="11">separate grants</text>
+  </g>
+</svg>
+<figcaption>Both public endpoints use the same logical runner. Agent placement and environment workspaces remain separate runtime bindings.</figcaption>
+</figure>
+
 <h2 id="roles-are-defined-by-behavior-and-authority">Roles are defined by behavior and authority</h2>
 <h3 id="the-environment-defines-the-task-and-verification-contract">The environment defines the task and verification contract</h3>
 <p>The environment owns:</p>
@@ -313,16 +351,48 @@
 <li>It can consume artifacts without any live runtime.</li>
 </ul>
 <p>The environment declares which relationship verification requires. <code>RuntimeAuthority</code> enforces the resulting grant.</p>
-<figure class="fig"><div class="mermaid">flowchart LR
-    AgentRequirements["Agent runtime requirements"] --> Resolver
-    EnvironmentRequirements["Environment workspace and verifier requirements"] --> Resolver
-    Policy["Deployment and security policy"] --> Resolver
-    Resolver --> Authority["RuntimeAuthority"]
-    Authority --> AgentPlacement["Agent placement grant"]
-    Authority --> Workspace["Workspace grant"]
-    Authority --> Verifier["Verifier grant or fresh runtime"]
-    AgentPlacement -. may share a runtime ID .- Workspace
-</div><figcaption>Runtime resolution combines agent needs, environment needs, and deployment policy before issuing separate grants.</figcaption></figure>
+<figure class="fig">
+<svg viewBox="0 0 1040 300" role="img" aria-label="Agent runtime requirements, environment workspace and verifier requirements, and deployment and security policy feed a resolver. The resolver asks the RuntimeAuthority, which issues three separate grants: an agent placement grant, a workspace grant, and a verifier grant or a fresh runtime. The agent placement grant and the workspace grant may share one runtime id." style="max-width:100%;height:auto;font-family:'Source Sans 3',system-ui,sans-serif;font-size:12px">
+  <defs><marker id="ahq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+  <g fill="none" stroke="currentColor" stroke-width="1.2">
+    <rect x="20" y="40" width="200" height="44" rx="3"/>
+    <text x="120" y="58" text-anchor="middle" fill="currentColor" stroke="none">agent runtime</text>
+    <text x="120" y="74" text-anchor="middle" fill="currentColor" stroke="none">requirements</text>
+    <rect x="20" y="128" width="200" height="44" rx="3"/>
+    <text x="120" y="146" text-anchor="middle" fill="currentColor" stroke="none">environment workspace</text>
+    <text x="120" y="162" text-anchor="middle" fill="currentColor" stroke="none">and verifier requirements</text>
+    <rect x="20" y="216" width="200" height="44" rx="3"/>
+    <text x="120" y="234" text-anchor="middle" fill="currentColor" stroke="none">deployment and</text>
+    <text x="120" y="250" text-anchor="middle" fill="currentColor" stroke="none">security policy</text>
+    <rect x="330" y="128" width="120" height="44" rx="3"/>
+    <text x="390" y="154" text-anchor="middle" fill="currentColor" stroke="none">resolver</text>
+    <rect x="530" y="128" width="150" height="44" rx="3" stroke="var(--accent)" stroke-width="1.8"/>
+    <text x="605" y="154" text-anchor="middle" fill="currentColor" stroke="none" font-weight="600">RuntimeAuthority</text>
+    <rect x="800" y="40" width="200" height="44" rx="3"/>
+    <text x="900" y="66" text-anchor="middle" fill="currentColor" stroke="none">agent placement grant</text>
+    <rect x="800" y="128" width="200" height="44" rx="3"/>
+    <text x="900" y="154" text-anchor="middle" fill="currentColor" stroke="none">workspace grant</text>
+    <rect x="800" y="216" width="200" height="44" rx="3"/>
+    <text x="900" y="234" text-anchor="middle" fill="currentColor" stroke="none">verifier grant</text>
+    <text x="900" y="250" text-anchor="middle" fill="currentColor" stroke="none">or fresh runtime</text>
+    <path d="M220 62 L275 62 L275 143 L330 143" marker-end="url(#ahq)"/>
+    <line x1="220" y1="150" x2="330" y2="150" marker-end="url(#ahq)"/>
+    <path d="M220 238 L275 238 L275 157 L330 157" marker-end="url(#ahq)"/>
+    <line x1="450" y1="150" x2="530" y2="150" marker-end="url(#ahq)"/>
+    <text x="490" y="142" text-anchor="middle" fill="currentColor" stroke="none" font-size="11">allocate or</text>
+    <text x="490" y="168" text-anchor="middle" fill="currentColor" stroke="none" font-size="11">reconnect</text>
+    <path d="M680 143 L740 143 L740 62 L800 62" marker-end="url(#ahq)"/>
+    <line x1="680" y1="150" x2="800" y2="150" marker-end="url(#ahq)"/>
+    <path d="M680 157 L740 157 L740 238 L800 238" marker-end="url(#ahq)"/>
+    <text x="740" y="118" text-anchor="middle" fill="currentColor" stroke="none" font-size="11">typed, expiring,</text>
+    <text x="740" y="132" text-anchor="middle" fill="currentColor" stroke="none" font-size="11">audience-bound</text>
+    <path d="M1000 62 L1020 62 L1020 150 L1000 150" stroke-dasharray="3 3"/>
+    <text x="1030" y="110" fill="var(--muted)" stroke="none" font-size="11" transform="rotate(90 1030 110)" text-anchor="middle">may share a runtime id</text>
+  </g>
+</svg>
+<figcaption>Runtime resolution combines agent needs, environment needs, and deployment policy before issuing separate grants.</figcaption>
+</figure>
+
 <h2 id="benchmark-topologies-fit-the-separate-bindings">Benchmark topologies fit the separate bindings</h2>
 <p>The following benchmark evidence motivates the runtime and verification contracts. The table describes topology, not a permanent implementation assignment.</p>
 <div class="tbl"><table>
