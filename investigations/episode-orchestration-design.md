@@ -1,6 +1,6 @@
 # Episode orchestration: processors, runtimes, and sandbox authority
 
-Status: design draft 4, 2026-09-09. Builds on issue #2159 (Felipe Frujeri's episode-processor proposal, closed without an implementing PR) and PR #2085 (sandbox server, unmerged). Evidence is from this checkout (`session-state-prototype` at `996a10f9c`) cross-checked against `upstream/main` at `9287fb779` and the NeMo RL checkout at `~/dev/RL` (`9f166d8b0`). Draft 2 incorporated an adversarial code review of draft 1 (Appendix C). Draft 3 adds two audits (Appendix D): harness-to-benchmark coupling across the ten CLI harnesses, and how every consumer opts into a sandbox; they produced the new sections 5 and 6 and the reordered migration. Draft 4 (same day) adds section 7, a comparison with the public RFC on `ananthsub/public-gym-architecture-rfc`, prototype PR #3100, PR #2085, and the `upstream/ffrujeri/sandboxes` placement branch, and adopts placement as the implementation of the sandbox runtime kind.
+Status: design draft 5, 2026-09-09. Builds on issue #2159 (Felipe Frujeri's episode-processor proposal, closed without an implementing PR) and PR #2085 (sandbox server, unmerged). Evidence is from this checkout (`session-state-prototype` at `996a10f9c`) cross-checked against `upstream/main` at `9287fb779` and the NeMo RL checkout at `~/dev/RL` (`9f166d8b0`). Draft 2 incorporated an adversarial code review of draft 1 (Appendix C). Draft 3 adds two audits (Appendix D): harness-to-benchmark coupling across the ten CLI harnesses, and how every consumer opts into a sandbox; they produced the new sections 5 and 6 and the reordered migration. Draft 4 (same day) added a comparison with the public RFC on `ananthsub/public-gym-architecture-rfc`, prototype PR #3100, PR #2085, and the `upstream/ffrujeri/sandboxes` placement branch. Draft 5 (same day) replaces that comparison with a critical review (section 7), with concrete findings against each artifact and the alternatives they lead to, and rewrites backward compatibility (section 13) around the NeMo RL main and verl recipe contracts as they stand today.
 
 ## 1. The problem
 
@@ -109,7 +109,7 @@ Three agent shapes cover the repo.
 
 **Native agents** run a Python loop in the agent server process against the model server: simple_agent and its 18 clones, langgraph, remote_agent, the conversational simulator. Their runtime is the host process. Their loop does not change. Their `run()` is deleted once the base-class default lands. Tool-boundary commits stay inside this loop because the loop is where the boundary is.
 
-**Harness agents** launch an external program: the ten CLI agents and the placement-hosted variants of them. Under runtime kind `sandbox` the agent's own process is placed inside the box (section 5.6), so the existing agent code runs unchanged and the sandboxed twins are retired by configuration. A `HarnessAdapter` per tool (the contract from the external_harness branch: `runtime()` setup commands, `prepare()` config files, `launch()` argv and env, `parse()` stdout) remains the optimization for images without Python and for the `process` kind, not the prerequisite.
+**Harness agents** launch an external program. They come in two shapes under one `runtime` block (section 5.6): a manifest harness, where a CLI tool is described in YAML and executed inside the runtime with no Gym install in the box, and a placed harness, where a Python agent that owns its loop is run unchanged inside the box. The ten CLI agents migrate to manifests; hermes, langgraph, and strands are placed; the sandboxed twins are retired by configuration either way.
 
 **Self-contained agents** bring their own environment loop and grading: harbor, mini_swe_agent, osworld, tau2, verifiers, swe_agents. They keep their current shape, declared as `integration_profile: external-agent-loop`, and the processor skips seed, verify, and close for them. Today this is accidental; the design makes it explicit.
 
@@ -183,7 +183,7 @@ Six places rewrite the model server URL so a box can reach it: `global_config.py
 
 ### 5.6 Implementation: process placement
 
-Sections 5.1 to 5.3 describe the contract. The placement branch (`upstream/ffrujeri/sandboxes`, compared in section 7) supplies the implementation of the `sandbox` kind for harness agents, and this design adopts it:
+Sections 5.1 to 5.3 describe the contract. Two harness shapes implement it, both configured in YAML. A **manifest harness** (section 7.7) is a CLI described by image, install, launch template, model-endpoint env var, and output parser; the runtime executes it through `exec` and `pty` with no Gym install in the box, which is the Harbor-style contract and the default for a new CLI tool. A **placed harness** is a Python agent that owns a loop; the placement branch (`upstream/ffrujeri/sandboxes`, reviewed in section 7.4) supplies its mechanism, and this design adopts that mechanism with the four conditions in section 7.6 (no agent config in the box, a processor-held ref, a built and cached runtime image, an HTTP bridge when the box can reach the host):
 
 - The agent's `runtime.kind: sandbox` makes `create_server` construct a host instead of the harness. The host runs the processor phases (seed, connect or create, execute, verify, close) and, in the execute phase, runs a worker inside the box that imports the harness class, builds its FastAPI app, and invokes `/ng-rollout/<id>/v1/responses` in-process with the seed cookies. The harness's own subprocesses, streaming, and signal handling run where they always did, now inside the box.
 - Dependencies are installed from a snapshot of the checkout into a sandbox-local venv, or skipped for a prepared image. A per-task install is the cost of "unchanged harness"; a prepared image with `dependencies.enabled: false` is the production path.
@@ -236,46 +236,108 @@ gym eval run --resources-server example_mcp_weather --agent-type opencode_agent 
 ```
 
 `allowed_agents` stays the guard, and it should widen as the gaps close rather than be bypassed: bypassing it today yields the silent zero, not an error.
-## 7. Comparison with the public architecture RFC, PR 3100, PR 2085, and the placement branch
+## 7. Critical review of the RFC, PR 3100, PR 2085, and the placement branch
 
-Four artifacts overlap this design. They agree on the split and disagree on ownership, on the direction of backward compatibility, and on where the runtime lives.
+Four artifacts overlap this design. This section reviews each against the code rather than adopting it, and section 7.7 collects the alternatives that came out of the review.
 
 | Artifact | What it is | Status |
 | --- | --- | --- |
-| `rfcs/gym-architecture.md` on `ananthsub/public-gym-architecture-rfc` | The public RFC for agent and environment separation: a fourth server type `episode_processors/` owning `/run` and the sandbox, agents owning only `/v1/responses`, external integrations as standalone processors, `/aggregate_metrics` served by whoever serves `/verify`, a legacy processor for migration. Built on issues #1866, #2950, #2858, #2763 and prototype #3100 | draft |
-| PR #3100 (Felipe Frujeri) | Prototype of the processor split: `nemo_gym.agents` and `nemo_gym.processors` packages, `processors/` server type, `SingleAgentTurnProcessor`, and a `<agent>__processor` sidecar generated at config load with `/run` routed to it transparently | open |
-| PR #2085 (issue #2082) | Sandbox server: a fourth server type that owns boxes and lends them by signed `SandboxRef` leases, so non-connectable providers can be shared across processes | unmerged |
-| `upstream/ffrujeri/sandboxes` | Agent runtime placement: a `runtime` block on `BaseResponsesAPIAgentConfig`; `create_server` swaps the agent for a `SandboxedAgentHost` that runs the unchanged harness's `/v1/responses` inside the task sandbox through a worker, installing Gym and the harness there; `SandboxWorkspace` on the seed response; `/cleanup_session` on the resources server | proof of concept |
+| `rfcs/gym-architecture.md` on `ananthsub/public-gym-architecture-rfc` | Public RFC: `episode_processors/` owning `/run` and the sandbox, agents owning only `/v1/responses`, class D integrations as standalone processors, metrics on the verify owner, a legacy processor for migration. Built on #1866, #2950, #2858, #2763 and prototype #3100 | draft |
+| PR #3100 (Felipe Frujeri) | `nemo_gym.agents` and `nemo_gym.processors` packages, a `processors/` server type, `SingleAgentTurnProcessor`, a `<agent>__processor` sidecar generated at config load for `simple_agent` instances, `/run` and `/aggregate_metrics` routed to it | open |
+| PR #2085 (issue #2082) | Sandbox server: a server that owns boxes and lends them by signed `SandboxRef` leases so non-connectable providers can be shared across processes | unmerged |
+| `upstream/ffrujeri/sandboxes` | Runtime placement: `runtime` on `BaseResponsesAPIAgentConfig`; `create_server` swaps in a `SandboxedAgentHost` that runs the unchanged harness's `/v1/responses` inside the task sandbox through a worker after installing Gym and the harness there; `SandboxWorkspace` on the seed response; `/cleanup_session` | proof of concept |
 
-### 7.1 Where all of them and this design agree
+### 7.1 What all four and this design agree on
 
-An episode processor exists and owns `/run`. Agents own `/v1/responses` and nothing else. Aggregate metrics belong to the verify owner, grouped by (verify owner, agent) while keeping `agent_ref.name` as the entry identity. A sandbox handle crosses a process boundary only as a typed descriptor produced by `serialize()`. The environment gets a teardown endpoint. Orchestration does not move to the resources server (the RFC's rejected alternative, for the reasons it gives). Class D integrations (tau2, harbor, verifiers, pinchbench) should not be agent servers with a `/v1/responses` that raises; this design adopts the RFC's answer and makes them standalone processors that serve their own `/run` and `/verify`, which replaces draft 2's "external-agent-loop agents".
+A processor exists and owns `/run`. Agents own `/v1/responses` and nothing else. Metrics belong to the verify owner, grouped by (verify owner, agent) with `agent_ref.name` as the entry identity. A sandbox handle crosses a process boundary only as a serialized descriptor. The environment gets a teardown endpoint. Orchestration does not move to the resources server. Class D integrations (tau2, harbor, verifiers, pinchbench) should not be agent servers whose `responses()` raises; they become standalone processors, which replaces draft 2's "external-agent-loop agents".
 
-### 7.2 Where they differ, and what this design takes
+### 7.2 The RFC
 
-**Backward compatibility direction.** The RFC routes everything through a legacy processor from Phase 1 and makes the processor the row's routing key. PR 3100 generates a `<agent>__processor` sidecar per agent instance at config load and routes `/run` to it while the agent keeps its name. Draft 2 kept `/run` on the agent as a shim and resolved a processor internally. The sidecar is the right mechanism and this design adopts it as the "implicit default processor": generated when an environment declares none, invisible to configs. Two corrections to the RFC follow from the RL contract in section 11: the routing key on rows and results stays `agent_ref.name`, because NeMo RL and verl read it for dispatch, per-agent capture selection, and prompt-group accounting, and the RFC's own metrics argument already requires `agent_ref.name` to remain the identity; and the sidecar is one processor per environment serving its agents, not one per agent instance, which keeps the RFC's accepted downside 3 (an extra process per agent) to one extra process per environment.
+**R1. The routing-key change breaks the one contract external frameworks hold.** The RFC makes the processor the row's routing key and has the processor name the agent. NeMo RL main (`edf6b8c42`, 2026-09-09) calls `run_examples`, then reads `row["agent_ref"]["name"]` for prompt-group accounting and returns the resolved `agent_ref` to its caller (`nemo_rl/environments/nemo_gym.py:619-694`); the verl recipe raises if a dataset row lacks `agent_ref` (`verl-recipe/nemo_gym/agent_loop.py:291`) and labels results by it (`:216`). The RFC's own metrics section says `agent_ref.name` must stay the identity because downstream consumers index on it. So the routing key on rows and results has to stay `agent_ref`, and processor selection has to be a function the collector computes from it. The RFC's "the processor names the agent" inverts a dependency that two trainers have already built on.
 
-**Sandbox ownership.** The RFC has the processor own every sandbox, with the environment answering `/sandbox_spec` and neither side provisioning. The placement branch has the environment own the workspace (`register_sandbox_workspace` at seed, `/cleanup_session`) or the agent host create one (`sandbox_source: runtime`). PR 2085 has a separate server own everything. This design keeps a per-entry owner in the `sandboxes` list: processor for workspaces by default, environment for tool boxes and pooled boxes, which the RFC's single owner cannot express (litmus and ns_tools pool boxes across sessions and must own them). It takes the RFC's ordering for processor-owned workspaces: `POST /sandbox_spec` (204 for none), create, then `POST /seed_session` with the episode context, so the environment can populate the box during seed. Draft 2 created the box after seed, which forced `owner: environment` for any pre-populated repository; that is fixed here.
+**R2. The legacy processor in Phase 1 costs a process and a hop per agent instance and buys nothing until Phase 2.** "Everything routes through it immediately" adds one uvicorn process, one port, one health check, and one HTTP hop per agent for a call that returns the agent's `/run` verbatim. The RFC lists the process cost as accepted downside 3. The cheaper shape is the inverse: keep `/run` on the agent as a thin shim that runs the phase library in-process, and spawn a processor only where a config declares one. PR 3100's sidecar generation is the right mechanism for the declared case; it should not be mandatory for the undeclared one.
 
-**Runtime placement.** This is the largest difference and the one the placement branch settles. Draft 3 put only the CLI inside the box, with the agent server as an adapter host, which requires a `HarnessAdapter` per tool and six additions to the `local` provider before the host-CLI agents move. The placement branch instead moves the whole harness Python process into the box: a worker inside the sandbox constructs the configured harness class and invokes its own `/v1/responses` ASGI route with the rollout-prefixed path and cookies, after installing Gym and the harness into a sandbox-local venv from a source snapshot. Any existing agent then runs unchanged, and `opencode_agent` with `runtime.type: sandbox` replaces `opencode_sandboxed_agent` by configuration alone. The subprocess semantics the audit flagged (pi's streaming stdout, openclaw's SIGTERM handler, prime's orphan sweep) are preserved because the process that has them is in the box. The costs are a task image with Python, curl, and tar; a per-task dependency install with no cache unless the image is prepared (`dependencies.enabled: false` plus `python:`); a JSON-file bridge instead of HTTP; no `/v1/responses` on the outer host; and no pooling. This design adopts placement as the implementation of runtime kind `sandbox` for harness agents, and demotes adapters and the `local` provider additions to an optimization for the `process` kind and for images where a full Python install is unwanted. Section 5 is revised accordingly. Under a processor, `SandboxedAgentHost.run()` is the processor's run: it moves there in Phase 2 without changing shape.
+**R3. A single sandbox owner does not fit the repo.** "Neither the agent nor the resources server provisions or tears one down" is contradicted by litmus and ns_tools, which pool tool boxes across sessions and must own them, and by every verifier that grades in a fresh box it creates itself (swebench, deepswe, swebench_pro, code_gen). The RFC's accepted downside 2 acknowledges the second case and hand-waves the first. Ownership has to be per sandbox, with a role, which is what the `sandboxes` list in section 3 does.
 
-**The sandbox server.** The RFC lists it as accepted downside 1 and makes its Phase 3 depend on #2082. The placement branch requires a connect-capable provider and no server. This design keeps the position from draft 2 with one refinement: the requirement is a connectable provider; the sandbox server is the only way to make docker, apptainer, enroot, and local connectable across processes, so it stays alive as the `remote` provider behind the same `ConnectableProvider` interface, needed exactly when the agent host and the verifier are separate processes and the provider is local. Nothing in Phases 0 to 2 depends on it. Issue #2082's four verifier relationships are this design's `sharing` values. PR 2085's lease scopes and rollout binding are adopted into `SandboxRef` for every provider, advisory where the provider cannot enforce them.
+**R4. `EpisodeContext` on the Responses create params pollutes the model-server contract.** The RFC declares the context "on `BaseRunRequest`, `BaseSeedSessionRequest`, `BaseVerifyRequest` and the responses-create params". The create params are the OpenAI Responses type that every model server accepts and that blackbox harnesses send verbatim; a Gym-only field there either has to be stripped before every model call or leaks into providers. The rollout-prefixed path and the identity headers already carry the context to the model server; the body field belongs on Gym-internal requests only, as `ng_episode` in section 3.
 
-**Declared capabilities.** The RFC's UC2 and UC11 ask that a pairing fail with an explanation before compute, not with a silent zero; `allowed_agents` is a deny-list that refuses without explaining. This design adds two declarations the audit makes concrete: an agent declares `capabilities` (`tools: mcp | http | none`, `runtime: [none, process, sandbox]`, `input: single | multi_turn`) and an environment declares `requires` (`sandbox`, `tools`, `multi_turn`). The collector's pairing check compares them and names the missing capability, and `allowed_agents` stays as the benchmark owner's override.
+**R5. "No hooks, seven processors" overfits to today's inventory.** The RFC counts protocols (A single-request, B staged, C stepwise, D external) and mandates one processor class per protocol with no hooks inside `run()`. Class B is a declared list of stages and class C is a loop over `/step`; both are parameters of one processor, which the RFC itself notes "with more effort". A hook-free base class means every retry policy, timeout, and turn budget that the appendix classifies as "policy or data, not protocol" has nowhere to go except a subclass, which recreates the 38-way fork the RFC is trying to remove. The phase library in section 3 is the alternative: composable phases with typed inputs, and a processor is a composition, not a class hierarchy.
 
-**What the RFC defers that this design keeps.** The step processor for gymnasium and the multi-party turn loop. The RFC defers the bare policy step as dead code; gymnasium exists today and needs the step shape, so it stays, and multi-agent dispatch is a small extension of it that waits for a use case.
+**R6. Phase 3 depends on the sandbox server, and does not need to.** The RFC gates the P0 benchmark migration (swebench, swebench_pro, terminal_bench_2_1, gdpval) on #2082 landing first. All four run on OpenSandbox today, which is already connectable. The dependency exists only for docker and apptainer deployments, and section 7.5 shows most of those do not need a server either.
 
-### 7.3 Reconciled vocabulary
+**R7. The strongest insight in the RFC is under-used.** The competitive analysis identifies Harbor's minimal task contract, "you get a working directory, do anything, exit, then tests run", as the reason 50 harnesses work there without per-agent effort. The RFC then proposes nothing that gives Gym that contract. Section 7.7 does.
 
-| This design | RFC | PR 3100 | Placement branch | PR 2085 |
-| --- | --- | --- | --- | --- |
-| episode processor | episode processor | processor | `SandboxedAgentHost` (agent-side, interim) | none |
-| `EpisodeDescriptor` + `ng_episode` block | `/sandbox_spec` + `EpisodeContext` on base requests | none | `SandboxWorkspace` on seed | none |
-| `SandboxRef` | `EpisodeContext.sandbox` (serialized descriptor) | none | `SandboxWorkspace{provider, descriptor}` | `SandboxRef{server_url, lease, scope}` |
-| runtime kind `none` / `process` / `sandbox` | not modeled | not modeled | `runtime.type: local / sandbox` | not modeled |
-| `owner: processor / environment` | processor always | none | `sandbox_source: runtime / environment` | server always |
-| `close_session` (#2612) | teardown in processor `finally` | none | `/cleanup_session` | lease release |
-| implicit default processor | legacy processor | `<agent>__processor` sidecar | none | none |
+**R8. UC11 is named as the one property with no demonstrator and then left open.** `allowed_agents` refuses without explaining. The `capabilities` and `requires` declarations in section 7.7 are the concrete form.
+
+**R9. Missing from the RFC entirely:** the NeMo RL and verl dispatch contract (section 11), partial-rollout checkpointing (section 9), multi-worker uvicorn on the resources server, and how token capture selection by agent name survives the routing change. The RFC also says "49 agent servers"; this checkout has 42 and upstream main 47, which is a reminder that the inventory moves faster than the design.
+
+**What the RFC gets right and this design takes:** the four-object framing (work package, driver, harness, runtime) from Prime; standalone processors for class D; `/sandbox_spec` before seed so the environment can populate a processor-owned box; metrics on the verify owner grouped by (owner, agent); the rejection of orchestration-in-the-resources-server with its four reasons; the observation that `rollout_collection_driver` is a planner above the episode and out of scope.
+
+### 7.3 PR 3100
+
+**P1. The sidecar is generated only for `simple_agent` instances that name a resources server.** `normalize_simple_agent_rollouts` skips every other implementation, so the 40 other agents keep their own `/run`. That is fine as a first step and wrong as the general mechanism, because it keys generation on the implementation directory name rather than on the environment. Generate per environment instead: one sidecar for a resources server, serving whichever agents route to it.
+
+**P2. `_processor_server_name` is called on every `/run` and every `/aggregate_metrics`,** and the aggregate route goes to the processor, which proxies to the resources server. That is two hops for a call the collector could send to the verify owner directly (the RFC's own recommendation). Resolve once at preprocessing, not per row.
+
+**P3. `BaseProcessor` copies `_capture_correlation_enabled` and `_token_id_capture_enabled` from the agent base** and reads `self.config.token_id_capture` on the processor config. Capture selection is per agent (NeMo RL keys it by agent name). A processor serving two agents needs the flag per agent, which is Rule 2 in section 3: the processor reads the target agent's flag, not its own.
+
+**P4. Trajectory plumbing rides on a private key.** The processor pops `INTERNAL_TRAJECTORY_KEY` from the response JSON and infers `task_id` from four candidate row extras. That is the same untyped side channel the design is trying to remove; the episode record in section 3 is the typed home.
+
+**What PR 3100 gets right:** the package split (`nemo_gym.agents`, `nemo_gym.processors`), transparent routing inside `run_examples` so NeMo RL and verl need no change, keeping `SimpleResponsesAPIAgent` untouched for compatibility, and a concrete `run()` that is the seed → agent → verify sequence.
+
+### 7.4 The placement branch
+
+**S1. Secrets are shipped into the sandbox.** `_worker_payload` builds the worker config from `self.config.model_dump(mode="json")`, which includes every field of the agent config. `opencode_agent` carries `openai_api_key` and `opencode_config.provider.*.apiKey: ${nvidia_api_key}`; codex and claude_code carry provider keys in the same way. The payload is written to a `mkdir -m 700` directory inside the box the untrusted harness runs in. The comment says "never the verifier config, task answers, provider credentials" and that is true of the global config subset, not of the agent config. The box must receive only endpoints and per-rollout tokens; the rollout-scoped model URL already needs no key.
+
+**S2. The resources-server workspace registry is process-local and refuses retries.** `_session_sandboxes` is a `PrivateAttr` dict on the server instance; `register_sandbox_workspace` raises "Session already owns a sandbox workspace" on a second seed for the same session and stops the new box. With `num_workers > 1` on the resources server, seed, verify, and cleanup can land on different uvicorn workers and miss the dict (the doc admits "seed, verify, and cleanup must reach the same resources-server process"). A retried seed after a lost response fails outright. The processor-held ref in section 7.7 removes the registry.
+
+**S3. The outer host answers 400 on `/v1/responses`.** Anything that drives the agent by `/v1/responses` directly, which includes `remote_agent` composition, reverification paths, and any parent agent, loses the agent when placement is on. Placement should make `/v1/responses` on the host provision a runtime and forward, or the agent should declare that its `/v1/responses` requires an episode context and fail with that message.
+
+**S4. Per-task dependency install with no cache is not an RL-scale path.** Each rollout uploads a source tarball, bootstraps `uv`, creates a venv with a downloaded Python, and installs Gym plus the harness. That is minutes of wall clock and a network dependency on PyPI, astral.sh, and the harness's distribution per rollout. The branch's answer is a prepared image with `dependencies.enabled: false`, which is right, but nothing builds that image. The source snapshot also includes untracked files (`git ls-files --others`), so two runs from the same commit can ship different code.
+
+**S5. The worker runs the harness's whole FastAPI app.** It calls `agent.setup_webserver()` and enters the app's lifespan inside the box. For the CLI agents that is harmless; for agents whose `setup_webserver` starts telemetry, proxies, or background tasks (osworld's asset prewarm, browsecomp's tokenizer client, tau2's data clone) it runs those inside every sandbox. The bridge also bypasses HTTP, so the session middleware, the rollout-context middleware, and the traced endpoints run with a synthetic ASGI scope rather than a real request, and there is no telemetry span from inside the box.
+
+**S6. Placement is hosted in the agent server, which is the wrong long-term home and the right short-term one.** `SandboxedAgentHost.run()` is the seed → connect or create → execute → verify → cleanup sequence, and `create_server` swaps it in for the harness. It duplicates the processor's job in the agent process, which is acceptable as an interim exactly because it is `run()`-shaped: it moves into the processor without changing shape (section 15, Phase 2).
+
+**S7. Smaller points.** `runtime` lives on `BaseResponsesAPIAgentConfig`, so resources servers that shell out get nothing; the block belongs on `BaseRunServerInstanceConfig`. `/cleanup_session` competes with PR #2612's `close_session`; one name. `server_urls` is a manual reachability table per server; `reach(url)` from section 5 subsumes it. `sandbox_source: environment` rejects any agent `spec`, which is correct, and `sandbox_source: runtime` rejects an environment-supplied workspace, which is also correct; both validators carry over. The `_harness_import` fallback assumes `responses_api_agents.<dir>.<entrypoint>` and fails for out-of-tree agents discovered through `NEMO_GYM_EXTRA_ROOTS`.
+
+**What the placement branch gets right and this design keeps:** the unchanged-harness principle, the worker bridge for Python harnesses, the typed workspace on the seed response with a `serialize()` descriptor rather than a bare id, cleanup in `finally` on every path, the placement validators, and the demonstration that `opencode_sandboxed_agent` is a configuration of `opencode_agent`.
+
+### 7.5 PR 2085
+
+Reviewing my own proposal with the same standard.
+
+**B1. The registry is in-memory and single-process.** `_entries` lives in one server process; a restart orphans every box (TTL is the only recovery), and `num_workers > 1` splits the registry. A sandbox server that holds state has to persist it or derive it from the provider (labels, names), not from a dict.
+
+**B2. Leases have a 24-hour `max_age` and no renewal,** which is shorter than a long RL run and longer than a rollout; neither bound is the right one. Renewal belongs with the `SupportsSandboxRenew` capability on the `terryk/sandbox-renewable` branch.
+
+**B3. It adds a hop to every `exec`.** Every command the harness runs crosses HTTP twice. For OpenSandbox and e2b that hop is pure cost, which is why the server must never sit in front of a connectable provider.
+
+**B4. Most "non-connectable" providers are connectable on the same host without a server.** A docker container is addressable by id from any process that can reach the daemon; an apptainer instance by name; a local workspace by path. Only the `raw` handle is process-bound, and only because the provider stores a live client object in it. Implementing `serialize_handle` and `connect` on docker, apptainer, and local (same-host reconnect by id or path) covers the workstation and single-node cases that make up all in-repo uses of those providers. The server is then needed only for cross-host sharing of host-local providers, which no in-repo benchmark does.
+
+### 7.6 What the review changes in this design
+
+| Draft 4 said | Draft 5 says | Because |
+| --- | --- | --- |
+| Adopt placement as the `sandbox` kind | Adopt the placement mechanism with four conditions: no agent config in the box, processor-held ref instead of a resources-server registry, a built and cached runtime image, HTTP bridge when the box can reach the host | S1, S2, S4, S5 |
+| Sidecar per environment from PR 3100 | Same, but generated for any agent that names a resources server, not only `simple_agent`, and resolved once at preprocessing | P1, P2 |
+| Sandbox server conditional | Sandbox server not needed for any in-repo provider once docker, apptainer, and local implement same-host `connect`; server reserved for cross-host local providers | B4 |
+| Class D standalone processors | Same | agreed |
+| `EpisodeContext` on base requests including create params | `ng_episode` on Gym-internal requests only; path and headers to the model server | R4 |
+
+### 7.7 Better solutions
+
+**The harness contract should be Harbor's, not Gym's.** For CLI harnesses the minimal contract is a manifest, not Python: image, install command, launch template with the prompt and workdir, the env var the tool reads its model endpoint from, and how to parse its output. mbien's `custom_agent/harness.yaml` on `feat/sandbox-cli-agents` is that manifest, and the audit found the eight host-CLI agents differ from each other by exactly its fields. A manifest harness needs no Gym install in the box, no Python in the image, and no `HarnessAdapter` subclass; the runtime executes it through `exec` and `pty`. Placement remains for Python harnesses that own a loop (hermes, langgraph, strands). Two harness shapes, both configured in YAML, both under the same `runtime` block, and the user writes no Python for a new CLI tool. This is the single place the user asked for.
+
+**The processor holds the sandbox ref and passes it in every request.** Seed returns the descriptor; the processor carries it into `ng_episode` for the agent and into the verify request for the environment. No server keeps a per-session dict, so `num_workers > 1` works, a retried seed is idempotent, and reverification decides from the request whether a ref is present. This is the RFC's `EpisodeContext` applied to Gym-internal requests only, and it removes both swebench's `_session_id_to_sandbox` and the placement branch's `_session_sandboxes`.
+
+**Same-host `connect` for docker, apptainer, and local.** `serialize_handle` returns the container id, instance name, or workspace path plus a host id; `connect` rebuilds the handle from the daemon, `apptainer instance list`, or the path, and refuses when the host id differs. Three small provider changes replace the sandbox server for every in-repo use.
+
+**A built runtime image, cached by content hash.** `gym runtime build <agent>` produces an image layer with Python, Gym, and the harness's requirements, keyed by the hash of `pyproject.toml`, the harness's manifest, and `uv.lock`; placement uses it and falls back to the per-task install only on a cache miss. The per-task path stays for development and never runs in a training loop.
+
+**Endpoints and tokens into the box, never config.** The worker payload is the request body, the rollout-scoped routes, the MCP session token, and the resolved harness settings with secret-typed fields removed. Agent configs mark secrets with `SecretStr`, which the framework already uses for provider credentials, and the worker builder drops them.
+
+**Declared capabilities, checked before compute.** An agent declares `capabilities` (`tools: mcp | http | none`, `runtime: [none, process, sandbox]`, `input: single | multi_turn`); an environment declares `requires` (`sandbox`, `tools`, `multi_turn`). The pairing check names the missing capability. `allowed_agents` stays as the benchmark owner's override, and a bypass records the reason in the episode record so a zero is never silent.
 ## 8. Sandbox authority
 
 ### Use cases
@@ -418,23 +480,68 @@ Rows carry `task_source: swebench_env`. The collector resolves the agent by the 
 
 ## 13. Backward compatibility, sized
 
+Backward compatibility is the constraint the rest of the design bends around. Two external contracts exist, and upstream main has already changed one of them under everyone's feet.
+
+### 13.1 The dispatch contract external frameworks hold
+
+Every trainer integration reaches Gym the same way: it starts servers with `RunHelper.start` from a config it assembles, calls `RolloutCollectionHelper.run_examples(rows)`, and reads results keyed by `agent_ref`. Inside `run_examples`, Gym resolves `task_source` to `agent_ref` synchronously and in place, validates names and pairings, and posts `/run` to `row["agent_ref"]["name"]` (`rollout_collection.py:1910-1920` upstream).
+
+| Consumer | How it dispatches | What it reads | Status against upstream main |
+| --- | --- | --- | --- |
+| NeMo RL main (`edf6b8c42`, 2026-09-09) | `run_examples` | resolved `row["agent_ref"]` after the call, `response.output` token ids, `reward`, `mask_sample`, `reward_components` | Adapted: builds its per-agent counter after `run_examples` and returns the resolved ref to its caller |
+| NeMo RL older (`9f166d8b0`, the tokcap branch) | `run_examples` | `row["agent_ref"]` before the call, for the counter and capture selection | Breaks on `task_source`-only rows with a `KeyError` before dispatch |
+| verl recipe (`verl-recipe/nemo_gym`) | `run_examples` | `agent_ref` from the dataset row; `dataset.py` and `agent_loop.py:291` raise when it is missing | Breaks on rows collated by upstream, which strips `agent_ref` |
+| `gym eval run`, `gym eval reverify` | `run_from_config` | `agent_ref` or `task_source`; reverify rebuilds the agent-to-environment map | Works |
+| Direct HTTP clients (`client.py` scripts, notebooks) | `POST /run` to an agent name | the verify response | Works as long as `/run` exists on the agent |
+
+The rows have changed underneath them. Upstream collate now strips a legacy `agent_ref` and stamps `task_source` (`train_data_utils.py:853-865`), datasets live on the resources server (#2724), and the row schema is the resources server's `TaskData` with `RESERVED_ROW_KEYS = {responses_create_params, agent_ref, task_source, _ng_task_index, _ng_rollout_index}`. The agent is "a run-time choice, never part of the data". That is the right end state and it already broke two of the five consumers above without any processor.
+
+### 13.2 The invariants this design commits to
+
+These hold for the whole program, not for a deprecation window.
+
+1. `run_examples(rows)` keeps its signature and semantics: it accepts rows with `agent_ref`, with `task_source`, or with both; it resolves `task_source` in place; it returns futures that resolve to `(row, result)` with `result["agent_ref"]` equal to the resolved ref.
+2. `POST /run` on an agent server name keeps working and returns the verify response shape. Processor selection happens inside `run_examples`; a caller that posts directly to an agent gets the agent's shim, which runs the same phases.
+3. `agent_ref.name` is the identity on results, in `_aggregate_metrics.json`, and in MLflow metric names. `/aggregate_metrics` keeps answering on the agent name; the collector may route it to the verify owner internally.
+4. Token capture is selected per agent name and read out of band by rollout id.
+5. Server discovery through the head server and top-level config blocks with an `entrypoint` is unchanged; `episode_processors` is one more block type.
+6. The verify response is a superset of today's: every new field is optional.
+
+### 13.3 Task data ownership
+
+Upstream's direction is that the resources server owns the row schema, the dataset, and the routing stamp, and the agent owns nothing about the row. The processor is the natural consumer of that split, and the design makes the split explicit at dispatch:
+
+- The processor validates the row against the environment's `TaskData` (loaded through `load_task_data_schema`, with `normalize_task_fields` splicing a legacy `verifier_metadata` wrapper) and forwards the whole row to `/seed_session` and `/verify`.
+- The agent receives `responses_create_params` plus `ng_episode` (rollout id, runtime handle, MCP headers, egress env, `skills_ref`, resume flag). It never receives task-owned fields, which closes the privileged-data leak that today's `/run` body carries into every harness (a harness that reads `verifier_metadata` can read the answer key).
+- Rows in the legacy flat shape and rows in the planned `task_data` shape both validate, because `normalize_task_fields` already handles both; the processor does not add a third shape.
+
+Two agents read row extras today and keep working: claude_code and codex read `skills_ref` from the run body, which moves into `ng_episode`; the swe_bench branch's claude_code reads `verifier_metadata` for the topology, which becomes the descriptor.
+
+### 13.4 Repairs the design owes upstream's migration
+
+Both breaks in section 13.1 are independent of the processor and should be fixed first.
+
+- Collate should keep an opt-in `--stamp-agent-ref` (or resolve at collate time when exactly one agent references the environment) so verl datasets and older NeMo RL checkouts keep a resolvable row. The stamp is redundant with `task_source` and harmless.
+- `run_examples` should tolerate a row that carries both keys and prefer the resolution rules already documented (`agent_map` > `agent_ref` > `task_source`), which upstream does; the documentation for trainers should say that `agent_ref` is read after the call, not before.
+
+### 13.5 Sized by surface
+
 | Surface | Count | Change required | When |
 | --- | --- | --- | --- |
-| `/run` on agent servers | 42 agents; RL, verl, and every collector post here | None. `/run` stays as a shim that runs the same phases in-process when no processor is configured. | never removed in this program |
-| Dataset rows with `agent_ref` | every committed dataset | None (upstream already treats them as legacy with a warning). | none |
-| Environment configs | 26 `environments/`, ~150 resources-server configs upstream | None. A missing `episode_processors` block means an implicit default. | opt-in |
-| Resources servers: seed and verify schemas | 102 servers | None. New fields are optional; `BaseSeedSessionResponse` empty is valid. Three servers replace `sandbox_handle: str` with `SandboxRef`. | Phase 3 for the three |
-| Resources servers: `close_session` | 11 override `seed_session` and hold state; 5 cleanup conventions | Override the no-op hook. Existing `/close`, `/end_session` keep working until migrated. | Phase 0, incremental |
-| Native agents | 19 simple_agent clones | Delete `run()` (optional; the override keeps working). Middleware is added by the base class. | Phase 0 |
-| Host-CLI agents and sandboxed twins | 8 + 2 | Unchanged code; `runtime.kind: sandbox` places them in the box. The two twins are retired as directories once their configs point at the base agent. | Phase 1 |
-| Self-contained agents | 6 | Declare `integration_profile: external-agent-loop`. No code change. | Phase 1 |
+| `/run` on agent servers | 42 agents; RL, verl, and every collector post here | None. `/run` stays as a shim that runs the phases in-process when no processor is configured. | never removed in this program |
+| Dataset rows with `agent_ref` | every committed dataset before #2713 | None. Rows with either key resolve. | none |
+| Dataset rows with `task_source` only | every dataset collated on upstream main | None in Gym; verl and older RL need the collate stamp in section 13.4 | now |
+| Environment configs | 26 `environments/`, ~150 resources-server configs upstream | None. A missing `episode_processors` block means the in-process shim. | opt-in |
+| Resources servers: seed and verify schemas | 102 servers | None. New fields are optional; `BaseSeedSessionResponse` empty is valid. Four servers replace `sandbox_handle: str` with a typed entry. | Phase 1 for the four |
+| Resources servers: `close_session` | 11 override `seed_session` and hold state | Override the no-op hook. Existing `/close`, `/end_session` keep working until migrated. | Phase 0 |
+| Native agents | 19 simple_agent clones | Delete `run()` (optional). Middleware is added by the base class. | Phase 0 |
+| Host-CLI agents and sandboxed twins | 8 + 2 | Unchanged code; `runtime.kind: sandbox` places them. The two twins are retired as directories once their configs point at the base agent. | Phase 1 |
+| Self-contained agents | 6 | Become standalone processors or declare `external-agent-loop`. | Phase 2 |
 | Session-state store layout | `boundaries.jsonl`, snapshots | Unchanged; attempt fence added on append. | Phase 0 |
-| Control plane | 3 components | `episode_processors` added to the literal. RL reads capabilities, does not enumerate them. | Phase 1 |
-| RolloutCollectionHelper public API | `run_examples`, `run_from_config` | Unchanged signatures; processor resolution is internal. | Phase 1 |
-| Manifest and validation | 1:1 agent-environment | Accept a processor block; N agents via existing `fan_out` and pins. | Phase 1 |
+| Control plane | 3 components | `episode_processors` added to the literal. RL reads capabilities, does not enumerate them. | Phase 2 |
+| Manifest and validation | 1:1 agent-environment | Accept a processor block; N agents via existing `fan_out` and pins. | Phase 2 |
 
-Nothing in the table is a breaking change for a user who does not opt in. The cost lands on maintainers of the ten CLI agents and the three `sandbox_handle` servers.
-
+Nothing in the table is a breaking change for a user who does not opt in. The cost lands on the ten CLI agents, the four `sandbox_handle` servers, and the collate repair.
 ## 14. Integrating existing frameworks
 
 | Framework | Today | Under the design | Easier? |
@@ -453,7 +560,7 @@ Reordered so the two urgent needs, harness decomposition and a first-class runti
 
 **Phase 0: mechanical harness fixes and always-on identity.** The five changes in section 6.2. Add `RolloutContextMiddleware` to agent apps and force rollout correlation on for base-class calls. Give `SimpleResponsesAPIAgent.run()` a concrete seed → prefixed self `/v1/responses` → verify → close implementation that reads the descriptor, renders MCP metadata, proxies `/aggregate_metrics`, and honors `skip_verification`; delete `run()` from the simple_agent clones and the CLI harnesses that match it. Land `close_session` (#2612, reconciled with the placement branch's `/cleanup_session` under one name) and `env_session_id` (#2613). Add the attempt fence to the session-state store. No new server type, no config change.
 
-**Phase 1: runtime first-class, by placement.** Land the `runtime` block on `BaseRunServerInstanceConfig` with alias mapping from the five legacy spellings, the process-scoped provider in `run_webserver`, and the placement host and worker from `upstream/ffrujeri/sandboxes` as the `sandbox` kind. `SandboxWorkspace` becomes `SandboxRef` with rollout binding and scope. Convert swebench, deepswe, terminal_bench_2_1, and swebench_pro to `register_sandbox_workspace` and a typed `sandboxes` entry. Run opencode, claude_code, codex, hermes, and openclaw against swebench and terminal_bench_2_1 with `runtime.kind: sandbox` and retire the two sandboxed twins. Add `capabilities` and `requires` declarations and the explaining pairing check. This is what makes `--agent-type opencode_agent` work on swebench.
+**Phase 1: runtime first-class.** Land the `runtime` block on `BaseRunServerInstanceConfig` with alias mapping from the five legacy spellings, the process-scoped provider in `run_webserver`, and the rollout scope in the `/run` wrapper. Land the manifest harness shape (mbien's `harness.yaml` as the schema) and migrate opencode and claude_code to it first; land the placement mechanism from `upstream/ffrujeri/sandboxes` for Python harnesses with the four conditions from section 7.6, hermes first. The seed response carries a typed `sandboxes` entry with a `serialize()` descriptor; the processor holds the ref and passes it to the agent and to verify, and swebench, deepswe, terminal_bench_2_1, and swebench_pro drop their per-session dicts. Implement same-host `connect` on docker, apptainer, and local. Add `capabilities` and `requires` and the explaining pairing check. Ship the collate repair from section 13.4. This is what makes `--agent-type opencode_agent` work on swebench, and it needs no sandbox server.
 
 **Phase 2: `episode_processors/` server type.** Take PR 3100's packages and sidecar generation, with the sidecar keyed per environment and rows keeping `agent_ref`. Move `SandboxedAgentHost.run()` into the processor unchanged; the `/run` on agents becomes the shim that forwards to it. `_validate_agent_names` accepts processors; `episode_processors` in the control-plane literal; manifest accepts a processor block. Adopt the `/sandbox_spec` before seed ordering. Move gymnasium's loop into `step_episode_processor`. Class D integrations become standalone processors.
 
@@ -464,13 +571,14 @@ Reordered so the two urgent needs, harness decomposition and a first-class runti
 ## 16. Decisions to take now
 
 1. **Phase 0 and Phase 1 first, processor second.** The audits show the urgent needs are met by the base-class `run()` and the runtime block, neither of which requires a new server type.
-2. **Adopt the placement branch as the `sandbox` runtime kind.** Unchanged harness inside the box, per-task or prepared-image dependencies. Adapters and `local` provider additions become an optimization.
+2. **Two harness shapes, both YAML: manifest harnesses for CLI tools (no Gym in the box) and placed harnesses for Python agents (the placement mechanism with the four conditions in section 7.6).** A new CLI tool is onboarded without Python.
 3. **Runtime block on `BaseRunServerInstanceConfig`, provider built in `run_webserver`, scope in the `/run` wrapper.** Never `model_post_init`. Kinds `none`, `process`, `sandbox` with the defaults in section 5.3.
-4. **Adopt PR 3100's sidecar generation for the implicit processor, keyed per environment, with `agent_ref` unchanged on rows and results.** This is the point of disagreement with the RFC's routing-key change, and the RL contract in section 11 is the reason.
-5. **Per-entry sandbox ownership, with `/sandbox_spec` before seed for processor-owned workspaces.** Disagrees with the RFC's single owner; agrees with its ordering.
-6. **Sandbox server: conditional, not a dependency.** Connectable providers are the requirement; PR 2085 is the `remote` provider for local backends when needed.
+4. **`agent_ref` stays the external routing key on rows and results; processor selection is internal to `run_examples`.** Sidecar generation from PR 3100, keyed per environment and for any agent that names a resources server, is the mechanism when a processor is declared; the in-process shim is the default. This is the disagreement with the RFC's routing-key change, and the contracts in section 13.1 are the reason.
+5. **Per-entry sandbox ownership, a processor-held ref passed in every request, and `/sandbox_spec` before seed for processor-owned workspaces.** Disagrees with the RFC's single owner and with both branches' per-session registries; agrees with the RFC's ordering.
+6. **No sandbox server for any in-repo provider.** Same-host `connect` on docker, apptainer, and local replaces it; PR 2085 stays parked for cross-host sharing of host-local providers, which nothing in the repo does.
 7. **Class D integrations become standalone processors,** per the RFC.
 8. **Environment teardown: one endpoint,** `close_session` from #2612 or the placement branch's `/cleanup_session`, not both.
+9. **Fix the collate stamp for verl and older NeMo RL before anything else** (section 13.4); upstream's `task_source` migration already broke them.
 ## Appendix A: coupling points the refactor carries
 
 - Rollout id is derived, not assigned: `_ng_rollout_id`, else `{task_index}-{rollout_index}` plus `-a{n}` (`rollout_correlation.py:77-113`). Six subsystems recompute it and must agree.
