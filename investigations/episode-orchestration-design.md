@@ -8,9 +8,9 @@ The training compatibility scope is NeMo RL only. The contract is based on NVIDI
 
 ## The short answer
 
-Work can start now on additive processor types, behavior characterization, NeMo RL contract tests, the standard processor behind opt-in routing, the participant schema, and prepared CLI images. None of that work depends on moving an existing harness or choosing a cross-host runtime implementation.
+Work can start now on additive processor types, behavior characterization, NeMo RL contract tests, the participant schema, runtime-requirement inventory, routing controls, and prepared CLI images. None of that work depends on moving an existing harness or choosing a cross-host runtime implementation.
 
-With three engineers and benchmark-owner support, simple-agent swappability is approximately a five-week milestone. Sandboxed CLI swappability and a native policy-plus-simulated-user episode are approximately eight-week milestones. Moving the high-value benchmark topologies and making processor routing the default is a twelve-to-sixteen-week program.
+The remaining sequence is dependency-driven rather than calendar-driven. Processor migration starts after the request and result contracts are approved. Sandboxed CLI canaries start after runtime leases are enforceable. User-simulation implementation starts after participant, visibility, and scheduling semantics are approved.
 
 Existing harnesses move one boundary at a time: first through a compatibility adapter in their current placement, then onto the `Agent.run` activation contract, and only then into a sandbox when required. Deterministic characterization and replay tests run on every change. Small real-rollout canaries gate each harness. Full benchmark baselines gate default changes and compatibility removal. Routing remains reversible by configuration, and CLI rollback never falls back to unsandboxed host execution.
 
@@ -36,11 +36,11 @@ This organization causes three concrete problems.
 
 Moving lifecycle behavior into a mandatory processor server would clarify network ownership, but it would impose a process, port, health check, and network hop on every rollout. Invoking agents only through `/v1/responses` would also give that endpoint more meaning than its OpenAI-compatible contract supports. A single Responses API call can represent one model-facing exchange or an adapter surface. It does not necessarily represent a complete agent activation or episode.
 
-The target architecture keeps one pure processor contract and one reusable standard lifecycle without requiring one deployment topology.
+The target architecture keeps one pure processor contract and one reusable lifecycle envelope without requiring one deployment topology.
 
 ## The processor contract is separate from its implementations
 
-`EpisodeProcessor` is a pure structural interface. It defines the typed request, services, result, and behavioral invariants that every processor must satisfy. It does not inherit a concrete `run()` method and does not prescribe one internal algorithm.
+`EpisodeProcessor` is a pure structural interface. It defines one asynchronous operation and its request, service, and result types. It does not inherit a concrete `run()` method and does not prescribe one internal algorithm.
 
 ```python
 class EpisodeProcessor(Protocol):
@@ -94,7 +94,7 @@ class EpisodeResult(BaseModel):
 
 `EpisodeServices` provides typed access to agent invocation, the environment, optional runtime management, event publication, checkpoint storage, cancellation, and the clock. These are injected capabilities. They are not methods inherited from a processor base class.
 
-The protocol requires every implementation to:
+Python's `Protocol` checks the operation shape; it cannot enforce lifecycle behavior. Gym accepts an implementation only when the processor conformance suite verifies that it:
 
 - preserve rollout, attempt, and participant identity;
 - accept at least one participant without changing the request shape;
@@ -103,23 +103,25 @@ The protocol requires every implementation to:
 - respect attempt fencing, deadlines, idempotency keys, and any runtime leases supplied through `EpisodeServices`;
 - pass the processor conformance suite.
 
-The protocol does not require every implementation to seed, schedule turns, harvest artifacts, or verify in the same way. Those choices belong to concrete implementations.
+The protocol does not require every implementation to seed, schedule turns, harvest artifacts, or verify in the same way. Those choices belong to concrete implementations. Safety behavior is supplied by composition with `EpisodeLifecycle`, not inherited from the protocol.
 
-The initial concrete implementations are:
+The initial concrete components are:
 
-- `StandardEpisodeProcessor`, which implements the normal seed, participant scheduling, agent invocation, artifact, verification, publication, and cleanup lifecycle;
-- benchmark-specific processors for external frameworks that own the complete interaction and scoring flow.
+- `EpisodeLifecycle`, a concrete internal state machine that enforces identity, attempt fencing, durable events, coordinated checkpoints, terminal publication, cancellation, and cleanup;
+- `StandardEpisodeProcessor`, which composes `EpisodeLifecycle` with normal seed, participant scheduling, agent invocation, artifact, and verification behavior;
+- benchmark-specific processors, which implement the protocol and compose the same lifecycle envelope around an external framework's interaction and scoring adapter.
 
 | Layer | Handles | Does not handle |
 | --- | --- | --- |
-| `EpisodeProcessor` protocol | Request, service, and result types; identity, fencing, cancellation, event, and terminal-result invariants | Lifecycle phase implementations, transport, configuration discovery, or benchmark policy |
-| `StandardEpisodeProcessor` | Standard phase order, required runtime acquisition, participant loop, artifact handoff, verification, publication, and cleanup | HTTP routing, provider-specific sandbox calls, or a fixed turn policy |
+| `EpisodeProcessor` protocol | The asynchronous `process` operation and its request, service, and result types | Lifecycle behavior, transport, configuration discovery, or benchmark policy |
+| `EpisodeLifecycle` | Identity, fencing, runtime cleanup, durable events, coordinated checkpoints, cancellation, and terminal publication | Agent turn policy, environment-specific interaction, or HTTP routing |
+| `StandardEpisodeProcessor` | Standard seed, required runtime acquisition, participant loop, artifact handoff, and verification behavior | HTTP routing, provider-specific sandbox calls, or a fixed turn policy |
 | `TurnScheduler` implementation | Next-participant selection and participant-visible observations | Agent execution, runtime ownership, verification, or result publication |
 | Custom processor implementation | A benchmark or external framework's non-standard episode flow | Cross-rollout planning or exemptions from the common processor invariants |
 | `EpisodeProcessorService` | Remote transport, process lifecycle, health, and dependency construction | Episode semantics |
 | `LegacyRunAdapter` | Temporary routing to an unchanged legacy `/run`, plus request and result observation for characterization | The `EpisodeProcessor` contract or lifecycle guarantees the legacy harness does not already implement |
 
-Processor implementations satisfy the protocol structurally. They do not subclass a base processor that supplies `process()` or `run()`. `LegacyRunAdapter` is deliberately outside the protocol and cannot be selected for new components.
+Processor implementations satisfy the protocol structurally and compose `EpisodeLifecycle` to obtain the common safety envelope. They do not subclass a base processor that supplies `process()` or `run()`. `LegacyRunAdapter` is deliberately outside the protocol and cannot be selected for new components.
 
 `StandardEpisodeProcessor` receives a `TurnScheduler` by composition. A single-agent schedule and a simulated-user schedule use the same processor class. New turn policies do not require new processor subclasses.
 
@@ -141,9 +143,11 @@ flowchart LR
     Service --> Processor
     Processor --> Standard["StandardEpisodeProcessor"]
     Processor --> Custom["Custom implementation"]
-    Standard --> Environment
-    Standard --> RuntimeManager
-    Standard --> AgentService
+    Standard --> Lifecycle["EpisodeLifecycle"]
+    Custom --> Lifecycle
+    Lifecycle --> Environment
+    Lifecycle --> RuntimeManager
+    Lifecycle --> AgentService
     AgentService --> Agent["Agent.run(request, context)"]
     RuntimeManager --> Placement["Agent execution placement"]
     RuntimeManager --> Workspace["Environment workspace"]
@@ -198,9 +202,11 @@ The request to `/invoke` carries typed Gym identity and any required lease refer
 
 `POST /v1/responses` remains available as an OpenAI-compatible adapter. It translates a compatible request into `Agent.run` when enough context exists. A stateless agent can serve a direct request without episode runtime bindings. An agent that requires a workspace or sandbox rejects a direct request that does not provide an authorized invocation context. This endpoint is not the canonical Gym behavior contract, and the architecture does not assume that one `/v1/responses` call completes an episode.
 
-### `StandardEpisodeProcessor` owns the reusable lifecycle
+### `EpisodeLifecycle` owns the reusable safety envelope
 
-`StandardEpisodeProcessor` coordinates the normal Gym lifecycle for one or more participants. The `EpisodeProcessor` protocol does not provide this implementation. A custom processor can use another internal lifecycle while preserving the protocol invariants.
+`EpisodeLifecycle` implements fencing, events, checkpoints, terminal publication, cancellation, and cleanup. It exposes an internal `execute` operation that wraps a processor's interaction strategy. It is not a processor base class.
+
+`StandardEpisodeProcessor` uses this envelope for the normal Gym lifecycle and supplies the participant loop. A custom processor supplies a different interaction strategy while retaining the same safety behavior.
 
 ### `RuntimeManager` controls runtime leases
 
@@ -227,17 +233,18 @@ This requirement does not imply a mandatory new service. A simple deployment use
 
 Model servers remain responsible for inference, admission, token capture, and model-call capture. Rollout and participant identity propagate through the resolved model binding.
 
-## The standard processor follows an explicit ordered lifecycle
+## The reusable lifecycle and standard processor execute in a defined order
 
-`StandardEpisodeProcessor` executes these phases in order.
+`EpisodeLifecycle` owns the safety phases in this sequence. `StandardEpisodeProcessor` supplies the workspace, seed, participant-loop, artifact, and verification operations called inside that envelope.
 
 | Phase | Behavior | Durable output |
 | --- | --- | --- |
 | Resolve identity | Resolve or mint the rollout id, attempt, environment identity, every participant identity, the primary participant, and deadlines. Fence older attempts before any external effect. | Episode identity and attempt fence |
+| Load resumable state | If the request names a checkpoint, read the last complete checkpoint and atomically adopt it under the current attempt fence. | Participant, schedule, environment, runtime, and effect state |
 | Resolve requirements | Validate every participant agent's concrete runtime requirements against environment policy and available providers. Resolve separate agent-runtime and environment-workspace bindings. | Resolution decision |
 | Request workspace specification | If the processor will own an environment workspace, call `/sandbox_spec` before seed. Skip this call when no processor-owned workspace is required. | Validated workspace specification |
 | Allocate or reconnect runtimes | Ask `RuntimeManager` to allocate or reconnect each required runtime. Issue separate leases for the agent, environment, and verifier. | Runtime references and leases |
-| Seed the environment | Call `/seed_session` with episode identity and the environment workspace binding. Seed must be idempotent for one rollout and attempt. | Environment state reference and tool metadata |
+| Open the environment | Restore the checkpointed environment state when resuming. Otherwise call `/seed_session` with episode identity and the environment workspace binding. Seed must be idempotent for one rollout and attempt. | Environment state reference and tool metadata |
 | Run the participant loop | Ask the `TurnScheduler` which participant acts next. Obtain that participant's permitted observation, invoke its `AgentService` directly or through private `POST /invoke`, append attributed events, and continue until the schedule reaches a terminal condition. | Participant results, schedule state, and event cursor |
 | Harvest declared artifacts | Collect only files, commands, or structured outputs declared by the environment contract. | Artifact manifest |
 | Verify | Send the participant outcomes, primary response, permitted artifacts, and the verifier's own lease to the verify owner. | Reward, reward components, and verifier metadata |
@@ -249,6 +256,104 @@ Cancellation follows the same close and release path. Runtime time-to-live polic
 Single-agent execution is the degenerate case in which the request has one participant. User simulation uses at least two participants, such as `policy` and `simulated_user`, and a scheduler that defines their turn order.
 
 A custom processor may replace the standard phase composition for a whole-run integration. It still satisfies the common identity, fencing, event, cancellation, and terminal-result invariants.
+
+## The full episode sequence starts in `RolloutCollectionHelper`
+
+The sequence below shows `StandardEpisodeProcessor`, which implements the pure `EpisodeProcessor` protocol and supplies the standard interaction strategy to `EpisodeLifecycle`. Calls from `Lifecycle` are safety-envelope behavior. Calls from `Processor` are the concrete standard implementation. Runtime calls are conditional for in-process agents. A multi-agent episode repeats the participant loop with a different participant selected on each turn. The verify owner may be the environment service or another component, but it receives the same typed verification input.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant RCH as RolloutCollectionHelper
+    participant Host as /run facade or ProcessorService
+    participant Processor as StandardEpisodeProcessor
+    participant Lifecycle as EpisodeLifecycle
+    participant Store as Episode store
+    participant Runtime as RuntimeManager
+    participant Env as Environment
+    participant Scheduler as TurnScheduler
+    participant AgentService
+    participant Agent
+    participant Model as Model server
+    participant Verify as Verify owner
+
+    RCH->>RCH: Resolve task_source, agent_ref, participants, and processor route
+    RCH->>Host: POST /run with rollout_id and attempt
+    Host->>Processor: process(EpisodeRequest, EpisodeServices)
+    Processor->>Lifecycle: execute(request, interaction strategy)
+    Lifecycle->>Store: Acquire attempt fence and check terminal result
+
+    alt Terminal result already exists
+        Store-->>Lifecycle: Existing EpisodeResult
+    else Episode must execute
+        opt A checkpoint is being resumed
+            Lifecycle->>Store: Read and adopt the last complete checkpoint
+            Store-->>Lifecycle: Participant, schedule, environment, and runtime state
+        end
+        Lifecycle->>Processor: Execute standard interaction strategy with resumable state
+        Processor->>Processor: Validate references, requirements, policy, and schedule
+        opt Processor-owned workspace is required
+            Processor->>Env: POST /sandbox_spec
+            Env-->>Processor: Workspace requirements
+        end
+        opt Any execution or workspace runtime is required
+            Processor->>Runtime: Allocate or restore owner leases
+            Runtime-->>Processor: RuntimeRefs and scoped leases
+        end
+        alt Restoring a checkpoint
+            Processor->>Env: Restore environment state
+            Env-->>Processor: Restored state and tool bindings
+        else Starting a new episode
+            Processor->>Env: POST /seed_session with identity and workspace binding
+            Env-->>Processor: Environment state and tool bindings
+        end
+
+        loop Until the schedule reaches a terminal condition
+            Processor->>Scheduler: next_turn(EpisodeState)
+            Scheduler->>Env: Request participant-scoped observation
+            Env-->>Scheduler: Observation visible to selected participant
+            Scheduler-->>Processor: TurnDirective
+            Processor->>AgentService: invoke participant with model, tool, and optional runtime bindings
+            opt Agent execution uses a runtime
+                AgentService->>Runtime: Connect with participant lease
+                Runtime-->>AgentService: Restricted RuntimeSession
+            end
+            AgentService->>Agent: run(AgentRequest, AgentContext)
+            loop Agent activation may contain several model and tool exchanges
+                Agent->>Model: Responses request with rollout and participant identity
+                Model-->>Agent: Response items, token data, and usage
+                opt Response requests an environment tool
+                    Agent->>Env: Authorized tool call
+                    Env-->>Agent: Tool result
+                end
+            end
+            Agent-->>AgentService: AgentResult with disposition and checkpoint state
+            AgentService-->>Processor: Attributed participant result
+            Processor->>Lifecycle: Record attributed events and coordinated checkpoint state
+            Lifecycle->>Store: Append events and commit a coordinated checkpoint
+        end
+
+        Processor->>Env: Harvest declared artifacts
+        Env-->>Processor: Artifact manifest
+        Processor->>Verify: Verify participant outcomes, primary response, and artifacts
+        Verify-->>Processor: Reward, reward components, and verifier metadata
+        Processor-->>Lifecycle: Standard interaction outcome
+        Lifecycle->>Store: Publish one terminal EpisodeResult
+        par Close environment state
+            Lifecycle->>Env: POST /close_session
+        and Release runtime access
+            Lifecycle->>Runtime: Release borrower leases and close owner leases
+        end
+        Store-->>Lifecycle: Durable terminal result
+    end
+
+    Lifecycle-->>Processor: EpisodeResult
+    Processor-->>Host: EpisodeResult
+    Host-->>RCH: Compatible response, reward, participant outcomes, and provenance
+    RCH->>RCH: Yield rollout to evaluation or NeMo RL
+```
+
+If cancellation or a retryable infrastructure failure occurs before terminal publication, `EpisodeLifecycle` records the attempt failure and follows the same close-and-release path. `RolloutCollectionHelper` may then submit the same `rollout_id` with a higher attempt. If terminal publication already succeeded, the episode store returns that result instead of executing the episode again.
 
 ## Runtime requirements are concrete and agent-owned
 
@@ -620,37 +725,28 @@ The following pull requests can start now:
 1. Add `EpisodeProcessor`, `EpisodeRequest`, `EpisodeParticipant`, `EpisodeServices`, `EpisodeResult`, `TurnScheduler`, and their validation tests as additive types. Do not change routing.
 2. Add characterization tests around current `/run`, seed, verify, aggregation, identity, capture, cancellation, and cleanup behavior. These tests freeze observable contracts rather than internal call structure.
 3. Add a NeMo RL contract suite against commit `e518e602fbff282dbb1d5033a819b2cdc18cfb12`. Cover synchronous agent resolution, returned `agent_ref`, `_ng_rollout_id` receipt mode, Responses output, rewards, sample masking, and completion accounting.
-4. Implement `StandardEpisodeProcessor` behind an opt-in route for `simple_agent`. Keep the legacy endpoint and result schema unchanged.
-5. Add `participants` and `schedule` as additive request fields. Translate a legacy `agent_ref` into a one-participant tuple with a single-participant schedule at the compatibility boundary.
-6. Define concrete runtime requirements and build prepared sandbox images for the first CLI canaries. Image work can proceed before runtime leases are complete.
+4. Add `participants` and `schedule` as additive request fields. Translate a legacy `agent_ref` into a one-participant tuple with a single-participant schedule at the compatibility boundary.
+5. Define concrete runtime requirements and build prepared sandbox images for the first CLI canaries. Image work can proceed before runtime leases are complete.
 
 These changes create reviewable contracts and evidence without moving every harness. They also expose incompatible assumptions before the migration reaches benchmark code.
 
-## A staffed migration reaches useful swappability before catalogue-wide conversion
+The first production canaries remain blocked until the project agrees on the `Agent.run` field ownership, private `/invoke` payload, runtime-requirement vocabulary, lease operations, artifact transfer, verifier relationships, attempt fencing, terminal publication, participant visibility, and scheduling semantics. The cross-host `RuntimeManager` deployment can remain undecided because it does not affect the local contract.
 
-The following timeline assumes three engineers working across the core processor, runtime, and migration tracks, with benchmark owners available for canary review. The ranges are planning estimates, not release commitments. With one engineer, the independent tracks become serial and the elapsed time is likely close to double.
+## Work starts when its dependencies are satisfied
 
 Swappability does not mean that every agent can run every environment. It means an environment does not contain agent-specific orchestration, and changing `agent_ref` is sufficient when the replacement agent's declared capabilities satisfy the environment and deployment policy.
 
-| Elapsed time | Milestone | Main implementation work | Observable exit condition |
-| --- | --- | --- | --- |
-| Weeks 0–2 | Contracts and behavior are frozen | Add the pure processor and scheduler protocols, additive participant schema, characterization tests, and NeMo RL contract tests. | Existing routes and NeMo RL behavior pass without routing changes. |
-| Weeks 2–5 | Simple agents are swappable | Implement `StandardEpisodeProcessor`, the in-process compatibility facade, private processor service transport, and single-participant scheduling. | Two simple agents can run against the same compatible environment by changing only `agent_ref`. |
-| Weeks 3–8 | Sandboxed CLI placement is usable | Add concrete runtime resolution, enforceable leases, prepared images, and the worker adapter. Migrate OpenCode and Claude Code as canaries, then Codex. | A CLI agent can replace another compatible CLI agent without benchmark-specific sandbox code and without an unsandboxed fallback. |
-| Weeks 4–8 | User simulation is native | Implement participant-scoped observations, `TurnScheduler`, attributed events, per-participant model and runtime bindings, and multi-participant checkpoints. | A policy agent and simulated-user agent complete one shared episode through `StandardEpisodeProcessor`. |
-| Weeks 7–12 | Complex benchmark topologies are covered | Migrate live-workspace, fresh-verifier, artifact-only, desktop, and whole-run processor canaries. Keep GDPVal planning above the episode. | At least one real benchmark passes for each supported runtime and verification topology. |
-| Weeks 12–16 | New routing can become the default | Complete high-value harness migrations, run full benchmark baselines, publish deprecations, and retain config rollback. | Default routing uses processors for the supported set; legacy paths remain only for named exceptions. |
-
-The first useful swappability milestone is therefore about five weeks: simple agents can be exchanged without changing the environment. Sandboxed CLI swappability and native user simulation are approximately eight-week milestones because they depend on runtime enforcement and participant-aware execution. Broad migration is a twelve-to-sixteen-week program, not a prerequisite for starting the core decoupling.
-
-The protocol itself is a small part of the effort. Most work is in the standard lifecycle, runtime enforcement, compatibility tests, and per-harness migration:
-
-- processor types, service transport, and conformance tests: about three to five engineer-weeks;
-- `StandardEpisodeProcessor`, legacy facade, and routing: about four to six engineer-weeks;
-- runtime resolution, leases, data plane, and prepared-image workflow: about six to nine engineer-weeks;
-- native multi-agent scheduling, participant visibility, attribution, and checkpoint state: about four to seven engineer-weeks;
-- NeMo RL compatibility and integration tests: about two to three engineer-weeks;
-- harness migration: less than one engineer-week for a simple agent, roughly one to two for a CLI or artifact-heavy harness, and more for an external whole-run integration.
+| Work can start | Work | Gate before the next dependent work |
+| --- | --- | --- |
+| Immediately | Add pure interface types, participant fields, deterministic characterization tests, NeMo RL contract tests, runtime-requirement inventory, routing controls, and prepared CLI images. | Request, result, identity, and compatibility behavior are documented by executable tests. |
+| After request and result contracts are approved | Implement `EpisodeLifecycle`, `StandardEpisodeProcessor`, the in-process facade, processor service transport, and single-participant scheduling behind opt-in routing. | Two simple agents run against the same compatible environment by changing only `agent_ref`, and the legacy and processor paths have equivalent observable behavior. |
+| After the runtime-requirement and lease contracts are approved | Implement `RuntimeManager` adapters, enforcing data-plane clients, owner and borrower cleanup, and sandbox worker integration. | Fault-injection tests prove lease enforcement, cancellation, cleanup, and no host fallback. |
+| After participant, visibility, and scheduler contracts are approved | Implement participant-scoped observations, multi-participant scheduling, attributed events, primary-trajectory selection, and coordinated state. This can proceed in parallel with runtime implementation. | A policy agent and simulated-user agent complete one shared synthetic episode without leaking observations or tokens across participants. |
+| After the standard processor passes deterministic conformance | Start simple-agent and non-runtime benchmark canaries. | Targeted real rollouts preserve result schemas, rewards, artifacts, and cleanup behavior. |
+| After runtime enforcement passes fault injection | Start OpenCode and Claude Code sandbox canaries, followed by Codex. | Each CLI harness passes real rollouts in a prepared image with no unsandboxed production path. |
+| After single-agent and user-simulation canaries pass | Migrate benchmark topologies: live workspace, fresh verifier, artifact-only, desktop, and whole-run integrations. | Each topology has representative benchmark qualification and rollback coverage. |
+| After topology qualification and full baselines | Make processor routing the default for the qualified set. | Operational evidence shows acceptable failures, cleanup, and result compatibility. |
+| After no supported configuration uses the legacy lifecycle | Remove compatibility behavior. | Deprecation, NeMo RL qualification, archived baselines, and a documented rollback release are complete. |
 
 ## Migration risk is controlled at four test layers
 
@@ -667,6 +763,8 @@ The same fixture runs through the legacy route and the new processor route. It c
 Captured request and response sequences exercise routing, schema translation, event attribution, and failure mapping. They let old and new paths consume the same deterministic evidence.
 
 Live old-and-new shadow execution is unsafe for stateful episodes. It can mutate the same workspace twice, spend model budget twice, or publish duplicate external effects. Differential comparison is limited to fakes, read-only fixtures, or recorded replay unless the benchmark explicitly provisions two isolated copies.
+
+When a real old-versus-new comparison is necessary, run the paths sequentially with distinct rollout IDs, sessions, workspaces, and runtimes. For nondeterministic models, compare repeated-run distributions rather than requiring identical trajectories.
 
 ### Targeted real rollouts validate harness and verifier behavior
 
@@ -711,38 +809,39 @@ A harness leaves the legacy path only after it passes processor conformance, its
 
 ## Migration sequence keeps independent work parallel
 
-1. Land the pure contracts, additive participant schema, characterization suite, and NeMo RL contract suite.
-2. Land `StandardEpisodeProcessor`, single-participant scheduling, and the legacy compatibility facade behind opt-in routing.
-3. Build runtime requirements, leases, the enforcing data plane, and prepared CLI images in parallel with the standard processor.
-4. Add participant-scoped observations and multi-participant scheduling as soon as `EpisodeRequest.participants` lands. This work does not wait for broad harness migration.
-5. Migrate OpenCode and Claude Code, followed by Codex. Reuse the placement proof of concept's worker mechanism, validators, and cleanup attempts, but invoke canonical `Agent.run`.
-6. Migrate SWE-bench and Terminal Bench for live and fresh verification, then GDPVal, CVDP, and VIBench for artifact handoffs.
-7. Migrate OSWorld and PinchBench through desktop and whole-runtime leases. Migrate Tau2 as the user-simulation and whole-run custom-processor canary.
-8. Change default routing only after topology canaries and full benchmark baselines pass. Remove compatibility routes only after their explicit removal gates are met.
+1. Start the pure contracts, additive participant schema, characterization suite, NeMo RL contract suite, runtime-requirement inventory, routing controls, and prepared images immediately.
+2. After the request and result contracts are approved, land `EpisodeLifecycle`, `StandardEpisodeProcessor`, single-participant scheduling, and the legacy compatibility facade behind opt-in routing.
+3. After the runtime-requirement and lease contracts are approved, build the enforcing data plane and provider adapters. This work can proceed in parallel with the standard processor.
+4. After participant visibility and scheduler semantics are approved, add participant-scoped observations and multi-participant scheduling. This work does not wait for broad harness migration or runtime enforcement.
+5. After runtime fault-injection tests pass, migrate OpenCode and Claude Code, followed by Codex. Reuse the placement proof of concept's worker mechanism, validators, and cleanup attempts, but invoke canonical `Agent.run`.
+6. After standard-processor canaries pass, migrate SWE-bench and Terminal Bench for live and fresh verification, then GDPVal, CVDP, and VIBench for artifact handoffs.
+7. After runtime-topology and user-simulation canaries pass, migrate OSWorld and PinchBench through desktop and whole-runtime leases. Migrate Tau2 as the user-simulation and whole-run custom-processor canary.
+8. After topology canaries and full benchmark baselines pass, change default routing for the qualified set. Remove compatibility routes only after their explicit removal gates are met.
 
 Blackbox CLI agents may declare `checkpoint.supported: false` during their first migration. They become resumable only after a checkpoint adapter passes interruption and restore tests.
 
 ## Decisions
 
-1. `EpisodeProcessor` is a pure `Protocol` with one `process` method and no inherited lifecycle implementation.
-2. `StandardEpisodeProcessor` is a concrete implementation composed with a `TurnScheduler`.
-3. Every `EpisodeRequest` contains one or more participants. Single-agent execution is not a different request type.
-4. Policy and simulated-user agents are first-class participants with separate roles, observations, model bindings, optional runtime leases, checkpoints, and event attribution.
-5. Legacy agent `/run` and an optional `EpisodeProcessorService` host processor implementations without defining a second lifecycle.
-6. `Agent.run(request, context) -> AgentResult` is the behavior contract for one participant activation.
-7. `AgentService /invoke` is the private transport contract used by a remote processor.
-8. `/v1/responses` is a compatibility adapter and does not define a whole episode.
-9. Runtime requirements are concrete. Profile-like classifications are removed.
-10. CLI harnesses require sandbox placement in production. Local subprocess execution is not a security boundary.
-11. Agent execution and environment task state have separate bindings and permissions.
-12. `RuntimeManager` keeps provider descriptors internal and enforces typed leases.
-13. A borrower releases its lease. Only an owner lease closes a runtime.
-14. The placement proof of concept contributes worker placement, dependency staging, validation, and cleanup behavior. `SandboxedAgentHost` does not remain the orchestrator.
-15. `agent_ref.name` remains the external result, metric, and NeMo RL training-subject identity. `_ng_rollout_id` remains the token-capture receipt identity.
-16. Metric aggregation belongs to the verify owner.
-17. Cross-rollout planning remains above `EpisodeProcessor`.
-18. `fan_out` is repeated single-agent evaluation, not a multi-agent episode.
-19. Partial checkpointing coordinates every participant's state with environment state, runtime references, schedule position, events, effects, fencing, and terminal publication.
+- `EpisodeProcessor` is a pure `Protocol` with one `process` method and no inherited lifecycle implementation.
+- `EpisodeLifecycle` is a concrete internal safety envelope composed by supported processor implementations. It is not a processor base class.
+- `StandardEpisodeProcessor` composes `EpisodeLifecycle` with a `TurnScheduler` and the standard interaction phases.
+- Every `EpisodeRequest` contains one or more participants. Single-agent execution is not a different request type.
+- Policy and simulated-user agents are first-class participants with separate roles, observations, model bindings, optional runtime leases, checkpoints, and event attribution.
+- Legacy agent `/run` and an optional `EpisodeProcessorService` host processor implementations without defining a second lifecycle.
+- `Agent.run(request, context) -> AgentResult` is the behavior contract for one participant activation.
+- `AgentService /invoke` is the private transport contract used by a remote processor.
+- `/v1/responses` is a compatibility adapter and does not define a whole episode.
+- Runtime requirements are concrete. Profile-like classifications are removed.
+- CLI harnesses require sandbox placement in production. Local subprocess execution is not a security boundary.
+- Agent execution and environment task state have separate bindings and permissions.
+- `RuntimeManager` keeps provider descriptors internal and enforces typed leases.
+- A borrower releases its lease. Only an owner lease closes a runtime.
+- The placement proof of concept contributes worker placement, dependency staging, validation, and cleanup behavior. `SandboxedAgentHost` does not remain the orchestrator.
+- `agent_ref.name` remains the external result, metric, and NeMo RL training-subject identity. `_ng_rollout_id` remains the token-capture receipt identity.
+- Metric aggregation belongs to the verify owner.
+- Cross-rollout planning remains above `EpisodeProcessor`.
+- `fan_out` is repeated single-agent evaluation, not a multi-agent episode.
+- Partial checkpointing coordinates every participant's state with environment state, runtime references, schedule position, events, effects, fencing, and terminal publication.
 
 ## Cross-host runtime management remains a deployment choice
 
