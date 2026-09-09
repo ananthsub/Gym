@@ -85,7 +85,7 @@
 <main>
 <div class="eyebrow">NeMo Gym design draft 5</div>
 <h1>Episode orchestration: processors, runtimes, and sandbox authority</h1>
-<p>Status: design draft 5, 2026-09-09. Builds on issue #2159 (Felipe Frujeri's episode-processor proposal, closed without an implementing PR) and PR #2085 (sandbox server, unmerged). Evidence is from this checkout (<code>session-state-prototype</code> at <code>996a10f9c</code>) cross-checked against <code>upstream/main</code> at <code>9287fb779</code> and the NeMo RL checkout at <code>~/dev/RL</code> (<code>9f166d8b0</code>). Draft 2 incorporated an adversarial code review of draft 1 (Appendix C). Draft 3 adds two audits (Appendix D): harness-to-benchmark coupling across the ten CLI harnesses, and how every consumer opts into a sandbox; they produced the new sections 5 and 6 and the reordered migration. Draft 4 (same day) added a comparison with the public RFC on <code>ananthsub/public-gym-architecture-rfc</code>, prototype PR #3100, PR #2085, and the <code>upstream/ffrujeri/sandboxes</code> placement branch. Draft 5 (same day) replaces that comparison with a critical review (section 7), with concrete findings against each artifact and the alternatives they lead to, and rewrites backward compatibility (section 13) around the NeMo RL main and verl recipe contracts as they stand today.</p>
+<p>Status: design draft 5, 2026-09-09. Builds on issue #2159 (Felipe Frujeri's episode-processor proposal, closed without an implementing PR) and PR #2085 (sandbox server, unmerged). Evidence is from this checkout (<code>session-state-prototype</code> at <code>996a10f9c</code>) cross-checked against <code>upstream/main</code> at <code>9287fb779</code> and the NeMo RL checkout at <code>~/dev/RL</code> (<code>9f166d8b0</code>). Draft 2 incorporated an adversarial code review of draft 1 (Appendix C). Draft 3 adds two audits (Appendix D): harness-to-benchmark coupling across the ten CLI harnesses, and how every consumer opts into a sandbox; they produced the new sections 5 and 6 and the reordered migration. Draft 4 (same day) added a comparison with the public RFC on <code>ananthsub/public-gym-architecture-rfc</code>, prototype PR #3100, PR #2085, and the <code>upstream/ffrujeri/sandboxes</code> placement branch. Draft 5 (same day) replaces that comparison with a critical review (section 7) of <code>rfcs/gym-architecture.md</code>, now on this branch, with concrete findings against each artifact and the alternatives they lead to, and rewrites backward compatibility (section 13) around the NeMo RL main and verl recipe contracts as they stand today.</p>
 <h2 id="1-the-problem">1. The problem</h2>
 <p><code>/run</code> is hosted on the agent server. That single choice is the root of four separate problems.</p>
 <p><strong>Every agent re-implements episode orchestration.</strong> <code>SimpleResponsesAPIAgent</code> declares <code>run()</code> abstract (<code>nemo_gym/base_responses_api_agent.py:195</code>), so all 42 agent servers write their own seed → agent → verify sequence. Nineteen are copies of <code>simple_agent.run()</code> with local edits. Twelve never call <code>/verify</code> and compute reward themselves (anyswe, anyterminal, swe_agents, mini_swe_agent, mini_swe_agent_2, harbor, osworld, tau2, verifiers, pinchbench, gymnasium, vcqa). Eight implement <code>/run</code> but raise <code>NotImplementedError</code> from <code>responses()</code>. Three override <code>setup_webserver</code> and register <code>/run</code> directly, which bypasses the rollout-context wrapper and drops session middleware (<code>mini_swe_agent/app.py:104</code>, <code>mini_swe_agent_2/app.py:626</code>, <code>harbor_agent/app.py:227</code>).</p>
@@ -513,7 +513,7 @@ gym eval run --resources-server example_mcp_weather --agent-type opencode_agent 
 </thead>
 <tbody>
 <tr>
-<td><code>rfcs/gym-architecture.md</code> on <code>ananthsub/public-gym-architecture-rfc</code></td>
+<td><code>rfcs/gym-architecture.md</code> (originally on <code>ananthsub/public-gym-architecture-rfc</code>, now merged onto this branch)</td>
 <td>Public RFC: <code>episode_processors/</code> owning <code>/run</code> and the sandbox, agents owning only <code>/v1/responses</code>, class D integrations as standalone processors, metrics on the verify owner, a legacy processor for migration. Built on #1866, #2950, #2858, #2763 and prototype #3100</td>
 <td>draft</td>
 </tr>
@@ -1367,7 +1367,7 @@ claude_code_swe:
 <td>adoption</td>
 </tr>
 <tr>
-<td><code>ananthsub/public-gym-architecture-rfc</code> (<code>rfcs/gym-architecture.md</code>)</td>
+<td><code>rfcs/gym-architecture.md</code> (public RFC, merged onto this branch from <code>ananthsub/public-gym-architecture-rfc</code>)</td>
 <td>processor as fourth server type owning <code>/run</code> and the sandbox; legacy processor; class D as standalone processors; metrics on the verify owner; competitive analysis against Harbor and Prime</td>
 <td>routing key moves to the processor; single sandbox owner; sandbox server as a Phase 3 dependency</td>
 </tr>
