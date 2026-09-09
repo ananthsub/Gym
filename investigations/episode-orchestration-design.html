@@ -69,33 +69,46 @@
 <div class="page">
 <nav class="toc" aria-label="Sections">
   <div class="lbl">Sections</div>
+  <a href="#the-short-answer">The short answer</a>
+  <a href="#an-episode-is-the-interaction-a-rollout-is-its-exported-sample">An episode is the interaction; a rollout is its exported sample</a>
   <a href="#the-current-agent-endpoint-combines-behavior-with-lifecycle-work">The current agent endpoint combines behavior with lifecycle work</a>
-  <a href="#what-each-proposal-optimizes-for">What each proposal optimizes for</a>
-  <a href="#the-synthesis-has-one-logical-runner-and-two-deployment-forms">The synthesis has one logical runner and two deployment forms</a>
-  <a href="#roles-are-defined-by-behavior-and-authority">Roles are defined by behavior and authority</a>
-  <a href="#one-episode-follows-an-explicit-ordered-lifecycle">One episode follows an explicit ordered lifecycle</a>
+  <a href="#the-processor-contract-is-separate-from-its-implementations">The processor contract is separate from its implementations</a>
+  <a href="#roles-are-defined-by-behavior-and-permissions">Roles are defined by behavior and permissions</a>
+  <a href="#the-standard-processor-follows-an-explicit-ordered-lifecycle">The standard processor follows an explicit ordered lifecycle</a>
   <a href="#runtime-requirements-are-concrete-and-agent-owned">Runtime requirements are concrete and agent-owned</a>
   <a href="#benchmark-topologies-fit-the-separate-bindings">Benchmark topologies fit the separate bindings</a>
-  <a href="#the-placement-proof-of-concept-supplies-a-worker-mechanism-not-the-final-runner">The placement proof of concept supplies a worker mechanism, not the final runner</a>
-  <a href="#runtime-authority-is-enforceable-across-processes">Runtime authority is enforceable across processes</a>
+  <a href="#the-placement-proof-of-concept-supplies-a-worker-mechanism-not-the-final-processor">The placement proof of concept supplies a worker mechanism, not the final processor</a>
+  <a href="#runtime-leases-remain-enforceable-across-processes">Runtime leases remain enforceable across processes</a>
   <a href="#identity-remains-stable-for-results-and-training">Identity remains stable for results and training</a>
   <a href="#metric-aggregation-stays-with-the-verify-owner">Metric aggregation stays with the verify owner</a>
-  <a href="#cross-rollout-planning-remains-above-episoderunner">Cross-rollout planning remains above EpisodeRunner</a>
-  <a href="#multi-agent-episodes-require-seats-scheduling-and-attribution">Multi-agent episodes require seats, scheduling, and attribution</a>
+  <a href="#cross-rollout-planning-remains-above-episodeprocessor">Cross-rollout planning remains above EpisodeProcessor</a>
+  <a href="#multi-agent-episodes-are-part-of-the-processor-request">Multi-agent episodes are part of the processor request</a>
   <a href="#partial-checkpointing-coordinates-all-episode-state">Partial checkpointing coordinates all episode state</a>
   <a href="#compatibility-facades-do-not-create-a-second-architecture">Compatibility facades do not create a second architecture</a>
   <a href="#configuration-records-references-instead-of-nesting-behavior">Configuration records references instead of nesting behavior</a>
   <a href="#validation-fails-before-compute">Validation fails before compute</a>
-  <a href="#migration-proceeds-through-compatibility-tests-and-canaries">Migration proceeds through compatibility tests and canaries</a>
-  <a href="#decisions-carried-by-this-draft">Decisions carried by this draft</a>
-  <a href="#open-architectural-question">Open architectural question</a>
+  <a href="#work-can-start-before-the-final-service-topology-is-decided">Work can start before the final service topology is decided</a>
+  <a href="#a-staffed-migration-reaches-useful-swappability-before-catalogue-wide-conversion">A staffed migration reaches useful swappability before catalogue-wide conversion</a>
+  <a href="#migration-risk-is-controlled-at-four-test-layers">Migration risk is controlled at four test layers</a>
+  <a href="#migration-sequence-keeps-independent-work-parallel">Migration sequence keeps independent work parallel</a>
+  <a href="#decisions">Decisions</a>
+  <a href="#cross-host-runtime-management-remains-a-deployment-choice">Cross-host runtime management remains a deployment choice</a>
 </nav>
 <main>
-<div class="eyebrow">Design draft 6 · 2026-09-09</div>
-<h1 id="episode-orchestration-one-lifecycle-across-agents-environments-and-runtimes">Episode orchestration: one lifecycle across agents, environments, and runtimes</h1>
-<p>Status: design draft 6, 2026-09-09.</p>
-<p>This document synthesizes the public proposal in <code>rfcs/gym-architecture.md</code>, the episode-orchestration design developed in this investigation, and the runtime-placement proof of concept on <code>upstream/ffrujeri/sandboxes</code>. It defines a target architecture rather than selecting one proposal unchanged.</p>
+<div class="eyebrow">Architecture proposal · 2026-09-09</div>
+<h1 id="episode-orchestration-a-pure-processor-contract-for-single-agent-and-multi-agent-episodes">Episode orchestration: a pure processor contract for single-agent and multi-agent episodes</h1>
+<p>Status: proposal, 2026-09-09.</p>
+<p>This document defines how Gym separates episode orchestration from agent behavior, supports several agents in one episode, and places command-line harnesses in controlled runtimes.</p>
 <p>The training compatibility scope is NeMo RL only. The contract is based on NVIDIA-NeMo/RL main at <code>e518e602fbff282dbb1d5033a819b2cdc18cfb12</code>.</p>
+<h2 id="the-short-answer">The short answer</h2>
+<p>Work can start now on additive processor types, behavior characterization, NeMo RL contract tests, the standard processor behind opt-in routing, the participant schema, and prepared CLI images. None of that work depends on moving an existing harness or choosing a cross-host runtime implementation.</p>
+<p>With three engineers and benchmark-owner support, simple-agent swappability is approximately a five-week milestone. Sandboxed CLI swappability and a native policy-plus-simulated-user episode are approximately eight-week milestones. Moving the high-value benchmark topologies and making processor routing the default is a twelve-to-sixteen-week program.</p>
+<p>Existing harnesses move one boundary at a time: first through a compatibility adapter in their current placement, then onto the <code>Agent.run</code> activation contract, and only then into a sandbox when required. Deterministic characterization and replay tests run on every change. Small real-rollout canaries gate each harness. Full benchmark baselines gate default changes and compatibility removal. Routing remains reversible by configuration, and CLI rollback never falls back to unsandboxed host execution.</p>
+<h2 id="an-episode-is-the-interaction-a-rollout-is-its-exported-sample">An episode is the interaction; a rollout is its exported sample</h2>
+<p>A task row describes work that can be attempted. The rollout collector selects that row, model and agent configuration, and sampling parameters to request one rollout. The rollout is the durable sample exported to evaluation or training: its primary trajectory, participant records, artifacts, reward, and provenance.</p>
+<p>An episode is the live interaction that produces that rollout. It begins when Gym admits the request and opens or restores environment state. It includes every participant turn, tool call, runtime operation, and verification step. It ends after Gym durably publishes a terminal result and releases episode-owned resources.</p>
+<p>The initial contract is one episode per rollout. <code>rollout_id</code> therefore remains the compatible identity for both the live episode and its exported record; adding a second <code>episode_id</code> would create two identifiers with no distinct lifecycle. Only a pre-terminal infrastructure failure may retry the same episode. The retry keeps <code>rollout_id</code>, increments <code>attempt</code>, atomically acquires the attempt fence, and adopts the last committed checkpoint from the superseded attempt. A published terminal result cannot be retried. A deliberate new sample gets a new <code>rollout_id</code> and a new episode.</p>
+<p>A multi-agent or user-simulation episode still produces one rollout. Its participant outcomes and event stream contain every agent, while the top-level training trajectory identifies the configured primary participant. Planning that chooses several task rows or later rollouts remains above the episode processor.</p>
 <h2 id="the-current-agent-endpoint-combines-behavior-with-lifecycle-work">The current agent endpoint combines behavior with lifecycle work</h2>
 <p>Gym currently sends each rollout to <code>POST /run</code> on an agent server. That method commonly seeds the environment, runs the agent, sends the result for verification, and performs cleanup. Some agents add sandbox creation, artifact collection, retries, or benchmark-specific handoffs to the same method.</p>
 <p>This organization causes three concrete problems.</p>
@@ -104,94 +117,163 @@
 <li>A command-line harness often needs a second implementation when it moves into a sandbox. The harness behavior and its execution placement change together even when only placement should change.</li>
 <li>No framework component has a complete and enforceable account of runtime ownership. Environment servers, agent servers, and verifiers can each create or stop a sandbox through provider-specific conventions.</li>
 </ul>
-<p>The public RFC identifies the same ownership problem and makes agent swappability its primary goal. It proposes a separate episode-processor server that owns <code>/run</code>, invokes the agent through <code>/v1/responses</code>, and owns the sandbox lifecycle.</p>
-<p>That server boundary clarifies responsibilities, but making another process mandatory would impose a process, port, health check, and network hop on every rollout. It would also make <code>/v1/responses</code> carry more meaning than its OpenAI-compatible contract supports. A single Responses API call can represent one model-facing exchange or an adapter surface. It does not necessarily represent a complete episode.</p>
-<p>The target architecture keeps one lifecycle implementation without requiring one deployment topology.</p>
-<h2 id="what-each-proposal-optimizes-for">What each proposal optimizes for</h2>
-<h3 id="the-public-rfc-optimizes-for-visible-component-separation">The public RFC optimizes for visible component separation</h3>
-<p>The RFC makes the episode processor a first-class server and routes all rollouts through it. This gives the lifecycle an obvious network owner. It also removes <code>/run</code> and metric aggregation from the agent abstraction.</p>
-<p>Its strongest ideas are retained:</p>
+<p>Moving lifecycle behavior into a mandatory processor server would clarify network ownership, but it would impose a process, port, health check, and network hop on every rollout. Invoking agents only through <code>/v1/responses</code> would also give that endpoint more meaning than its OpenAI-compatible contract supports. A single Responses API call can represent one model-facing exchange or an adapter surface. It does not necessarily represent a complete agent activation or episode.</p>
+<p>The target architecture keeps one pure processor contract and one reusable standard lifecycle without requiring one deployment topology.</p>
+<h2 id="the-processor-contract-is-separate-from-its-implementations">The processor contract is separate from its implementations</h2>
+<p><code>EpisodeProcessor</code> is a pure structural interface. It defines the typed request, services, result, and behavioral invariants that every processor must satisfy. It does not inherit a concrete <code>run()</code> method and does not prescribe one internal algorithm.</p>
+<pre><code class="language-python">class EpisodeProcessor(Protocol):
+    async def process(
+        self,
+        request: EpisodeRequest,
+        services: EpisodeServices,
+    ) -&gt; EpisodeResult: ...
+</code></pre>
+<p>The method is named <code>process</code>, not <code>run</code>, to distinguish the interface from the legacy HTTP <code>/run</code> route and from <code>Agent.run</code>, which executes one agent activation. The name also makes the boundary explicit: a processor consumes one typed episode request and produces one typed terminal result.</p>
+<p><code>EpisodeRequest</code> represents one episode and contains one or more participants from the beginning:</p>
+<pre><code class="language-python">class EpisodeParticipant(BaseModel):
+    participant_id: str
+    role: str
+    agent_ref: AgentRef
+    model_bindings: dict[str, ModelRef]
+
+
+class EpisodeRequest(BaseModel):
+    rollout_id: str
+    attempt: int
+    environment_ref: EnvironmentRef
+    task: EpisodeTask
+    participants: tuple[EpisodeParticipant, ...]
+    primary_participant_id: str
+    schedule: ScheduleSpec
+    deadline: datetime | None = None
+    checkpoint_ref: CheckpointRef | None = None
+
+
+class EpisodeResult(BaseModel):
+    rollout_id: str
+    attempt: int
+    status: Literal[&quot;completed&quot;, &quot;failed&quot;, &quot;cancelled&quot;]
+    agent_ref: AgentRef
+    participant_outcomes: tuple[ParticipantOutcome, ...]
+    response: Response | None
+    reward: float | None
+    reward_components: dict[str, float] | None
+    instance_config: dict[str, Any]
+    failure: EpisodeFailure | None = None
+</code></pre>
+<p><code>participant_id</code> uniquely identifies one actor within the episode. <code>role</code> describes that actor's function, such as <code>policy</code>, <code>simulated_user</code>, or <code>critic</code>, and may be shared by several participants. The model does not need a separate seat identifier: when two actors have the same role, their participant identifiers already distinguish them.</p>
+<p><code>EpisodeTask</code> carries the public task input, verifier metadata, and additive episode options. Its compatibility representation contains today's <code>responses_create_params</code>; the processor protocol does not make an OpenAI request type the universal task abstraction.</p>
+<p><code>EpisodeServices</code> provides typed access to agent invocation, the environment, optional runtime management, event publication, checkpoint storage, cancellation, and the clock. These are injected capabilities. They are not methods inherited from a processor base class.</p>
+<p>The protocol requires every implementation to:</p>
 <ul>
-<li>Agent swappability is an explicit design goal. A benchmark should state what work and verification require, while an agent should state how it behaves.</li>
-<li>The component that owns verification also owns metric aggregation.</li>
-<li>The environment owns the task, dataset, tools, state, verification logic, and task-specific runtime requirements.</li>
-<li>When the episode runner owns a workspace, it asks the environment for <code>/sandbox_spec</code> before seeding. This lets seed populate the allocated workspace.</li>
-<li>An external framework that owns a whole run may use a custom processor instead of pretending to be a normal agent.</li>
-<li>Planning across rollouts belongs above one episode. Adaptive sampling cannot be expressed by moving <code>/run</code>.</li>
+<li>preserve rollout, attempt, and participant identity;</li>
+<li>accept at least one participant without changing the request shape;</li>
+<li>publish at most one terminal <code>EpisodeResult</code> for a rollout; a retryable attempt failure is recorded as an event and does not publish a terminal result;</li>
+<li>report failures and cancellation through the common result and event model;</li>
+<li>respect attempt fencing, deadlines, idempotency keys, and any runtime leases supplied through <code>EpisodeServices</code>;</li>
+<li>pass the processor conformance suite.</li>
 </ul>
-<p>The RFC is strongest at naming responsibilities and explaining why agents should be swappable. It is weaker where it turns those responsibilities into fixed deployment boundaries. A mandatory fourth process is unnecessary for simple runs. A processor routing key would also displace <code>agent_ref.name</code>, which current NeMo RL code reads as the resolved agent identity after Gym dispatch.</p>
-<p>The RFC also assigns sandbox ownership too broadly to one processor. Existing benchmarks require different owners for an agent workspace, environment tools, verifier execution, and pooled resources. Those resources can participate in one episode without sharing one owner.</p>
-<h3 id="this-investigation-optimizes-for-compatibility-and-lifecycle-precision">This investigation optimizes for compatibility and lifecycle precision</h3>
-<p>The existing design emphasizes an ordered lifecycle, runtime placement, ownership, recovery, and migration without a mandatory extra process. It also preserves <code>agent_ref.name</code> as the externally visible agent identity.</p>
-<p>Those priorities remain valid, but parts of the previous draft were too tied to current implementation categories. Broad labels such as native, harness, or external loop do not state the permissions an agent actually needs. They also encourage dispatch code to branch on categories instead of validating concrete requirements.</p>
-<p>The previous draft also blurred three boundaries. It treated an OpenAI-compatible endpoint as the agent's architectural contract, allowed host execution to stand in for isolated CLI execution, and described provider scope as enforceable through caller convention. Those choices fail when an agent needs several model exchanges, when untrusted CLI code reaches production data, or when a borrower can call a destructive provider operation. The revised contract separates Python behavior from transport, requires sandbox placement for CLI harnesses, and puts authorization in <code>RuntimeAuthority</code>.</p>
-<p>The previous draft also treated some critiques of the RFC as conclusions. This revision instead uses each proposal where it is strongest:</p>
+<p>The protocol does not require every implementation to seed, schedule turns, harvest artifacts, or verify in the same way. Those choices belong to concrete implementations.</p>
+<p>The initial concrete implementations are:</p>
 <ul>
-<li>The RFC supplies the agent-swappability goal, environment ownership, metric ownership, pre-seed workspace specification, and the boundary between an episode and cross-rollout planning.</li>
-<li>This design supplies one logical runner across deployment forms, the external identity contract, explicit phase order, runtime authority, recovery semantics, and NeMo RL compatibility.</li>
-<li>The placement proof of concept supplies a practical way to move an existing Python harness into a sandbox, along with useful validation and cleanup behavior.</li>
+<li><code>StandardEpisodeProcessor</code>, which implements the normal seed, participant scheduling, agent invocation, artifact, verification, publication, and cleanup lifecycle;</li>
+<li>benchmark-specific processors for external frameworks that own the complete interaction and scoring flow.</li>
 </ul>
-<h2 id="the-synthesis-has-one-logical-runner-and-two-deployment-forms">The synthesis has one logical runner and two deployment forms</h2>
-<p><code>EpisodeRunner</code> is a mandatory logical component. Every standard Gym episode executes through the same implementation and the same phase contracts.</p>
-<p>Deployment as an episode-processor server is optional.</p>
+<div class="tbl"><table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Handles</th>
+<th>Does not handle</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>EpisodeProcessor</code> protocol</td>
+<td>Request, service, and result types; identity, fencing, cancellation, event, and terminal-result invariants</td>
+<td>Lifecycle phase implementations, transport, configuration discovery, or benchmark policy</td>
+</tr>
+<tr>
+<td><code>StandardEpisodeProcessor</code></td>
+<td>Standard phase order, required runtime acquisition, participant loop, artifact handoff, verification, publication, and cleanup</td>
+<td>HTTP routing, provider-specific sandbox calls, or a fixed turn policy</td>
+</tr>
+<tr>
+<td><code>TurnScheduler</code> implementation</td>
+<td>Next-participant selection and participant-visible observations</td>
+<td>Agent execution, runtime ownership, verification, or result publication</td>
+</tr>
+<tr>
+<td>Custom processor implementation</td>
+<td>A benchmark or external framework's non-standard episode flow</td>
+<td>Cross-rollout planning or exemptions from the common processor invariants</td>
+</tr>
+<tr>
+<td><code>EpisodeProcessorService</code></td>
+<td>Remote transport, process lifecycle, health, and dependency construction</td>
+<td>Episode semantics</td>
+</tr>
+<tr>
+<td><code>LegacyRunAdapter</code></td>
+<td>Temporary routing to an unchanged legacy <code>/run</code>, plus request and result observation for characterization</td>
+<td>The <code>EpisodeProcessor</code> contract or lifecycle guarantees the legacy harness does not already implement</td>
+</tr>
+</tbody>
+</table></div>
+<p>Processor implementations satisfy the protocol structurally. They do not subclass a base processor that supplies <code>process()</code> or <code>run()</code>. <code>LegacyRunAdapter</code> is deliberately outside the protocol and cannot be selected for new components.</p>
+<p><code>StandardEpisodeProcessor</code> receives a <code>TurnScheduler</code> by composition. A single-agent schedule and a simulated-user schedule use the same processor class. New turn policies do not require new processor subclasses.</p>
+<p>Deployment as an <code>EpisodeProcessorService</code> is optional.</p>
 <ul>
-<li><code>POST /run</code> on a legacy agent server remains available. The endpoint resolves the environment, agent, and runtime bindings, then calls the shared <code>EpisodeRunner</code> in the agent-service process.</li>
-<li>An explicit episode-processor endpoint calls the same <code>EpisodeRunner</code>. Complex flows can therefore place orchestration in a dedicated process without changing lifecycle semantics.</li>
-<li>Gym's collector may resolve either endpoint internally. The materialized row and returned result continue to identify the selected agent through <code>agent_ref</code>.</li>
+<li><code>POST /run</code> on a legacy agent server remains available. A migrated route builds an <code>EpisodeRequest</code>, invokes a configured processor in the same process, and translates the <code>EpisodeResult</code> back to the legacy response. An unmigrated route remains behind <code>LegacyRunAdapter</code> until that harness satisfies processor conformance.</li>
+<li>An explicit processor service invokes the same processor through a private endpoint. Complex flows can therefore isolate orchestration without changing the processor contract.</li>
+<li>Gym's collector may resolve either deployment internally. The materialized row and returned result continue to identify the selected primary agent through <code>agent_ref</code>.</li>
 </ul>
-<p>The compatibility endpoint is a facade, not a second implementation. When the runner and agent share a process, the runner calls the agent service directly. When they are in separate processes, it uses the private transport endpoint. Tests must prove that the in-process facade and explicit processor endpoint produce the same phase order, requests, result shape, cleanup behavior, and failure classification.</p>
-<p>This arrangement gives simple evaluations one lifecycle without forcing a fourth process. It also gives staged, external, or operationally isolated flows a dedicated deployment when they need one.</p>
+<p>The compatibility endpoint is a facade, not a second lifecycle implementation. Tests must prove that hosting <code>StandardEpisodeProcessor</code> in-process or in a service produces the same phase events, requests, result shape, cleanup behavior, and failure classification.</p>
+<p>This arrangement gives simple evaluations a reusable lifecycle without forcing a fourth process. It also gives staged, external, or operationally isolated flows a dedicated deployment when they need one.</p>
 <figure class="fig">
-<svg viewBox="0 0 1040 330" role="img" aria-label="The collector reaches either the legacy agent /run facade or an explicit processor endpoint. Both call the same EpisodeRunner. The runner calls the environment, the RuntimeAuthority, and the AgentService; the AgentService calls Agent.run(request, context). The RuntimeAuthority issues separate bindings for agent execution placement and the environment workspace." style="max-width:100%;height:auto;font-family:'Source Sans 3',system-ui,sans-serif;font-size:12px">
-  <defs><marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<svg viewBox="0 0 1040 360" role="img" aria-label="The collector reaches either a legacy agent run facade or an EpisodeProcessorService. Both invoke the pure EpisodeProcessor.process contract. The selected StandardEpisodeProcessor or custom implementation receives EpisodeServices and returns the common EpisodeResult." style="max-width:100%;height:auto;font-family:'Source Sans 3',system-ui,sans-serif;font-size:12px">
+  <defs><marker id="ahp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
   <g fill="none" stroke="currentColor" stroke-width="1.2">
-    <rect x="20" y="130" width="110" height="44" rx="3"/>
-    <text x="75" y="156" text-anchor="middle" fill="currentColor" stroke="none">collector</text>
-    <rect x="200" y="60" width="180" height="44" rx="3"/>
-    <text x="290" y="78" text-anchor="middle" fill="currentColor" stroke="none">legacy agent</text>
-    <text x="290" y="94" text-anchor="middle" fill="currentColor" stroke="none">POST /run facade</text>
-    <rect x="200" y="200" width="180" height="44" rx="3"/>
-    <text x="290" y="218" text-anchor="middle" fill="currentColor" stroke="none">explicit processor</text>
-    <text x="290" y="234" text-anchor="middle" fill="currentColor" stroke="none">endpoint</text>
-    <rect x="450" y="130" width="140" height="44" rx="3" stroke="var(--accent)" stroke-width="1.8"/>
-    <text x="520" y="156" text-anchor="middle" fill="currentColor" stroke="none" font-weight="600">EpisodeRunner</text>
-    <rect x="660" y="30" width="150" height="40" rx="3"/>
-    <text x="735" y="54" text-anchor="middle" fill="currentColor" stroke="none">environment</text>
-    <rect x="660" y="130" width="150" height="44" rx="3" stroke="var(--accent)" stroke-width="1.8"/>
-    <text x="735" y="156" text-anchor="middle" fill="currentColor" stroke="none" font-weight="600">RuntimeAuthority</text>
-    <rect x="660" y="250" width="150" height="40" rx="3"/>
-    <text x="735" y="274" text-anchor="middle" fill="currentColor" stroke="none">AgentService</text>
-    <rect x="870" y="250" width="150" height="40" rx="3"/>
-    <text x="945" y="268" text-anchor="middle" fill="currentColor" stroke="none">Agent.run(</text>
-    <text x="945" y="282" text-anchor="middle" fill="currentColor" stroke="none">request, context)</text>
-    <rect x="870" y="100" width="150" height="40" rx="3" stroke-dasharray="4 3"/>
-    <text x="945" y="124" text-anchor="middle" fill="currentColor" stroke="none">agent execution placement</text>
-    <rect x="870" y="160" width="150" height="40" rx="3" stroke-dasharray="4 3"/>
-    <text x="945" y="184" text-anchor="middle" fill="currentColor" stroke="none">environment workspace</text>
-    <path d="M130 145 L165 145 L165 82 L200 82" marker-end="url(#ahr)"/>
-    <path d="M130 159 L165 159 L165 222 L200 222" marker-end="url(#ahr)"/>
-    <path d="M380 82 L415 82 L415 145 L450 145" marker-end="url(#ahr)"/>
-    <path d="M380 222 L415 222 L415 159 L450 159" marker-end="url(#ahr)"/>
-    <text x="415" y="120" text-anchor="middle" fill="var(--muted)" stroke="none" font-size="11">same</text>
-    <text x="415" y="134" text-anchor="middle" fill="var(--muted)" stroke="none" font-size="11">runner</text>
-    <path d="M590 145 L625 145 L625 50 L660 50" marker-end="url(#ahr)"/>
-    <text x="628" y="96" fill="currentColor" stroke="none" font-size="11">sandbox_spec, seed,</text>
-    <text x="628" y="110" fill="currentColor" stroke="none" font-size="11">verify, close</text>
-    <line x1="590" y1="152" x2="660" y2="152" marker-end="url(#ahr)"/>
-    <text x="625" y="166" text-anchor="middle" fill="currentColor" stroke="none" font-size="11">allocate, grant</text>
-    <path d="M590 159 L625 159 L625 270 L660 270" marker-end="url(#ahr)"/>
-    <text x="628" y="230" fill="currentColor" stroke="none" font-size="11">invoke (in-process</text>
-    <text x="628" y="244" fill="currentColor" stroke="none" font-size="11">or POST /invoke)</text>
-    <line x1="810" y1="270" x2="870" y2="270" marker-end="url(#ahr)"/>
-    <path d="M810 145 L840 145 L840 120 L870 120" marker-end="url(#ahr)"/>
-    <path d="M810 159 L840 159 L840 180 L870 180" marker-end="url(#ahr)"/>
-    <text x="848" y="90" text-anchor="middle" fill="currentColor" stroke="none" font-size="11">separate grants</text>
+    <rect x="20" y="145" width="110" height="44" rx="3"/>
+    <text x="75" y="171" text-anchor="middle" fill="currentColor" stroke="none">collector</text>
+    <rect x="180" y="65" width="180" height="52" rx="3"/>
+    <text x="270" y="86" text-anchor="middle" fill="currentColor" stroke="none">legacy agent</text>
+    <text x="270" y="103" text-anchor="middle" fill="currentColor" stroke="none">POST /run facade</text>
+    <rect x="180" y="220" width="180" height="52" rx="3"/>
+    <text x="270" y="241" text-anchor="middle" fill="currentColor" stroke="none">EpisodeProcessorService</text>
+    <text x="270" y="258" text-anchor="middle" fill="currentColor" stroke="none">private transport</text>
+    <rect x="420" y="137" width="190" height="60" rx="3" stroke="var(--accent)" stroke-width="1.8"/>
+    <text x="515" y="160" text-anchor="middle" fill="currentColor" stroke="none" font-weight="600">EpisodeProcessor</text>
+    <text x="515" y="179" text-anchor="middle" fill="currentColor" stroke="none">process(request, services)</text>
+    <rect x="660" y="55" width="190" height="52" rx="3"/>
+    <text x="755" y="76" text-anchor="middle" fill="currentColor" stroke="none">StandardEpisodeProcessor</text>
+    <text x="755" y="93" text-anchor="middle" fill="currentColor" stroke="none">+ TurnScheduler</text>
+    <rect x="660" y="225" width="190" height="52" rx="3"/>
+    <text x="755" y="246" text-anchor="middle" fill="currentColor" stroke="none">custom implementation</text>
+    <text x="755" y="263" text-anchor="middle" fill="currentColor" stroke="none">same protocol invariants</text>
+    <rect x="890" y="55" width="130" height="86" rx="3" stroke-dasharray="4 3"/>
+    <text x="955" y="76" text-anchor="middle" fill="currentColor" stroke="none">EpisodeServices</text>
+    <text x="955" y="94" text-anchor="middle" fill="currentColor" stroke="none">agent · environment</text>
+    <text x="955" y="111" text-anchor="middle" fill="currentColor" stroke="none">runtime · events</text>
+    <text x="955" y="128" text-anchor="middle" fill="currentColor" stroke="none">checkpoint · cancel</text>
+    <rect x="890" y="225" width="130" height="52" rx="3" stroke="var(--accent)" stroke-width="1.8"/>
+    <text x="955" y="247" text-anchor="middle" fill="currentColor" stroke="none" font-weight="600">EpisodeResult</text>
+    <text x="955" y="264" text-anchor="middle" fill="currentColor" stroke="none">one terminal result</text>
+    <path d="M130 160 L155 160 L155 91 L180 91" marker-end="url(#ahp)"/>
+    <path d="M130 174 L155 174 L155 246 L180 246" marker-end="url(#ahp)"/>
+    <path d="M360 91 L390 91 L390 155 L420 155" marker-end="url(#ahp)"/>
+    <path d="M360 246 L390 246 L390 179 L420 179" marker-end="url(#ahp)"/>
+    <path d="M610 155 L635 155 L635 81 L660 81" marker-end="url(#ahp)"/>
+    <path d="M610 179 L635 179 L635 251 L660 251" marker-end="url(#ahp)"/>
+    <line x1="850" y1="81" x2="890" y2="81" marker-end="url(#ahp)"/>
+    <path d="M850 251 L870 251 L870 123 L890 123" marker-end="url(#ahp)" stroke-dasharray="4 3"/>
+    <path d="M850 98 L870 98 L870 238 L890 238" marker-end="url(#ahp)"/>
+    <line x1="850" y1="251" x2="890" y2="251" marker-end="url(#ahp)"/>
   </g>
 </svg>
-<figcaption>Both public endpoints use the same logical runner. Agent placement and environment workspaces remain separate runtime bindings.</figcaption>
+<figcaption>The processor is a pure contract. Hosting, standard lifecycle behavior, custom behavior, and infrastructure services remain separate implementations.</figcaption>
 </figure>
-
-<h2 id="roles-are-defined-by-behavior-and-authority">Roles are defined by behavior and authority</h2>
+<h2 id="roles-are-defined-by-behavior-and-permissions">Roles are defined by behavior and permissions</h2>
 <h3 id="the-environment-defines-the-task-and-verification-contract">The environment defines the task and verification contract</h3>
 <p>The environment owns:</p>
 <ul>
@@ -209,22 +291,23 @@
 <pre><code class="language-python">async def run(request: AgentRequest, context: AgentContext) -&gt; AgentResult:
     ...
 </code></pre>
-<p><code>AgentRequest</code> contains the task input that the agent is allowed to see. It does not include private verifier answers or unrelated global configuration.</p>
-<p><code>AgentContext</code> contains the resolved model bindings, tool bindings, participant identity, runtime grant, workspace grant, rollout identity, attempt identity, deadlines, and optional checkpoint input.</p>
-<p><code>AgentResult</code> contains the agent's response items, usage and capture references, artifacts or artifact declarations, emitted events, and optional checkpoint state.</p>
-<p>This Python method is the architectural behavior contract. It works for a simple in-process policy loop, a command-line harness, and a Python harness placed inside a sandbox.</p>
-<h3 id="agentservice-hosts-placement-and-transport"><code>AgentService</code> hosts placement and transport</h3>
-<p><code>AgentService</code> hosts an agent implementation and controls its placement. It exposes the same invocation operation through an in-process interface and a private transport endpoint.</p>
-<p>An <code>EpisodeRunner</code> in another process calls:</p>
+<p><code>AgentRequest</code> contains the participant-scoped observation, permitted history, and task input that the agent is allowed to see. It does not include private verifier answers, events addressed to other participants, or unrelated global configuration.</p>
+<p><code>AgentContext</code> contains the resolved model bindings, tool bindings, participant identity, rollout identity, attempt identity, deadlines, optional checkpoint input, and optional runtime and workspace sessions. An in-process agent that needs no external execution or task workspace receives neither session.</p>
+<p><code>AgentResult</code> contains the agent's response items, usage and capture references, artifacts or artifact declarations, emitted events, optional checkpoint state, and a disposition such as yield or participant-complete.</p>
+<p>This Python method is the architectural behavior contract. One call represents one participant activation, not necessarily one model call. An activation may run an internal model-and-tool loop before it yields control or reports that the participant has completed its work. The same contract works for a simple in-process policy loop, a command-line harness, and a Python harness placed inside a sandbox.</p>
+<h3 id="agentservice-hosts-invocation-and-transport"><code>AgentService</code> hosts invocation and transport</h3>
+<p><code>AgentService</code> hosts an agent implementation and exposes the same invocation operation through an in-process interface and a private transport endpoint. It consumes an execution decision and optional runtime lease already resolved by the processor. It does not allocate, delegate, renew, or close the runtime.</p>
+<p>The processor resolves the required execution and workspace topology and requests its lifecycle operations. <code>RuntimeManager</code> enforces those operations. <code>AgentService</code> only enters the resulting session for the duration of an invocation.</p>
+<p>An <code>EpisodeProcessor</code> in another process calls:</p>
 <pre><code class="language-text">POST /invoke
 </code></pre>
-<p>The request to <code>/invoke</code> carries typed Gym identity and grant references. The service resolves those references into an <code>AgentContext</code> and calls <code>Agent.run(request, context)</code>. A runner hosted in the same process calls the invocation interface directly and does not make an HTTP request to itself.</p>
+<p>The request to <code>/invoke</code> carries typed Gym identity and any required lease references. The service resolves those references into an <code>AgentContext</code> and calls <code>Agent.run(request, context)</code>. A processor hosted in the same process calls the invocation interface directly and does not make an HTTP request to itself.</p>
 <p><code>POST /v1/responses</code> remains available as an OpenAI-compatible adapter. It translates a compatible request into <code>Agent.run</code> when enough context exists. A stateless agent can serve a direct request without episode runtime bindings. An agent that requires a workspace or sandbox rejects a direct request that does not provide an authorized invocation context. This endpoint is not the canonical Gym behavior contract, and the architecture does not assume that one <code>/v1/responses</code> call completes an episode.</p>
-<h3 id="episoderunner-owns-lifecycle-order"><code>EpisodeRunner</code> owns lifecycle order</h3>
-<p><code>EpisodeRunner</code> coordinates one episode. It does not own every resource that participates in that episode.</p>
-<h3 id="runtimeauthority-owns-runtime-allocation-and-grants"><code>RuntimeAuthority</code> owns runtime allocation and grants</h3>
-<p><code>RuntimeAuthority</code> creates or reconnects execution runtimes. It keeps provider descriptors internal and issues typed grants to callers.</p>
-<p>A runtime grant is:</p>
+<h3 id="standardepisodeprocessor-owns-the-reusable-lifecycle"><code>StandardEpisodeProcessor</code> owns the reusable lifecycle</h3>
+<p><code>StandardEpisodeProcessor</code> coordinates the normal Gym lifecycle for one or more participants. The <code>EpisodeProcessor</code> protocol does not provide this implementation. A custom processor can use another internal lifecycle while preserving the protocol invariants.</p>
+<h3 id="runtimemanager-controls-runtime-leases"><code>RuntimeManager</code> controls runtime leases</h3>
+<p><code>RuntimeManager</code> is the interface through which a processor allocates, reconnects, delegates, and closes execution runtimes. It keeps provider descriptors internal and gives each caller a scoped <code>RuntimeLease</code>.</p>
+<p>A runtime lease is:</p>
 <ul>
 <li>bound to one rollout and attempt;</li>
 <li>bound to an audience such as one agent service or verifier;</li>
@@ -233,13 +316,14 @@
 <li>expiring and renewable under policy;</li>
 <li>revocable and auditable.</li>
 </ul>
-<p>The provider handle or serialized provider descriptor never becomes the cross-service authority token. A raw OpenSandbox descriptor, container identifier, workspace path, or provider credential remains inside <code>RuntimeAuthority</code>.</p>
-<p>An owner may destroy a runtime. An operator or verifier may perform only the operations in its grant. When a borrower finishes, it releases its connection or grant. It does not destroy the runtime.</p>
-<p>These rules must be enforced at the authority boundary. OpenSandbox scope is not considered secure merely because callers follow a convention.</p>
+<p>The provider handle or serialized provider descriptor never becomes the cross-service credential. A raw OpenSandbox descriptor, container identifier, workspace path, or provider credential remains inside <code>RuntimeManager</code>.</p>
+<p>An owner lease may destroy a runtime. An operator or verifier lease permits only its named operations. When a borrower finishes, it releases its lease. It does not destroy the runtime.</p>
+<p>The runtime manager is needed when a runtime is shared across components or process boundaries. Passing a serialized sandbox descriptor directly can give an agent or verifier the same reconnect and destructive operations as the owner. A scoped lease lets the agent execute and the verifier inspect without letting either stop or reassign the runtime.</p>
+<p>This requirement does not imply a mandatory new service. A simple deployment uses an in-process manager. A provider that natively enforces scoped credentials can implement the interface directly. A proxy service is needed only when a provider cannot enforce a lease across the required process or host boundary. OpenSandbox scope is not considered secure merely because callers follow a convention.</p>
 <h3 id="the-model-serves-inference-and-capture">The model serves inference and capture</h3>
 <p>Model servers remain responsible for inference, admission, token capture, and model-call capture. Rollout and participant identity propagate through the resolved model binding.</p>
-<h2 id="one-episode-follows-an-explicit-ordered-lifecycle">One episode follows an explicit ordered lifecycle</h2>
-<p>The default lifecycle executes in this order.</p>
+<h2 id="the-standard-processor-follows-an-explicit-ordered-lifecycle">The standard processor follows an explicit ordered lifecycle</h2>
+<p><code>StandardEpisodeProcessor</code> executes these phases in order.</p>
 <div class="tbl"><table>
 <thead>
 <tr>
@@ -251,23 +335,23 @@
 <tbody>
 <tr>
 <td>Resolve identity</td>
-<td>Resolve or mint the rollout id, attempt, agent identity, environment identity, participant identity, and deadlines. Fence older attempts before any external effect.</td>
+<td>Resolve or mint the rollout id, attempt, environment identity, every participant identity, the primary participant, and deadlines. Fence older attempts before any external effect.</td>
 <td>Episode identity and attempt fence</td>
 </tr>
 <tr>
 <td>Resolve requirements</td>
-<td>Validate the agent's concrete runtime requirements against environment policy and available providers. Resolve separate agent-runtime and environment-workspace bindings.</td>
+<td>Validate every participant agent's concrete runtime requirements against environment policy and available providers. Resolve separate agent-runtime and environment-workspace bindings.</td>
 <td>Resolution decision</td>
 </tr>
 <tr>
 <td>Request workspace specification</td>
-<td>If the runner will own an environment workspace, call <code>/sandbox_spec</code> before seed. Skip this call when no runner-owned workspace is required.</td>
+<td>If the processor will own an environment workspace, call <code>/sandbox_spec</code> before seed. Skip this call when no processor-owned workspace is required.</td>
 <td>Validated workspace specification</td>
 </tr>
 <tr>
 <td>Allocate or reconnect runtimes</td>
-<td>Ask <code>RuntimeAuthority</code> to allocate or reconnect each required runtime. Issue separate grants for the agent, environment, and verifier.</td>
-<td>Runtime references and grants</td>
+<td>Ask <code>RuntimeManager</code> to allocate or reconnect each required runtime. Issue separate leases for the agent, environment, and verifier.</td>
+<td>Runtime references and leases</td>
 </tr>
 <tr>
 <td>Seed the environment</td>
@@ -275,9 +359,9 @@
 <td>Environment state reference and tool metadata</td>
 </tr>
 <tr>
-<td>Invoke the agent</td>
-<td>Call the <code>AgentService</code> invocation operation directly when colocated, or call private <code>POST /invoke</code> when the service is remote. The service resolves <code>AgentContext</code> and calls <code>Agent.run</code>.</td>
-<td><code>AgentResult</code> and event cursor</td>
+<td>Run the participant loop</td>
+<td>Ask the <code>TurnScheduler</code> which participant acts next. Obtain that participant's permitted observation, invoke its <code>AgentService</code> directly or through private <code>POST /invoke</code>, append attributed events, and continue until the schedule reaches a terminal condition.</td>
+<td>Participant results, schedule state, and event cursor</td>
 </tr>
 <tr>
 <td>Harvest declared artifacts</td>
@@ -286,7 +370,7 @@
 </tr>
 <tr>
 <td>Verify</td>
-<td>Send the agent result, permitted artifacts, and the verifier's own grant to the verify owner.</td>
+<td>Send the participant outcomes, primary response, permitted artifacts, and the verifier's own lease to the verify owner.</td>
 <td>Reward, reward components, and verifier metadata</td>
 </tr>
 <tr>
@@ -296,13 +380,14 @@
 </tr>
 <tr>
 <td>Close and release</td>
-<td>Close environment state. Release borrowed grants. Destroy only runtimes owned by the runner. Record cleanup failures without replacing the primary result or error.</td>
+<td>Close environment state. Release borrowed leases. Close only runtimes owned by the processor. Record cleanup failures without replacing the primary result or error.</td>
 <td>Final lifecycle events</td>
 </tr>
 </tbody>
 </table></div>
 <p>Cancellation follows the same close and release path. Runtime time-to-live policies remain a crash backstop, not the normal cleanup mechanism.</p>
-<p><code>EpisodeRunner</code> can compose additional stages or a step loop, but the ownership and publication rules do not change. A custom processor may replace the default phase composition for a whole-run integration. It still emits the common episode result and identity.</p>
+<p>Single-agent execution is the degenerate case in which the request has one participant. User simulation uses at least two participants, such as <code>policy</code> and <code>simulated_user</code>, and a scheduler that defines their turn order.</p>
+<p>A custom processor may replace the standard phase composition for a whole-run integration. It still satisfies the common identity, fencing, event, cancellation, and terminal-result invariants.</p>
 <h2 id="runtime-requirements-are-concrete-and-agent-owned">Runtime requirements are concrete and agent-owned</h2>
 <p>An agent declares the exact facilities needed to execute its behavior. It does not select itself into a broad profile.</p>
 <pre><code class="language-yaml">requirements:
@@ -334,7 +419,7 @@
 <li>upload, download, and artifact operations;</li>
 <li>checkpoint and reconnect support.</li>
 </ul>
-<p>The resolved <code>AgentContext</code> records the selected implementation and grants. This makes the result reproducible without making the agent config depend on a provider-specific descriptor.</p>
+<p>The resolved <code>AgentContext</code> records the selected implementation and leases. This makes the result reproducible without making the agent config depend on a provider-specific descriptor.</p>
 <p>Placement is a resolution outcome derived from exact requirements and policy. Agent configuration does not classify behavior through broad runtime profiles.</p>
 <h3 id="command-line-harnesses-require-sandbox-placement">Command-line harnesses require sandbox placement</h3>
 <p>OpenCode, Claude Code, Codex, and similar command-line harnesses execute third-party programs that can read files, spawn processes, and make network calls. Production execution therefore requires a sandbox that satisfies the declared isolation and egress policy.</p>
@@ -342,17 +427,17 @@
 <p>A simple Python agent can resolve to in-process execution when it needs no external runtime. A trusted helper can use a local subprocess when policy permits. A local subprocess provides process management and a workspace, but it is not a security boundary.</p>
 <h3 id="agent-execution-and-environment-state-use-separate-bindings">Agent execution and environment state use separate bindings</h3>
 <p>The place where agent code executes and the place where task state lives are separate decisions.</p>
-<p>For example, a Python agent service can remain on the host while its shell tool operates an environment workspace in a sandbox. A CLI agent can execute inside the same sandbox that holds the task workspace. In both cases, the agent-execution grant and environment-workspace grant remain separate records with separate permissions.</p>
+<p>For example, a Python agent service can remain on the host while its shell tool operates an environment workspace in a sandbox. A CLI agent can execute inside the same sandbox that holds the task workspace. In both cases, the agent-execution lease and environment-workspace lease remain separate records with separate permissions.</p>
 <p>Co-location is an optimization and sometimes a benchmark requirement. It is not proof of shared ownership.</p>
 <p>The verifier has three supported relationships to task state:</p>
 <ul>
-<li>It can inspect the live environment workspace through a verifier grant.</li>
+<li>It can inspect the live environment workspace through a verifier lease.</li>
 <li>It can start a fresh verifier runtime and apply harvested artifacts there.</li>
 <li>It can consume artifacts without any live runtime.</li>
 </ul>
-<p>The environment declares which relationship verification requires. <code>RuntimeAuthority</code> enforces the resulting grant.</p>
+<p>The environment declares which relationship verification requires. <code>RuntimeManager</code> enforces the resulting lease.</p>
 <figure class="fig">
-<svg viewBox="0 0 1040 300" role="img" aria-label="Agent runtime requirements, environment workspace and verifier requirements, and deployment and security policy feed a resolver. The resolver asks the RuntimeAuthority, which issues three separate grants: an agent placement grant, a workspace grant, and a verifier grant or a fresh runtime. The agent placement grant and the workspace grant may share one runtime id." style="max-width:100%;height:auto;font-family:'Source Sans 3',system-ui,sans-serif;font-size:12px">
+<svg viewBox="0 0 1040 300" role="img" aria-label="Agent runtime requirements, environment workspace and verifier requirements, and deployment and security policy feed a resolver. The resolver asks the RuntimeManager, which issues three separate leases: an agent placement lease, a workspace lease, and a verifier lease or a fresh runtime. The agent placement lease and the workspace lease may share one runtime id." style="max-width:100%;height:auto;font-family:'Source Sans 3',system-ui,sans-serif;font-size:12px">
   <defs><marker id="ahq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
   <g fill="none" stroke="currentColor" stroke-width="1.2">
     <rect x="20" y="40" width="200" height="44" rx="3"/>
@@ -367,13 +452,13 @@
     <rect x="330" y="128" width="120" height="44" rx="3"/>
     <text x="390" y="154" text-anchor="middle" fill="currentColor" stroke="none">resolver</text>
     <rect x="530" y="128" width="150" height="44" rx="3" stroke="var(--accent)" stroke-width="1.8"/>
-    <text x="605" y="154" text-anchor="middle" fill="currentColor" stroke="none" font-weight="600">RuntimeAuthority</text>
+    <text x="605" y="154" text-anchor="middle" fill="currentColor" stroke="none" font-weight="600">RuntimeManager</text>
     <rect x="800" y="40" width="200" height="44" rx="3"/>
-    <text x="900" y="66" text-anchor="middle" fill="currentColor" stroke="none">agent placement grant</text>
+    <text x="900" y="66" text-anchor="middle" fill="currentColor" stroke="none">agent placement lease</text>
     <rect x="800" y="128" width="200" height="44" rx="3"/>
-    <text x="900" y="154" text-anchor="middle" fill="currentColor" stroke="none">workspace grant</text>
+    <text x="900" y="154" text-anchor="middle" fill="currentColor" stroke="none">workspace lease</text>
     <rect x="800" y="216" width="200" height="44" rx="3"/>
-    <text x="900" y="234" text-anchor="middle" fill="currentColor" stroke="none">verifier grant</text>
+    <text x="900" y="234" text-anchor="middle" fill="currentColor" stroke="none">verifier lease</text>
     <text x="900" y="250" text-anchor="middle" fill="currentColor" stroke="none">or fresh runtime</text>
     <path d="M220 62 L275 62 L275 143 L330 143" marker-end="url(#ahq)"/>
     <line x1="220" y1="150" x2="330" y2="150" marker-end="url(#ahq)"/>
@@ -390,9 +475,8 @@
     <text x="1030" y="110" fill="var(--muted)" stroke="none" font-size="11" transform="rotate(90 1030 110)" text-anchor="middle">may share a runtime id</text>
   </g>
 </svg>
-<figcaption>Runtime resolution combines agent needs, environment needs, and deployment policy before issuing separate grants.</figcaption>
+<figcaption>Runtime resolution combines agent needs, environment needs, and deployment policy before issuing separate leases.</figcaption>
 </figure>
-
 <h2 id="benchmark-topologies-fit-the-separate-bindings">Benchmark topologies fit the separate bindings</h2>
 <p>The following benchmark evidence motivates the runtime and verification contracts. The table describes topology, not a permanent implementation assignment.</p>
 <div class="tbl"><table>
@@ -415,7 +499,7 @@
 <td>Terminal Bench</td>
 <td>A CLI harness executes commands in the task container and changes its live state.</td>
 <td>Tests inspect the same task state.</td>
-<td>Agent execution and workspace can be co-located, but the verifier needs its own grant and the owner alone performs teardown.</td>
+<td>Agent execution and workspace can be co-located, but the verifier needs its own lease and the owner alone performs teardown.</td>
 </tr>
 <tr>
 <td>GDPVal</td>
@@ -457,7 +541,7 @@
 </table></div>
 <p>These cases do not imply that one component must own every sandbox. They show why runtime role, owner, operator, verifier, placement, and lifetime must be independent fields.</p>
 <p>The corresponding implementation evidence is in <code>resources_servers/swebench/app.py</code>, <code>resources_servers/terminal_bench_2_1/app.py</code>, <code>resources_servers/gdpval/app.py</code>, <code>responses_api_agents/cvdp_agent/app.py</code>, <code>responses_api_agents/vibench_agent/app.py</code>, <code>responses_api_agents/osworld_agent/</code>, <code>responses_api_agents/pinchbench/</code>, and <code>responses_api_agents/tau2/</code>. The important behavior is summarized in the table so the design does not depend on readers opening each file.</p>
-<h2 id="the-placement-proof-of-concept-supplies-a-worker-mechanism-not-the-final-runner">The placement proof of concept supplies a worker mechanism, not the final runner</h2>
+<h2 id="the-placement-proof-of-concept-supplies-a-worker-mechanism-not-the-final-processor">The placement proof of concept supplies a worker mechanism, not the final processor</h2>
 <p>The <code>upstream/ffrujeri/sandboxes</code> branch demonstrates that an existing Python harness can execute inside a task sandbox. The host is implemented in <code>nemo_gym/sandbox/agent_runtime.py</code>, the in-box worker is in <code>nemo_gym/sandbox/agent_runtime_worker.py</code>, and placement validation is in <code>nemo_gym/sandbox/agent_runtime_config.py</code>.</p>
 <p>Its useful mechanisms should be retained:</p>
 <ul>
@@ -469,32 +553,35 @@
 <li>A typed workspace object is better than an unstructured sandbox identifier.</li>
 </ul>
 <p>Dependency staging is a development path. Production runtimes should use built, versioned, and cached images so rollout startup does not depend on downloading Python, Gym, and harness dependencies.</p>
-<p><code>SandboxedAgentHost</code> is not the final orchestrator. Its current <code>run()</code> seeds the environment, attaches or creates a sandbox, invokes the harness, verifies the result, and cleans up from the agent service. That reproduces the episode lifecycle in the placement host instead of delegating to the shared <code>EpisodeRunner</code>.</p>
+<p><code>SandboxedAgentHost</code> is not the final orchestrator. Its current <code>run()</code> seeds the environment, attaches or creates a sandbox, invokes the harness, verifies the result, and cleans up from the agent service. That reproduces the episode lifecycle in the placement host instead of delegating to <code>StandardEpisodeProcessor</code>.</p>
 <p>The proof of concept also invokes the harness through its FastAPI <code>/v1/responses</code> route. The target worker calls the canonical <code>Agent.run(request, context)</code> method. An HTTP bridge may remain an implementation option when the placed process needs a transport boundary, but the bridge exposes Gym's private <code>/invoke</code> contract rather than treating <code>/v1/responses</code> as the complete behavior contract.</p>
-<p>The current worker payload forwards broad agent configuration and cookies. The target passes only typed request fields, resolved bindings, and scoped grants. Provider credentials, verifier configuration, answer keys, and unrelated cookies do not enter the agent runtime.</p>
-<p>The current environment-workspace lookup depends on resources-server process memory. That fails when seed, verify, and cleanup reach different workers or after a process restart. The target stores runtime identity in <code>RuntimeAuthority</code> and durable episode state.</p>
+<p>The current worker payload forwards broad agent configuration and cookies. The target passes only typed request fields, resolved bindings, and scoped leases. Provider credentials, verifier configuration, answer keys, and unrelated cookies do not enter the agent runtime.</p>
+<p>The current environment-workspace lookup depends on resources-server process memory. That fails when seed, verify, and cleanup reach different workers or after a process restart. The target stores runtime identity through <code>RuntimeManager</code> and durable episode state.</p>
 <p>The proof of concept has no durable resume protocol. The target adds attempt fencing, event cursors, coordinated checkpoints, and idempotent terminal publication before using placement for resumable training.</p>
-<h2 id="runtime-authority-is-enforceable-across-processes">Runtime authority is enforceable across processes</h2>
-<p><code>RuntimeAuthority</code> is a logical service. It can run in-process with the owner for a simple deployment or behind a service boundary when multiple processes or hosts need access.</p>
+<h2 id="runtime-leases-remain-enforceable-across-processes">Runtime leases remain enforceable across processes</h2>
+<p><code>RuntimeManager</code> is a protocol, not a required deployment unit. It can run in-process with the owner, delegate to a provider's native lease mechanism, or use a service when several processes or hosts need controlled access.</p>
 <p>The logical API includes:</p>
-<pre><code class="language-text">allocate(requirements, identity, owner) -&gt; RuntimeRef
-reconnect(runtime_ref, identity) -&gt; RuntimeRef
-grant(runtime_ref, audience, authority, operations, expires_at) -&gt; RuntimeGrant
-renew(runtime_grant, expires_at) -&gt; RuntimeGrant
-release(runtime_grant) -&gt; None
-destroy(runtime_ref, owner_grant) -&gt; None
+<pre><code class="language-text">allocate(requirements, identity) -&gt; RuntimeLease
+restore(runtime_ref, identity) -&gt; RuntimeLease
+delegate(owner_lease, audience, operations, expires_at) -&gt; RuntimeLease
+connect(runtime_lease) -&gt; RuntimeSession
+renew(runtime_lease, expires_at) -&gt; RuntimeLease
+release(runtime_lease) -&gt; None
+close(owner_lease) -&gt; None
 </code></pre>
-<p><code>RuntimeRef</code> is an opaque durable reference. <code>RuntimeGrant</code> is a typed, expiring authorization. Neither exposes the provider's raw connection material to callers.</p>
-<p>The authority also provides the runtime data plane authorized by a grant. At minimum, that surface covers process execution, signals, status, file upload and download, artifact reads, and declared service endpoints. A colocated caller may receive an in-process <code>RuntimeSession</code> that checks the same grant. A remote caller uses an enforcing proxy client. Callers never bypass the authority by reconnecting with provider credentials.</p>
-<p>Provider adapters translate authorized operations into provider behavior. If a provider cannot enforce an operation safely, resolution must reject that topology or route access through an enforcing authority service. Documentation or caller convention is not sufficient.</p>
-<p>This design does not require a separate sandbox service in every deployment. An in-process authority can manage a runtime used only by the same process. A service becomes necessary when enforcement or reconnection crosses a process or host boundary.</p>
+<p><code>RuntimeRef</code> is the opaque durable identity stored in an episode checkpoint. <code>RuntimeLease</code> is the typed, expiring authorization presented by a caller. Neither exposes the provider's raw connection material.</p>
+<p>The connected <code>RuntimeSession</code> provides only the data-plane operations authorized by its lease. At minimum, that surface covers process execution, signals, status, file upload and download, artifact reads, and declared service endpoints. A colocated caller can receive an in-process session that checks the lease. A remote caller uses an enforcing proxy client. Callers never bypass the manager by reconnecting with provider credentials.</p>
+<p>Provider adapters translate authorized operations into provider behavior. If a provider cannot enforce an operation safely, resolution rejects that topology or routes access through an enforcing proxy. Documentation or caller convention is not sufficient.</p>
+<p>This interface exists to make ownership and borrowing enforceable. It is not an episode orchestrator, and it does not justify another process when all access remains local.</p>
 <h2 id="identity-remains-stable-for-results-and-training">Identity remains stable for results and training</h2>
 <p><code>agent_ref.name</code> remains the external identity of the selected agent on the materialized row, the returned result, and metric grouping.</p>
-<p>Processor placement is internal. A row does not replace its agent identity with an episode-processor identity. Gym may record the resolved runner deployment as additional provenance.</p>
-<p>The rollout id and attempt identify one execution. Participant and seat identifiers distinguish model-using actors within that execution. The event stream records all four values so model calls, tools, artifacts, checkpoints, and rewards can be attributed without overloading the agent name.</p>
+<p>Processor placement is internal. A row does not replace its agent identity with an episode-processor identity. Gym may record the resolved processor deployment as additional provenance.</p>
+<p>For a multi-participant request, the existing top-level <code>agent_ref</code> names <code>primary_participant_id</code>. A user-simulation task selects the policy participant as primary. Self-play or another multi-agent design can select its training subject explicitly instead of assigning special behavior to the <code>policy</code> role. The participant list and event stream retain every other <code>agent_ref</code>. This preserves NeMo RL's current grouping contract without collapsing the simulated user or other participants into the primary identity.</p>
+<p>The rollout id and attempt identify one execution. Participant identifiers and roles distinguish model-using actors within that execution. The event stream records all four values so model calls, tools, artifacts, checkpoints, and rewards can be attributed without overloading the agent name.</p>
 <h3 id="nemo-rl-compatibility-is-a-required-contract">NeMo RL compatibility is a required contract</h3>
 <p>At NVIDIA-NeMo/RL main commit <code>e518e602fbff282dbb1d5033a819b2cdc18cfb12</code>, <code>nemo_rl/environments/nemo_gym.py</code> calls <code>RolloutCollectionHelper.run_examples</code> before it reads the synchronously resolved <code>row["agent_ref"]["name"]</code> for completion accounting. It returns the resolved <code>agent_ref</code> to its caller.</p>
 <p>NeMo RL also supports token-capture receipt mode keyed by <code>_ng_rollout_id</code>. Its training path consumes <code>response.output</code>, scalar <code>reward</code>, optional <code>reward_components</code>, and <code>instance_config.mask_sample</code>. The output items carry token and log-probability data, reward components feed multi-reward training, and <code>mask_sample</code> determines whether a rollout contributes to the loss.</p>
+<p>For a multi-participant episode, the top-level <code>response.output</code> and training receipt contain only the primary participant's trainable trajectory. Simulated-user and critic outputs remain in <code>participant_outcomes</code> and the attributed event stream. Every model call carries a participant identifier. If one model server serves several participants, token-capture selection must filter by participant as well as <code>_ng_rollout_id</code>; otherwise simulated-user tokens can enter the policy update.</p>
 <p>The design therefore requires:</p>
 <ul>
 <li><code>run_examples</code> continues to resolve the row's agent synchronously before returning its tasks.</li>
@@ -502,46 +589,61 @@ destroy(runtime_ref, owner_grant) -&gt; None
 <li><code>agent_ref.name</code> remains the selected-agent and completion-accounting identity.</li>
 <li><code>_ng_rollout_id</code> continues to key token-capture receipts and retrieval.</li>
 <li>The Gym result continues to include <code>response.output</code>, scalar <code>reward</code>, optional <code>reward_components</code>, and <code>instance_config.mask_sample</code> with their current meanings.</li>
-<li>Selecting an in-process runner or explicit processor does not change these fields.</li>
+<li>Selecting an in-process processor or explicit processor service does not change these fields.</li>
+<li>Multi-participant results keep non-primary trajectories out of the top-level training response and token receipt.</li>
 </ul>
-<p>NeMo RL contract tests must cover both runner deployments, rows resolved from task ownership, token-capture receipt mode, completion accounting, reward consumption, and returned agent identity.</p>
+<p>NeMo RL contract tests must cover both processor deployments, rows resolved from task ownership, token-capture receipt mode, completion accounting, reward consumption, returned agent identity, and exclusion of non-primary participant tokens.</p>
 <h2 id="metric-aggregation-stays-with-the-verify-owner">Metric aggregation stays with the verify owner</h2>
 <p>The server or component that computes <code>/verify</code> also computes aggregate metrics for those verification results.</p>
 <p>Gym groups results by verify owner and <code>agent_ref.name</code>. The entry identity remains the agent name so output artifacts and NeMo RL-facing identity do not change.</p>
 <p>The compatibility facade may accept <code>/aggregate_metrics</code> on an agent endpoint during migration. It delegates to the verify owner and does not compute metrics itself.</p>
 <p>A whole-run custom processor that also owns verification is the verify owner for its results. This is consistent with the same rule.</p>
-<h2 id="cross-rollout-planning-remains-above-episoderunner">Cross-rollout planning remains above <code>EpisodeRunner</code></h2>
-<p><code>EpisodeRunner</code> executes one row and publishes one terminal result. It does not decide which rows should run next.</p>
+<h2 id="cross-rollout-planning-remains-above-episodeprocessor">Cross-rollout planning remains above <code>EpisodeProcessor</code></h2>
+<p>An <code>EpisodeProcessor</code> executes one row and publishes one terminal result. It does not decide which rows should run next.</p>
 <p>GDPVal preselects each stage's task set. Results from an earlier stage then select reference models for the next stage, and the planner materializes later rows with those references. That cross-rollout dependency belongs in <code>rollout_collection_driver</code> today or in a future typed planner above episode execution.</p>
 <p>A custom episode processor does not replace <code>rollout_collection_driver</code>. It can implement GDPVal's per-row deliverable lifecycle, but it cannot express cross-rollout planning because it is called after a row has already been selected.</p>
 <p>Retries that repeat one row can remain collector policy. Planning that changes the work set belongs to the higher layer.</p>
-<h2 id="multi-agent-episodes-require-seats-scheduling-and-attribution">Multi-agent episodes require seats, scheduling, and attribution</h2>
+<h2 id="multi-agent-episodes-are-part-of-the-processor-request">Multi-agent episodes are part of the processor request</h2>
 <p><code>fan_out</code> repeats a single-agent evaluation with different agents. The repeated runs do not share one environment state or take turns in one episode. It is not a multi-agent episode.</p>
-<p>A multi-agent episode requires an explicit participant model:</p>
+<p>Every <code>EpisodeRequest</code> contains <code>participants</code>, including a single-agent request. A user-simulation episode uses the same schema with a policy participant and a simulated-user participant:</p>
 <pre><code class="language-yaml">participants:
-  - participant_id: solver
-    seat: primary
-    agent_ref: solver_agent
-    model_binding: policy_model
-  - participant_id: critic
-    seat: reviewer
-    agent_ref: critic_agent
-    model_binding: critic_model
+  - participant_id: policy
+    role: policy
+    agent_ref: customer_support_agent
+    model_bindings:
+      generation: policy_model
+  - participant_id: user
+    role: simulated_user
+    agent_ref: customer_simulator
+    model_bindings:
+      generation: user_model
+primary_participant_id: policy
 schedule:
-  policy: environment_directed
+  implementation: environment_directed
 </code></pre>
 <p>Each participant has:</p>
 <ul>
-<li>a stable participant and seat identity;</li>
+<li>a stable participant identifier and semantic role;</li>
 <li>an agent and model binding;</li>
-<li>an execution-runtime grant;</li>
-<li>an environment-workspace grant;</li>
+<li>an execution-runtime lease when the agent is not in-process;</li>
+<li>an environment-workspace lease when the participant can access task state;</li>
 <li>tool and network permissions;</li>
-<li>checkpoint state;</li>
-<li>event and usage attribution.</li>
+<li>event and usage attribution;</li>
+<li>participant-scoped checkpoint state.</li>
 </ul>
-<p>The schedule states who acts next and who may observe each event. It can be fixed, environment-directed, or processor-defined. The schedule cannot be inferred from <code>fan_out</code> or from multiple model URLs.</p>
+<p><code>StandardEpisodeProcessor</code> delegates turn choice to a structural interface:</p>
+<pre><code class="language-python">class TurnScheduler(Protocol):
+    async def next_turn(
+        self,
+        state: EpisodeState,
+        environment: EnvironmentClient,
+    ) -&gt; TurnDirective | EpisodeComplete: ...
+</code></pre>
+<p><code>TurnDirective</code> names the next participant and the environment observation that participant may receive. The processor invokes only that participant's <code>AgentService</code>, stamps the participant identifier and role on resulting events, and returns the action to the environment. It does not broadcast the full event stream to every participant.</p>
+<p>A fixed scheduler, an alternating policy-and-user scheduler, and an environment-directed scheduler implement the same interface. They are composed with <code>StandardEpisodeProcessor</code>; they do not require subclasses or branches inside a base <code>run()</code> method.</p>
+<p>The schedule cannot be inferred from <code>fan_out</code> or from multiple model URLs. Preflight validation confirms that every directive names a declared participant, every participant has a resolvable agent and model binding, and observation audiences match environment policy.</p>
 <p>Tau2 already demonstrates why participant identity matters: policy and simulated-user calls occur in one episode but have different roles. The target records those roles explicitly even when a custom processor drives the interaction.</p>
+<p>The native multi-agent conformance tests verify that only the scheduled participant is invoked, private observations do not reach another participant, every model and tool event has participant attribution, non-primary tokens stay out of the NeMo RL training response, cancellation reaches every active participant, and a checkpoint restores the schedule position with each participant's state.</p>
 <h2 id="partial-checkpointing-coordinates-all-episode-state">Partial checkpointing coordinates all episode state</h2>
 <p>A partial-rollout checkpoint records a durable boundary before the episode has produced its terminal result. It is not only an agent transcript. It is a coordinated record of the state needed to continue one fenced attempt without duplicating effects.</p>
 <p>A checkpoint contains:</p>
@@ -556,14 +658,14 @@ schedule:
 <li>participant state and schedule position for multi-agent episodes;</li>
 <li>the terminal-publication state.</li>
 </ul>
-<p>The checkpoint commit occurs only after all referenced component states are durable. The event cursor advances with the commit. A restarted runner restores only a checkpoint whose attempt still owns the fence.</p>
+<p>The checkpoint commit occurs only after all referenced component states are durable. The event cursor advances with the commit. A retry first acquires a new attempt fence with an atomic compare-and-swap. It may then adopt the last complete checkpoint from the superseded attempt, recording that source attempt in the restore event. Only the new attempt may issue effects, write another checkpoint, or publish the terminal result.</p>
 <p>External effects use idempotency keys derived from the rollout and logical effect identity. The attempt fence determines which attempt may issue or commit the effect, but the attempt number is not part of the effect key. A later authorized attempt therefore receives the prior outcome instead of repeating an effect completed by an earlier attempt.</p>
-<p>Terminal result publication is durable and idempotent. A runner that crashes after publication but before acknowledgement must return the existing terminal result when the collector retries.</p>
+<p>Terminal result publication is durable and idempotent. A processor that crashes after publication but before acknowledgement must return the existing terminal result when the collector retries.</p>
 <p>Blackbox CLI agents may initially declare <code>checkpoint.supported: false</code>. They become resumable only when they provide a checkpoint adapter that can save and restore the CLI's relevant state. The runtime may still be reconnectable, but reconnecting a process or filesystem alone does not prove that the agent can resume correctly.</p>
 <h2 id="compatibility-facades-do-not-create-a-second-architecture">Compatibility facades do not create a second architecture</h2>
 <p>The following compatibility surfaces remain during migration:</p>
 <ul>
-<li>Agent <code>POST /run</code> delegates to <code>EpisodeRunner</code>.</li>
+<li>Agent <code>POST /run</code> delegates to an <code>EpisodeProcessor</code> after that harness migrates. An unmigrated harness remains behind <code>LegacyRunAdapter</code>.</li>
 <li>Agent <code>POST /aggregate_metrics</code> delegates to the verify owner.</li>
 <li><code>POST /v1/responses</code> adapts compatible requests to the agent contract.</li>
 <li>Existing seed and verify schemas continue to accept rows without runtime fields.</li>
@@ -571,7 +673,7 @@ schedule:
 <p>New code must not implement lifecycle logic in these facades. The facades resolve typed inputs, call the shared component, and translate the output.</p>
 <p>Direct clients that call an agent's <code>/run</code> continue to work. They receive the same response and reward shape, with additive episode provenance where available.</p>
 <h2 id="configuration-records-references-instead-of-nesting-behavior">Configuration records references instead of nesting behavior</h2>
-<p>The environment config identifies task data, verification, tools, state, and requirements. The agent config identifies an agent implementation, model bindings, and concrete runtime requirements. An optional processor config selects an explicit <code>EpisodeRunner</code> deployment or a custom phase composition.</p>
+<p>The environment config identifies task data, verification, tools, state, and requirements. The agent config identifies an agent implementation, model bindings, and concrete runtime requirements. An optional processor config selects an <code>EpisodeProcessor</code> implementation, scheduler, and service deployment.</p>
 <p>One possible shape is:</p>
 <pre><code class="language-yaml">resources_servers:
   swebench:
@@ -602,7 +704,21 @@ episode_processors:
     entrypoint: app.py
     environment: swebench
 </code></pre>
-<p>Omitting <code>episode_processors</code> does not omit episode orchestration. It selects the shared runner through the agent <code>/run</code> compatibility facade.</p>
+<p>Omitting <code>episode_processors</code> does not omit episode orchestration. It selects <code>StandardEpisodeProcessor</code> through the agent <code>/run</code> compatibility facade.</p>
+<p>An additive multi-participant row keeps the current top-level <code>agent_ref</code> and names the other participants explicitly:</p>
+<pre><code class="language-yaml">agent_ref:
+  name: customer_support_agent
+episode:
+  primary_participant_id: policy
+  participants:
+    - participant_id: policy
+      role: policy
+      agent_ref: customer_support_agent
+    - participant_id: user
+      role: simulated_user
+      agent_ref: customer_simulator
+  scheduler: environment_directed
+</code></pre>
 <p>Provider selection is a policy resolution based on requirements and deployment configuration. The agent does not contain a raw sandbox provider descriptor.</p>
 <h2 id="validation-fails-before-compute">Validation fails before compute</h2>
 <p>Preflight validation compares concrete agent requirements, environment requirements, runtime capabilities, and policy.</p>
@@ -611,70 +727,165 @@ episode_processors:
 <p>Validation also checks:</p>
 <ul>
 <li>every referenced agent, environment, model, and optional processor exists;</li>
-<li>one resolved agent remains identified by <code>agent_ref</code>;</li>
+<li>the primary participant resolves to the top-level <code>agent_ref</code> expected by existing collectors;</li>
 <li>CLI agents resolve to a sandbox with adequate isolation;</li>
-<li>grants can enforce the requested operations and audiences;</li>
-<li>live verification has a verifier grant;</li>
+<li>leases can enforce the requested operations and audiences;</li>
+<li>live verification has a verifier lease;</li>
 <li>checkpointing is requested only when all required components support it;</li>
-<li>a multi-agent schedule names valid participants and seats;</li>
+<li>a multi-agent schedule names valid participant identifiers and roles;</li>
 <li>the verify owner also owns metric aggregation.</li>
 </ul>
-<h2 id="migration-proceeds-through-compatibility-tests-and-canaries">Migration proceeds through compatibility tests and canaries</h2>
-<h3 id="establish-behavior-and-nemo-rl-contracts">Establish behavior and NeMo RL contracts</h3>
-<p>Add conformance and characterization tests for current <code>/run</code>, seed, verify, aggregation, identity, capture, and cleanup behavior.</p>
-<p>Add NeMo RL contract tests against commit <code>e518e602fbff282dbb1d5033a819b2cdc18cfb12</code>. Cover synchronous agent resolution, returned <code>agent_ref</code>, <code>_ng_rollout_id</code> token-capture receipt mode, Responses output, reward consumption, and completion accounting.</p>
-<h3 id="introduce-the-shared-logical-runner-and-compatibility-facade">Introduce the shared logical runner and compatibility facade</h3>
-<p>Implement <code>EpisodeRunner</code> as a library component with typed phase inputs and outputs.</p>
-<p>Make legacy agent <code>/run</code> delegate to it. Add an explicit processor endpoint that delegates to the same implementation. Route metric aggregation to the verify owner.</p>
-<p>Keep <code>agent_ref.name</code> unchanged on rows and results. Do not require an additional process.</p>
-<h3 id="add-typed-runtime-requirements-and-grants">Add typed runtime requirements and grants</h3>
-<p>Replace profile-like runtime categories with concrete agent requirements and a resolved <code>AgentContext</code>.</p>
-<p>Introduce <code>RuntimeAuthority</code>, opaque runtime references, typed grants, expiration, audience binding, attempt binding, renewal, release, and owner-only destruction.</p>
-<p>Separate the agent execution binding from the environment workspace binding. Add the three verifier relationships: live state, fresh runtime, and artifact-only.</p>
-<h3 id="migrate-command-line-canaries">Migrate command-line canaries</h3>
-<p>Use OpenCode and Claude Code as initial CLI canaries, followed by Codex.</p>
-<p>Run them only in sandboxed production configurations. Retain dependency staging for development and use prepared images for scale.</p>
-<p>Reuse the placement proof of concept's worker mechanism, validators, and cleanup attempts. Replace <code>SandboxedAgentHost</code> orchestration with <code>EpisodeRunner</code> and replace in-box <code>/v1/responses</code> invocation with canonical <code>Agent.run</code>.</p>
-<h3 id="deploy-explicit-processors-for-complex-flows">Deploy explicit processors for complex flows</h3>
-<p>Introduce explicit processor deployment for staged protocols, operational isolation, and whole-run external integrations.</p>
-<p>Keep GDPVal's adaptive planner above these processors. Use a custom per-row processor only for its deliverable and verification lifecycle.</p>
-<h3 id="add-checkpointing-and-multi-agent-extensions">Add checkpointing and multi-agent extensions</h3>
-<p>Add attempt fencing, coordinated component checkpoints, event cursors, idempotent external effects, and durable terminal publication.</p>
-<p>Add participant and seat identity, schedules, model bindings, separate runtime and workspace grants, and event attribution.</p>
-<p>Allow blackbox CLI agents to remain explicitly non-resumable until they provide checkpoint adapters.</p>
-<h3 id="migrate-benchmarks-by-topology">Migrate benchmarks by topology</h3>
-<p>Migrate SWE-bench and Terminal Bench first because they exercise live and fresh verification relationships.</p>
-<p>Migrate GDPVal, CVDP, and VIBench through declared artifact handoffs.</p>
-<p>Migrate OSWorld and PinchBench through desktop and whole-runtime grants.</p>
-<p>Migrate Tau2 as a whole-run custom processor with explicit participants and model bindings.</p>
-<p>Remove duplicated sandbox-specific agent implementations only after their base agent passes the same conformance suite in the new placement.</p>
-<h2 id="decisions-carried-by-this-draft">Decisions carried by this draft</h2>
+<h2 id="work-can-start-before-the-final-service-topology-is-decided">Work can start before the final service topology is decided</h2>
+<p>The first implementation work does not depend on selecting a cross-host <code>RuntimeManager</code> implementation.</p>
+<p>The following pull requests can start now:</p>
 <ol>
-<li><code>EpisodeRunner</code> is mandatory as the logical lifecycle implementation. A separate processor server is optional.</li>
-<li>Legacy agent <code>/run</code> and explicit processor endpoints delegate to the same runner.</li>
-<li><code>Agent.run(request, context) -&gt; AgentResult</code> is the behavior contract.</li>
-<li><code>AgentService /invoke</code> is the private transport contract used by the runner.</li>
+<li>Add <code>EpisodeProcessor</code>, <code>EpisodeRequest</code>, <code>EpisodeParticipant</code>, <code>EpisodeServices</code>, <code>EpisodeResult</code>, <code>TurnScheduler</code>, and their validation tests as additive types. Do not change routing.</li>
+<li>Add characterization tests around current <code>/run</code>, seed, verify, aggregation, identity, capture, cancellation, and cleanup behavior. These tests freeze observable contracts rather than internal call structure.</li>
+<li>Add a NeMo RL contract suite against commit <code>e518e602fbff282dbb1d5033a819b2cdc18cfb12</code>. Cover synchronous agent resolution, returned <code>agent_ref</code>, <code>_ng_rollout_id</code> receipt mode, Responses output, rewards, sample masking, and completion accounting.</li>
+<li>Implement <code>StandardEpisodeProcessor</code> behind an opt-in route for <code>simple_agent</code>. Keep the legacy endpoint and result schema unchanged.</li>
+<li>Add <code>participants</code> and <code>schedule</code> as additive request fields. Translate a legacy <code>agent_ref</code> into a one-participant tuple with a single-participant schedule at the compatibility boundary.</li>
+<li>Define concrete runtime requirements and build prepared sandbox images for the first CLI canaries. Image work can proceed before runtime leases are complete.</li>
+</ol>
+<p>These changes create reviewable contracts and evidence without moving every harness. They also expose incompatible assumptions before the migration reaches benchmark code.</p>
+<h2 id="a-staffed-migration-reaches-useful-swappability-before-catalogue-wide-conversion">A staffed migration reaches useful swappability before catalogue-wide conversion</h2>
+<p>The following timeline assumes three engineers working across the core processor, runtime, and migration tracks, with benchmark owners available for canary review. The ranges are planning estimates, not release commitments. With one engineer, the independent tracks become serial and the elapsed time is likely close to double.</p>
+<p>Swappability does not mean that every agent can run every environment. It means an environment does not contain agent-specific orchestration, and changing <code>agent_ref</code> is sufficient when the replacement agent's declared capabilities satisfy the environment and deployment policy.</p>
+<div class="tbl"><table>
+<thead>
+<tr>
+<th>Elapsed time</th>
+<th>Milestone</th>
+<th>Main implementation work</th>
+<th>Observable exit condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Weeks 0–2</td>
+<td>Contracts and behavior are frozen</td>
+<td>Add the pure processor and scheduler protocols, additive participant schema, characterization tests, and NeMo RL contract tests.</td>
+<td>Existing routes and NeMo RL behavior pass without routing changes.</td>
+</tr>
+<tr>
+<td>Weeks 2–5</td>
+<td>Simple agents are swappable</td>
+<td>Implement <code>StandardEpisodeProcessor</code>, the in-process compatibility facade, private processor service transport, and single-participant scheduling.</td>
+<td>Two simple agents can run against the same compatible environment by changing only <code>agent_ref</code>.</td>
+</tr>
+<tr>
+<td>Weeks 3–8</td>
+<td>Sandboxed CLI placement is usable</td>
+<td>Add concrete runtime resolution, enforceable leases, prepared images, and the worker adapter. Migrate OpenCode and Claude Code as canaries, then Codex.</td>
+<td>A CLI agent can replace another compatible CLI agent without benchmark-specific sandbox code and without an unsandboxed fallback.</td>
+</tr>
+<tr>
+<td>Weeks 4–8</td>
+<td>User simulation is native</td>
+<td>Implement participant-scoped observations, <code>TurnScheduler</code>, attributed events, per-participant model and runtime bindings, and multi-participant checkpoints.</td>
+<td>A policy agent and simulated-user agent complete one shared episode through <code>StandardEpisodeProcessor</code>.</td>
+</tr>
+<tr>
+<td>Weeks 7–12</td>
+<td>Complex benchmark topologies are covered</td>
+<td>Migrate live-workspace, fresh-verifier, artifact-only, desktop, and whole-run processor canaries. Keep GDPVal planning above the episode.</td>
+<td>At least one real benchmark passes for each supported runtime and verification topology.</td>
+</tr>
+<tr>
+<td>Weeks 12–16</td>
+<td>New routing can become the default</td>
+<td>Complete high-value harness migrations, run full benchmark baselines, publish deprecations, and retain config rollback.</td>
+<td>Default routing uses processors for the supported set; legacy paths remain only for named exceptions.</td>
+</tr>
+</tbody>
+</table></div>
+<p>The first useful swappability milestone is therefore about five weeks: simple agents can be exchanged without changing the environment. Sandboxed CLI swappability and native user simulation are approximately eight-week milestones because they depend on runtime enforcement and participant-aware execution. Broad migration is a twelve-to-sixteen-week program, not a prerequisite for starting the core decoupling.</p>
+<p>The protocol itself is a small part of the effort. Most work is in the standard lifecycle, runtime enforcement, compatibility tests, and per-harness migration:</p>
+<ul>
+<li>processor types, service transport, and conformance tests: about three to five engineer-weeks;</li>
+<li><code>StandardEpisodeProcessor</code>, legacy facade, and routing: about four to six engineer-weeks;</li>
+<li>runtime resolution, leases, data plane, and prepared-image workflow: about six to nine engineer-weeks;</li>
+<li>native multi-agent scheduling, participant visibility, attribution, and checkpoint state: about four to seven engineer-weeks;</li>
+<li>NeMo RL compatibility and integration tests: about two to three engineer-weeks;</li>
+<li>harness migration: less than one engineer-week for a simple agent, roughly one to two for a CLI or artifact-heavy harness, and more for an external whole-run integration.</li>
+</ul>
+<h2 id="migration-risk-is-controlled-at-four-test-layers">Migration risk is controlled at four test layers</h2>
+<p>Unit tests alone cannot establish that a moved harness still solves the same benchmark. Re-running every benchmark on every processor change is also too slow and makes failures hard to localize. The migration uses four layers.</p>
+<h3 id="characterization-tests-freeze-observable-behavior">Characterization tests freeze observable behavior</h3>
+<p>Deterministic tests record the current request and result schemas, phase-visible calls, identity propagation, reward fields, artifact declarations, cancellation, timeout, and cleanup behavior. They use fake model, environment, and runtime implementations. These are not benchmark reruns.</p>
+<p>The same fixture runs through the legacy route and the new processor route. It compares externally visible behavior and permits intentional additive provenance fields. It does not require the new implementation to repeat incidental internal calls.</p>
+<h3 id="recorded-replay-tests-compare-transport-without-repeating-side-effects">Recorded replay tests compare transport without repeating side effects</h3>
+<p>Captured request and response sequences exercise routing, schema translation, event attribution, and failure mapping. They let old and new paths consume the same deterministic evidence.</p>
+<p>Live old-and-new shadow execution is unsafe for stateful episodes. It can mutate the same workspace twice, spend model budget twice, or publish duplicate external effects. Differential comparison is limited to fakes, read-only fixtures, or recorded replay unless the benchmark explicitly provisions two isolated copies.</p>
+<h3 id="targeted-real-rollouts-validate-harness-and-verifier-behavior">Targeted real rollouts validate harness and verifier behavior</h3>
+<p>Each migrated harness runs a small, fixed canary set with its real model-facing loop, environment, runtime, and verifier. Reviewers inspect trajectories, artifacts, tool behavior, reward components, participant attribution, runtime cleanup, and token capture. A green unit suite is not enough.</p>
+<p>The canary matrix must cover:</p>
+<ul>
+<li>one simple in-process agent;</li>
+<li>OpenCode and Claude Code in prepared sandbox images;</li>
+<li>one live-workspace benchmark;</li>
+<li>one fresh-verifier benchmark;</li>
+<li>one artifact-only benchmark;</li>
+<li>one policy-and-simulated-user episode;</li>
+<li>NeMo RL rollout collection and postprocessing.</li>
+</ul>
+<p>Full benchmark reruns occur before a migrated path becomes the default and before a release removes a rollback path. They are not required for every additive interface pull request.</p>
+<h3 id="compatibility-gates-make-rollback-a-configuration-change">Compatibility gates make rollback a configuration change</h3>
+<p>Migration is selected per agent and environment through configuration. The legacy <code>/run</code> path remains available while a harness is a canary. A failed canary returns to legacy routing without reverting the processor types or other migrated harnesses.</p>
+<p>Each harness moves across boundaries in separate changes:</p>
+<ol>
+<li>Route the existing harness behavior through <code>LegacyRunAdapter</code> without changing execution placement.</li>
+<li>Implement the <code>Agent.run</code> activation contract and compare it with the legacy behavior in the same placement.</li>
+<li>Move CLI execution into the sandbox worker without changing the new agent behavior contract.</li>
+<li>Remove the adapter only after the new placement passes its real-rollout canary.</li>
+</ol>
+<p>This sequence prevents a failure from simultaneously implicating lifecycle extraction, request translation, and sandbox placement.</p>
+<p>The compatibility layer preserves:</p>
+<ul>
+<li>accepted legacy request fields;</li>
+<li><code>agent_ref.name</code> and <code>_ng_rollout_id</code>;</li>
+<li>Responses output, scalar reward, reward components, and <code>instance_config.mask_sample</code>;</li>
+<li>artifact and metric routing;</li>
+<li>failure status and retry classification.</li>
+</ul>
+<p>New fields are additive until the default has run through a release window. CLI agents fail preflight when no approved sandbox is available; rollback never means silently executing them on the host.</p>
+<p>A harness leaves the legacy path only after it passes processor conformance, its topology-specific tests, its real-rollout canary, cleanup and cancellation checks, and the relevant NeMo RL contract tests. A compatibility endpoint can be removed only after no supported config resolves to it, deprecation telemetry shows no known use, benchmark baselines have been rerun, and a documented rollback release remains available.</p>
+<h2 id="migration-sequence-keeps-independent-work-parallel">Migration sequence keeps independent work parallel</h2>
+<ol>
+<li>Land the pure contracts, additive participant schema, characterization suite, and NeMo RL contract suite.</li>
+<li>Land <code>StandardEpisodeProcessor</code>, single-participant scheduling, and the legacy compatibility facade behind opt-in routing.</li>
+<li>Build runtime requirements, leases, the enforcing data plane, and prepared CLI images in parallel with the standard processor.</li>
+<li>Add participant-scoped observations and multi-participant scheduling as soon as <code>EpisodeRequest.participants</code> lands. This work does not wait for broad harness migration.</li>
+<li>Migrate OpenCode and Claude Code, followed by Codex. Reuse the placement proof of concept's worker mechanism, validators, and cleanup attempts, but invoke canonical <code>Agent.run</code>.</li>
+<li>Migrate SWE-bench and Terminal Bench for live and fresh verification, then GDPVal, CVDP, and VIBench for artifact handoffs.</li>
+<li>Migrate OSWorld and PinchBench through desktop and whole-runtime leases. Migrate Tau2 as the user-simulation and whole-run custom-processor canary.</li>
+<li>Change default routing only after topology canaries and full benchmark baselines pass. Remove compatibility routes only after their explicit removal gates are met.</li>
+</ol>
+<p>Blackbox CLI agents may declare <code>checkpoint.supported: false</code> during their first migration. They become resumable only after a checkpoint adapter passes interruption and restore tests.</p>
+<h2 id="decisions">Decisions</h2>
+<ol>
+<li><code>EpisodeProcessor</code> is a pure <code>Protocol</code> with one <code>process</code> method and no inherited lifecycle implementation.</li>
+<li><code>StandardEpisodeProcessor</code> is a concrete implementation composed with a <code>TurnScheduler</code>.</li>
+<li>Every <code>EpisodeRequest</code> contains one or more participants. Single-agent execution is not a different request type.</li>
+<li>Policy and simulated-user agents are first-class participants with separate roles, observations, model bindings, optional runtime leases, checkpoints, and event attribution.</li>
+<li>Legacy agent <code>/run</code> and an optional <code>EpisodeProcessorService</code> host processor implementations without defining a second lifecycle.</li>
+<li><code>Agent.run(request, context) -&gt; AgentResult</code> is the behavior contract for one participant activation.</li>
+<li><code>AgentService /invoke</code> is the private transport contract used by a remote processor.</li>
 <li><code>/v1/responses</code> is a compatibility adapter and does not define a whole episode.</li>
 <li>Runtime requirements are concrete. Profile-like classifications are removed.</li>
 <li>CLI harnesses require sandbox placement in production. Local subprocess execution is not a security boundary.</li>
-<li>Agent execution and environment task state have separate bindings and authority.</li>
-<li><code>RuntimeAuthority</code> keeps provider descriptors internal and enforces typed grants.</li>
-<li>A borrower releases its connection. Only an owner destroys a runtime.</li>
+<li>Agent execution and environment task state have separate bindings and permissions.</li>
+<li><code>RuntimeManager</code> keeps provider descriptors internal and enforces typed leases.</li>
+<li>A borrower releases its lease. Only an owner lease closes a runtime.</li>
 <li>The placement proof of concept contributes worker placement, dependency staging, validation, and cleanup behavior. <code>SandboxedAgentHost</code> does not remain the orchestrator.</li>
-<li><code>agent_ref.name</code> remains the external result, metric, and NeMo RL agent identity. <code>_ng_rollout_id</code> remains the token-capture receipt identity.</li>
+<li><code>agent_ref.name</code> remains the external result, metric, and NeMo RL training-subject identity. <code>_ng_rollout_id</code> remains the token-capture receipt identity.</li>
 <li>Metric aggregation belongs to the verify owner.</li>
-<li>Cross-rollout planning remains above <code>EpisodeRunner</code>.</li>
+<li>Cross-rollout planning remains above <code>EpisodeProcessor</code>.</li>
 <li><code>fan_out</code> is repeated single-agent evaluation, not a multi-agent episode.</li>
-<li>Partial checkpointing coordinates agent state, environment state, runtime references, events, effects, fencing, and terminal publication.</li>
+<li>Partial checkpointing coordinates every participant's state with environment state, runtime references, schedule position, events, effects, fencing, and terminal publication.</li>
 </ol>
-<h2 id="open-architectural-question">Open architectural question</h2>
-<p>The design does not yet choose whether a cross-host <code>RuntimeAuthority</code> should be a Gym-managed service or an adapter to an existing infrastructure control plane. The contract and enforcement requirements are the same in either case. That deployment choice can remain open until a benchmark requires cross-host runtime sharing.</p>
+<h2 id="cross-host-runtime-management-remains-a-deployment-choice">Cross-host runtime management remains a deployment choice</h2>
+<p>The design does not require Gym to build a cross-host runtime service now. The first implementation should use in-process managers and provider-native enforcement where available. A Gym proxy or an adapter to an existing control plane becomes necessary only when a benchmark must share one runtime across hosts and the provider cannot issue scoped leases itself.</p>
 </main>
 </div>
-<script type="module">
-  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "neutral", securityLevel: "strict" });
-</script>
 </body>
 </html>
