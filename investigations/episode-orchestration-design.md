@@ -2,24 +2,17 @@
 
 Status: proposal, 2026-09-10.
 
-This proposal separates episode orchestration from agent behavior and makes sandbox placement an explicit part of the seed, harness, verification, and cleanup contracts. It supports simple in-process agents, command-line harnesses running inside benchmark workspaces, host-side agents that use a sandbox as a tool, and multi-participant episodes.
+## Why Gym needs an episode processor
 
-The design reuses Gym's existing server references, Responses API models, `SandboxSpec`, `AsyncSandbox`, `SandboxProvider`, and `ConnectableProvider`. It uses the environment-workspace mechanism demonstrated by `upstream/ffrujeri/sandboxes`. PR [#2085](https://github.com/NVIDIA-NeMo/Gym/pull/2085) supplies an optional `RemoteSandboxProvider` for providers that cannot reconnect across processes or deployments that require enforced owner and operator leases. A natively connectable provider does not go through the sandbox server.
+Today, rollout collection sends `POST /run` to a response agent. The response agent commonly initializes benchmark state, runs the agent loop, asks the resources server to verify the result, and cleans up. This works for simple single-agent evaluations, but it leaves three responsibilities unclear:
 
-The NeMo RL compatibility contract is based on NVIDIA-NeMo/RL main at `e518e602fbff282dbb1d5033a819b2cdc18cfb12`.
+- who coordinates an episode when several participants take turns;
+- where a command-line harness runs when the benchmark owns a task sandbox;
+- who may operate or destroy each sandbox during execution, verification, retry, and cleanup.
 
-## The design adds a small set of explicit contracts
+This proposal makes those responsibilities explicit. The resources server continues to define the benchmark and own verification. The agent harness continues to define model-facing behavior. A standard episode processor coordinates them and records one durable rollout result.
 
-The public architecture adds:
-
-- `EpisodeProcessor`, the pure interface that converts one episode request into one result.
-- `StandardEpisodeProcessor`, the concrete seed, execute, verify, cleanup, and publication implementation.
-- `AgentHarness`, the full-loop agent behavior interface.
-- `TurnAgent`, the optional turn-level interface required when Gym schedules visible participants such as a policy and simulated user.
-- `WorkspaceRequest` and `SandboxWorkspace`, which make task-sandbox creation, access, and ownership explicit on `/seed_session`.
-- `AgentRuntimeConfig`, which declares where a harness runs and what facilities it needs.
-
-The design does not add `AgentService`, `/invoke`, a public lifecycle base class, a runtime manager, a scheduler plugin interface, or an artifact-harvesting service.
+The proposal supports local Python agents, command-line harnesses inside benchmark workspaces, host-side harnesses that use sandbox-backed tools, and policy-plus-simulated-user episodes. It preserves the NeMo RL contract described later in this document.
 
 ## An episode is the interaction and a rollout is the exported sample
 
@@ -29,27 +22,20 @@ An episode is the live interaction that produces the rollout. It begins when Gym
 
 The initial contract is one episode per rollout. `rollout_id` identifies the interaction and its exported record. A retryable infrastructure failure keeps `rollout_id`, increments `attempt`, and may adopt a complete checkpoint. A deliberate new sample receives a new `rollout_id`.
 
-## Existing Gym types remain authoritative
+## One episode in plain terms
 
-The proposal reuses these existing types rather than introducing parallel names:
+The normal flow is:
 
-- `ResourcesServerRef` identifies the resources server responsible for task state, tools, verification, and metric aggregation. There is no `EnvironmentRef`.
-- `ModelServerRef` identifies a configured model server.
-- `AgentServerRef` identifies a configured response agent and preserves the current `agent_ref` discriminator and name.
-- `NeMoGymResponseCreateParamsNonStreaming` and `NeMoGymResponse` remain the harness request and response representations.
-- `NeMoGymResponseInputItem` and `NeMoGymResponseOutputItem` remain the typed turn payload items.
-- `BaseRunRequest`, `BaseSeedSessionRequest`, `BaseSeedSessionResponse`, `BaseVerifyRequest`, and `BaseVerifyResponse` remain compatibility surfaces.
-- `SandboxSpec` describes an image, working directory, files, ports, environment, resources, timeout, and provider options.
-- `SandboxResources` describes provider-neutral CPU, memory, disk, and GPU requests.
-- `SandboxHandle` contains the provider-neutral sandbox identifier and opaque provider state.
-- `AsyncSandbox` is the live asynchronous control object.
-- `SandboxProvider` performs provider-specific operations.
-- `ConnectableProvider` adds `serialize_handle()` and `connect()` for cross-process access.
-- `ServerClient` is Gym's existing downstream server client.
-- `SandboxRef` and `RemoteSandboxProvider` from PR #2085 represent signed access through a sandbox server.
-- `SandboxServerRef` from PR #2085 identifies a configured sandbox server.
+1. `RolloutCollectionHelper` sends one task to the processor host through `POST /run`.
+2. The processor asks the resources server to initialize task state.
+3. If the task needs a sandbox, the resources server creates it or the processor creates one from the benchmark's `SandboxSpec`.
+4. The processor invokes the harness locally or starts it inside an approved sandbox.
+5. The harness calls the model and the resources server's task tools.
+6. The processor asks the resources server to verify the outcome while required task state is still alive.
+7. The component that created each sandbox destroys it.
+8. The processor publishes one terminal result for evaluation or NeMo RL.
 
-Every other named type introduced by this proposal is defined below.
+The rest of this document defines the data exchanged at each step and the ownership rules that make the sequence safe.
 
 ## The component relationship is explicit
 
@@ -72,6 +58,39 @@ flowchart LR
 The resources server defines the benchmark. The processor orders the episode. The harness implements agent behavior. Sandbox infrastructure provides execution and task state but does not decide episode policy.
 
 The resources server may create the task sandbox because it knows the task image and verification requirements. The processor may create a task sandbox from a resources-server `SandboxSpec` or create a distinct harness sandbox when the task sandbox cannot host the harness. One physical sandbox has one logical lifecycle owner.
+
+## Contracts introduced by this proposal
+
+The architecture introduces:
+
+- `EpisodeProcessor`, the pure interface that converts one episode request into one result.
+- `StandardEpisodeProcessor`, the concrete seed, execute, verify, cleanup, and publication implementation.
+- `AgentHarness`, the full-loop agent behavior interface.
+- `TurnAgent`, the optional turn-level interface required when Gym schedules visible participants such as a policy and simulated user.
+- `WorkspaceRequest` and `SandboxWorkspace`, which make task-sandbox creation, access, and ownership explicit on `/seed_session`.
+- `AgentRuntimeConfig`, which declares where a harness runs and what facilities it needs.
+
+## Types reused from Gym
+
+The proposal builds on these existing Gym types:
+
+- `ResourcesServerRef` identifies the resources server responsible for task state, tools, verification, and metric aggregation.
+- `ModelServerRef` identifies a configured model server.
+- `AgentServerRef` identifies a configured response agent and preserves the current `agent_ref` discriminator and name.
+- `NeMoGymResponseCreateParamsNonStreaming` and `NeMoGymResponse` remain the harness request and response representations.
+- `NeMoGymResponseInputItem` and `NeMoGymResponseOutputItem` remain the typed turn payload items.
+- `BaseRunRequest`, `BaseSeedSessionRequest`, `BaseSeedSessionResponse`, `BaseVerifyRequest`, and `BaseVerifyResponse` remain compatibility surfaces.
+- `SandboxSpec` describes an image, working directory, files, ports, environment, resources, timeout, and provider options.
+- `SandboxResources` describes provider-neutral CPU, memory, disk, and GPU requests.
+- `SandboxHandle` contains the provider-neutral sandbox identifier and opaque provider state.
+- `AsyncSandbox` is the live asynchronous control object.
+- `SandboxProvider` performs provider-specific operations.
+- `ConnectableProvider` adds `serialize_handle()` and `connect()` for cross-process access.
+- `ServerClient` is Gym's existing downstream server client.
+
+Every other named type introduced by this proposal is defined below.
+
+The optional sandbox-server path depends on three types proposed by [PR #2085](https://github.com/NVIDIA-NeMo/Gym/pull/2085): `SandboxServerRef` identifies the server, `RemoteSandboxProvider` implements the provider API over HTTP, and `SandboxRef` carries scoped access to one server-owned sandbox. Native connectable providers do not use these types.
 
 ## Complete definitions of episode data
 
@@ -106,7 +125,7 @@ class ScheduleSpec(BaseModel):
     max_turns: int = Field(default=128, ge=1)
 ```
 
-`ScheduleSpec` bounds execution and selects one of the two scheduling behaviors needed initially. `single` requires exactly one full-loop participant. `environment_directed` requires turn-capable participants and lets the resources server name the next participant. A scheduler plugin interface is not justified until independent scheduler implementations exist.
+`ScheduleSpec` bounds execution and selects a scheduling behavior. `single` requires exactly one full-loop participant. `environment_directed` requires turn-capable participants and lets the resources server name the next participant.
 
 ### `CheckpointRef` and `ComponentCheckpoint`
 
@@ -199,7 +218,7 @@ class EpisodeRequest(BaseModel):
     checkpoint_ref: CheckpointRef | None = None
 ```
 
-`EpisodeRequest` is the complete input to one processor invocation. It uses the existing `ResourcesServerRef`; it does not introduce a generic environment identity. Validation requires a unique participant identifier, a declared primary participant, and a schedule compatible with every participant protocol.
+`EpisodeRequest` is the complete input to one processor invocation. `resources_server` identifies the benchmark server that owns task state, tools, and verification. Validation requires a unique participant identifier, a declared primary participant, and a schedule compatible with every participant protocol.
 
 ### `EpisodeResult`
 
@@ -231,7 +250,7 @@ class RetryableEpisodeError(RuntimeError):
         super().__init__(failure.message)
 ```
 
-`RetryableEpisodeError` tells the processor host to preserve the current collector retry behavior without publishing a terminal failed rollout. Only the host constructs it after classifying the attempt failure as retryable; there is no second boolean that can contradict the transport choice.
+`RetryableEpisodeError` tells the processor host to preserve the current collector retry behavior without publishing a terminal failed rollout. The host constructs it after classifying an attempt failure as retryable.
 
 ## Complete definitions of harness behavior
 
@@ -292,7 +311,7 @@ class TurnInput(BaseModel):
     input_items: tuple[NeMoGymResponseInputItem, ...]
 ```
 
-`TurnInput` is the environment-produced, serializable information visible to one participant for one activation. It replaces the ambiguous `ParticipantObservation` name. The processor may record and replay it. `HarnessContext` separately supplies capabilities that must not become model-visible input.
+`TurnInput` is the environment-produced, serializable information visible to one participant for one activation. The processor may record and replay it. `HarnessContext` separately supplies trusted capabilities that must not become model-visible input.
 
 ### `TurnResult`
 
@@ -317,7 +336,7 @@ class TurnAgent(Protocol):
         ...
 ```
 
-`TurnAgent` is separate from `AgentHarness` because externally scheduled multi-agent execution requires the processor to regain control between participants. It reuses `HarnessContext`; there is no separate `ParticipantContext`.
+`TurnAgent` is separate from `AgentHarness` because externally scheduled multi-agent execution requires the processor to regain control between participants. Full-loop and turn-level agents both receive `HarnessContext`.
 
 ### `_GuestHarnessRequest`
 
@@ -581,7 +600,7 @@ finally:
 
 Owner reconnection is a separate trusted cleanup operation. It requires a provider-specific owner descriptor retrieved from encrypted processor or resources-server state. Public workspace handoff never sets `owns_lifecycle=True`.
 
-Owner `stop()` marks the facade stopped only after provider destruction succeeds. If destruction fails, the owner handle and cleanup record remain retryable. Provider destruction must be idempotent by sandbox identity. This is a change to existing `AsyncSandbox`, not another runtime abstraction.
+Owner `stop()` marks the facade stopped only after provider destruction succeeds. If destruction fails, the owner handle and cleanup record remain retryable. Provider destruction must be idempotent by sandbox identity.
 
 The proposal extends the existing `ConnectableProvider` contract with one method:
 
@@ -660,7 +679,7 @@ class SandboxRef:
     extra: dict[str, Any] = field(default_factory=dict)
 ```
 
-`SandboxRef` is not a second workspace model. It is the provider-specific descriptor stored inside `SandboxWorkspace.descriptor`. Its signed token binds sandbox identity, a caller-asserted rollout label, and owner or operate scope. The label is not authenticated rollout identity until the server derives it from authenticated request context.
+`SandboxRef` is the provider-specific descriptor stored inside `SandboxWorkspace.descriptor` when a sandbox server is used. Its signed token binds sandbox identity, a caller-asserted rollout label, and owner or operate scope. The label becomes authenticated rollout identity only when the server derives it from authenticated request context.
 
 The sandbox server also provides admission control and time-to-live reaping. It is not required for a natively connectable provider. Configuration must select it explicitly; Gym must not proxy a direct provider merely because the server exists.
 
@@ -864,7 +883,7 @@ The resources server decides whether to:
 - package named deliverables;
 - read structured response output.
 
-It returns a bounded `ArtifactPayload` or an already durable `DurableArtifactRef`. Shared path validation, limits, digesting, and packaging may be library functions, but there is no independent artifact owner.
+It returns a bounded `ArtifactPayload` or an already durable `DurableArtifactRef`. Shared library functions may implement path validation, limits, digesting, and packaging while the resources server remains responsible for selecting and extracting benchmark artifacts.
 
 ## NeMo RL observes the same training contract
 
@@ -1003,29 +1022,29 @@ Targeted real rollouts cover:
 - one non-connectable provider through PR #2085;
 - one policy-plus-simulated-user episode.
 
-Full benchmark baselines gate default routing and compatibility removal. They are not required for every additive model or adapter pull request.
+Full benchmark baselines gate making processor routing the default and retiring compatibility code. They are not required for every additive model or adapter pull request.
 
 ## Work starts according to dependencies
 
 1. Add and test the complete request, result, harness, guest, turn, workspace, capabilities, task-spec, runtime, checkpoint, artifact, and failure models without changing routing.
 2. Extend seed request and response with optional workspace fields. Add owner and borrower tests using a fake connectable provider.
 3. Add `owns_lifecycle=False`, `disconnect()`, safe context-manager exit, and retryable idempotent destruction to `AsyncSandbox` and providers.
-4. Implement direct native-provider workspace handoff and migrate the sandbox placement proof to the shared models.
+4. Implement direct native-provider workspace handoff for one environment-owned task sandbox.
 5. Fix authentication, authorization, revocation, persistence, destination validation, borrower fencing, and required guest operations in PR #2085. Add it as the explicit fallback for non-connectable providers.
-6. Implement `StandardEpisodeProcessor` behind opt-in routing and migrate one local harness.
-7. Add immutable guest-bundle staging and migrate OpenCode in an environment-owned SWE workspace.
+6. Implement `StandardEpisodeProcessor` behind opt-in routing and integrate one local harness.
+7. Add immutable guest-bundle staging and run OpenCode in an environment-owned SWE workspace.
 8. Migrate Terminal Bench and prove live-state verification.
 9. Add the turn protocol and one policy-plus-simulated-user episode.
 10. Run topology canaries and NeMo RL qualification before changing defaults.
 
 Prepared guest bundles, benchmark image work, characterization tests, and NeMo RL contract tests can proceed while the seed and sandbox ownership contracts are reviewed.
 
-## Decisions
+## Contract summary
 
-- `ResourcesServerRef` replaces the undefined `EnvironmentRef`.
-- `TurnInput` replaces `ParticipantObservation`.
-- `HarnessContext` is shared by full-loop and turn-level behavior; there is no `ParticipantContext`.
-- Runtime is represented on agent configuration through `AgentRuntimeConfig`, not as an owned object on `AgentHarness`.
+- `ResourcesServerRef` identifies the server that owns benchmark state, tools, verification, and metrics.
+- `TurnInput` contains participant-visible input.
+- `HarnessContext` contains trusted execution capabilities for both full-loop and turn-level agents.
+- `AgentRuntimeConfig` declares harness placement, and the processor carries out that placement.
 - A compatible command-line harness runs inside the environment task workspace by default.
 - A separate harness sandbox is created only when requirements force separation.
 - `/seed_session` explicitly declares who creates the task workspace and returns operate-only access.
@@ -1042,13 +1061,3 @@ Prepared guest bundles, benchmark image work, characterization tests, and NeMo R
 - `TurnAgent` exists only for externally scheduled visible participants.
 - Submission extraction and metric aggregation remain with the resources server.
 - Cross-rollout planning remains above `EpisodeProcessor`.
-
-## Deferred abstractions
-
-The design does not introduce:
-
-- a runtime manager, because direct providers and `RemoteSandboxProvider` already implement runtime control;
-- a public lifecycle object, because one standard processor should demonstrate reusable behavior first;
-- a scheduler protocol, because two data-driven schedule modes are sufficient initially;
-- an agent invocation service or `/invoke`, because direct calls, guest execution, and remote adapters cover placement;
-- an artifact service, because environments own extraction and current result storage owns bounded payload durability.
