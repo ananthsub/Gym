@@ -4,7 +4,7 @@ Status: proposal, 2026-09-10.
 
 ## What this architecture defines
 
-Today, rollout collection sends `POST /run` to a response agent. The response agent commonly initializes benchmark state, runs the agent loop, asks the resources server to verify the result, and cleans up. This works for simple single-agent evaluations, but it leaves three responsibilities unclear:
+Today, rollout collection sends `POST /run` to an agent server. The agent server commonly initializes benchmark state, runs the agent loop, asks the resources server to verify the result, and cleans up. This works for simple single-agent evaluations, but it leaves three responsibilities unclear:
 
 - who coordinates an episode when several participants take turns;
 - where a command-line harness runs when the benchmark owns a task sandbox;
@@ -269,7 +269,7 @@ The proposal builds on these existing Gym types:
 
 - `ResourcesServerRef` identifies the resources server responsible for task state, tools, verification, and metric aggregation.
 - `ModelServerRef` identifies a configured model server.
-- `AgentServerRef` identifies an existing response-agent server during migration. It is not the target harness identity or processor route.
+- `AgentServerRef` identifies an existing agent server during migration. It is not the target harness identity or processor route.
 - Each resources server's `TaskData` schema validates its normalized task-owned row fields.
 - `NeMoGymResponseCreateParamsNonStreaming` and `NeMoGymResponse` remain the harness request and response representations.
 - `NeMoGymResponseInputItem` and `NeMoGymResponseOutputItem` remain the typed turn payload items.
@@ -362,7 +362,7 @@ class EpisodeProcessorServerTypeConfig(BaseServerTypeConfig):
 
 `EpisodeProcessorServerConfig` extends Gym's existing run-server schema, which supplies `entrypoint`, `host`, `port`, and optional `num_workers`. `processor` resolves through a trusted Gym registry; arbitrary task data cannot provide an import path. `max_concurrent_episodes` controls active episode tasks in each worker unless deployment policy supplies shared admission. An empty `allowed_resources_servers` permits any configured resources server; a non-empty tuple restricts the pool. `legacy_routes` enables compatibility parsing and supplies every field that a current request does not contain.
 
-`EpisodeProcessorServerTypeConfig` adds `episode_processors` to Gym's server-type union and startup discovery. It follows the same one-inner-server shape as model, resources, and response-agent server configuration. Horizontal replica count belongs to the deployment system because all replicas present the same logical endpoint. Harness configuration is loaded once per worker rather than transferred on every episode.
+`EpisodeProcessorServerTypeConfig` adds `episode_processors` to Gym's server-type union and startup discovery. It follows the same one-inner-server shape as model, resources, and agent-server configuration. Horizontal replica count belongs to the deployment system because all replicas present the same logical endpoint. Harness configuration is loaded once per worker rather than transferred on every episode.
 
 `ServerRef`, `ServerTypeConfig`, and `ServerInstanceConfig` must include the processor variants so existing configuration normalization, default port assignment, startup, health checks, and `ServerClient` endpoint resolution apply without a second discovery system.
 
@@ -579,7 +579,7 @@ class HarnessExecutor(Protocol):
 
 Direct in-interpreter invocation remains a test optimization. It is not the production default because existing agents may mutate environment variables, install signal handlers, load conflicting optional dependencies, block the event loop, or crash the process.
 
-For an existing full-loop response agent, the remote executor projects `HarnessCall.response_params` onto `/v1/responses`, forwards rollout-scoped headers and resource-session cookies, and wraps `NeMoGymResponse` in `HarnessResult`. Existing response agents do not provide the `TurnAgent` contract. Remote turn execution remains unsupported until a typed turn behavior transport exists.
+For an existing full-loop agent server, the remote executor projects `HarnessCall.response_params` onto `/v1/responses`, forwards rollout-scoped headers and resource-session cookies, and wraps `NeMoGymResponse` in `HarnessResult`. Existing agent servers do not provide the `TurnAgent` contract. Remote turn execution remains unsupported until a typed turn behavior transport exists.
 
 Cancelling the processor's HTTP request does not guarantee that an existing remote service stops. A remote deployment is certified for retry only when it accepts the deadline and attempt identity, fences stale attempts, and provides cooperative cancellation. An interruption with an uncertified remote agent is terminal and non-retryable when the processor cannot determine whether side effects continue. The unresolved call is recorded as a cleanup failure.
 
@@ -938,9 +938,9 @@ class AgentRuntimeConfig(BaseModel):
 
 `local_pool_size` is the number of local execution slots owned by each processor HTTP worker. One slot executes one harness call at a time. A call waits behind that pool without consuming a sandbox slot. With `local_reuse_workers: false`, a slot starts a fresh process for each call. With reuse enabled, each slot retains one process and `local_max_calls_per_worker` periodically replaces it so process-global state and memory growth are discarded. A crashed process fails its current call and is replaced; it does not terminate the processor server. Total local harness capacity is `replicas * num_workers * local_pool_size`, bounded above by episode admission.
 
-Existing remote response agents select their model from deployment configuration. `remote_model_bindings` records that fixed mapping. Preflight requires the participant's requested bindings to match it exactly. A future remote transport may advertise per-request model selection, but existing `/v1/responses` agents cannot be assumed to support it.
+Existing remote agent servers select their model from deployment configuration. `remote_model_bindings` records that fixed mapping. Preflight requires the participant's requested bindings to match it exactly. A future remote transport may advertise per-request model selection, but existing `/v1/responses` agent servers cannot be assumed to support it.
 
-Existing remote response agents also select their resources server from deployment configuration. `remote_resources_server` records that binding. Preflight requires `EpisodeRequest.resources_server` to match it exactly. Forwarded cookies preserve the seeded session but do not redirect an existing agent to another resources server.
+Existing remote agent servers also select their resources server from deployment configuration. `remote_resources_server` records that binding. Preflight requires `EpisodeRequest.resources_server` to match it exactly. Forwarded cookies preserve the seeded session but do not redirect an existing agent server to another resources server.
 
 The harness object itself does not receive this config or own lifecycle. The processor's execution adapter interprets it.
 
