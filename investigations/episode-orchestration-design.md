@@ -260,7 +260,9 @@ The architecture introduces:
 - `AgentHarness`, the full-loop agent behavior interface.
 - `HarnessCall` and `HarnessExecutor`, the placement-neutral execution request and internal placement strategy.
 - `TurnAgent`, the optional turn-level interface required when Gym schedules visible participants such as a policy and simulated user.
-- `WorkspaceRequest` and `SandboxWorkspace`, which make task-sandbox creation, access, and ownership explicit on `/seed_session`.
+- `EpisodeVerifyRequest` and `EpisodeVerifyResponse`, the normalized verification exchange used by the standard processor.
+- `EpisodeSeedSessionRequest`, `EpisodeSeedSessionResponse`, `WorkspaceRequest`, and `SandboxWorkspace`, which make episode identity and task-sandbox ownership explicit on `/seed_session`.
+- `CleanupSessionRequest` and `CleanupSessionResponse`, which make resources-server teardown an explicit, observable call.
 - `AgentRuntimeConfig`, which declares where a harness runs and what facilities it needs.
 
 ## Types reused from Gym
@@ -273,6 +275,7 @@ The proposal builds on these existing Gym types:
 - Each resources server's `TaskData` schema validates its normalized task-owned row fields.
 - `NeMoGymResponseCreateParamsNonStreaming` and `NeMoGymResponse` remain the harness request and response representations.
 - `NeMoGymResponseInputItem` and `NeMoGymResponseOutputItem` remain the typed turn payload items.
+- Pydantic's `JsonValue` preserves environment-specific HTTP payloads while excluding arbitrary Python objects.
 - `BaseRunRequest`, `BaseSeedSessionRequest`, `BaseSeedSessionResponse`, `BaseVerifyRequest`, and `BaseVerifyResponse` remain compatibility surfaces.
 - `SandboxSpec` describes an image, working directory, files, ports, environment, resources, timeout, and provider options.
 - `SandboxResources` describes provider-neutral CPU, memory, disk, and GPU requests.
@@ -389,7 +392,7 @@ class ScheduleSpec(BaseModel):
     max_turns: int = Field(default=128, ge=1)
 ```
 
-`ScheduleSpec` bounds execution and selects a scheduling behavior. `single` requires exactly one full-loop participant. `environment_directed` requires turn-capable participants and lets the resources server name the next participant.
+`ScheduleSpec` bounds execution and selects a scheduling behavior. `single` requires exactly one full-loop participant. `environment_directed` requires turn-capable participants and lets the resources server name the next participant. The resources server must schedule the primary participant at least once before reporting `episode_done=true`, because compatibility verification and rollout publication require a primary `NeMoGymResponse`.
 
 ### `ArtifactPayload` and `DurableArtifactRef`
 
@@ -419,10 +422,11 @@ class ParticipantOutcome(BaseModel):
     role: str
     harness: HarnessRef
     response: NeMoGymResponse | None = None
+    turn_responses: tuple[NeMoGymResponse, ...] = ()
     capture_rollout_id: str
 ```
 
-`ParticipantOutcome` records each visible actor and the harness that produced its output. Non-primary participants use separate capture identifiers so simulated-user or critic calls do not enter NeMo RL's primary token-capture manifest.
+`ParticipantOutcome` records each visible actor and the harness that produced its output. A full-loop participant sets `response`. A turn-capable participant appends every activation to `turn_responses` and sets `response` to its final activation for compatibility. Non-primary participants use separate capture identifiers so simulated-user or critic calls do not enter NeMo RL's primary token-capture manifest.
 
 ### `CleanupFailure` and `EpisodeFailure`
 
@@ -481,13 +485,14 @@ class EpisodeResult(BaseModel):
     terminal_response_id: str | None = None
     reward: float | None
     reward_components: dict[str, float] | None
+    metrics: dict[str, float] = Field(default_factory=dict)
     instance_config: dict[str, Any]
     artifacts: tuple[ArtifactPayload | DurableArtifactRef, ...] = ()
     cleanup_failures: tuple[CleanupFailure, ...] = ()
     failure: EpisodeFailure | None = None
 ```
 
-`EpisodeResult` is the terminal value returned to rollout collection. The calling evaluation or training framework decides when that result is durably accepted. `primary_harness` records behavior provenance without claiming that the harness is a server. While NeMo RL consumes the current shape, the compatibility serializer emits `agent_ref.name` from `execution_name`. `response`, `terminal_response_id`, reward fields, and `instance_config` remain unchanged. `EpisodeResult(status="failed")` is terminal; a retryable attempt raises `RetryableEpisodeError` instead of returning this result.
+`EpisodeResult` is the terminal value returned to rollout collection. The calling evaluation or training framework decides when that result is durably accepted. `primary_harness` records behavior provenance without claiming that the harness is a server. `metrics` preserves benchmark-defined numeric verifier outputs without mixing them with processor fields. The compatibility serializer emits those entries as top-level numeric fields and emits `agent_ref.name` from `execution_name` while current consumers require that shape. `response`, `terminal_response_id`, reward fields, and `instance_config` remain unchanged. `EpisodeResult(status="failed")` is terminal; a retryable attempt raises `RetryableEpisodeError` instead of returning this result.
 
 ### `RetryableEpisodeError`
 
@@ -498,7 +503,7 @@ class RetryableEpisodeError(RuntimeError):
         super().__init__(failure.message)
 ```
 
-`RetryableEpisodeError` tells the processor host to preserve the current collector retry behavior without publishing a terminal failed rollout. The host constructs it after classifying an attempt failure as retryable.
+`RetryableEpisodeError` tells the processor host not to publish a terminal failed rollout. The host constructs it after classifying an attempt failure as retryable. The target collector maps the resulting stable retryable HTTP response to its attempt ledger. The current collector does not do this: it raises on non-success HTTP status and relies on `_ng_failure_class` and `_ng_no_persist` fields in a successful response body. A compatibility processor must emit those sentinels until the collector-side transport change lands.
 
 ## Complete definitions of harness behavior
 
@@ -612,11 +617,11 @@ class TurnInput(BaseModel):
 
 ```python
 class TurnResult(BaseModel):
-    output_items: tuple[NeMoGymResponseOutputItem, ...]
+    response: NeMoGymResponse
     participant_done: bool = False
 ```
 
-`TurnResult` contains one participant's action and state. `participant_done` does not end the episode; only the resources server determines that environment-owned interaction is complete.
+`TurnResult` contains the complete model response for one participant activation. The processor sends `response.output` to `/apply_turn`, records the response in `ParticipantOutcome.turn_responses`, and uses the final primary-participant response for compatibility verification and `EpisodeResult.response`. `participant_done` does not end the episode; only the resources server determines that environment-owned interaction is complete.
 
 ### `TurnAgent`
 
@@ -673,6 +678,27 @@ class EnvironmentTurnState(BaseModel):
 ```
 
 `ApplyTurnRequest` gives the resources server the selected participant's action. `EnvironmentTurnState` applies that action to task state and either ends the episode or returns the next participant-visible input. Validation requires `next_turn` exactly when `episode_done` is false.
+
+### `EpisodeVerifyRequest` and `EpisodeVerifyResponse`
+
+```python
+class EpisodeVerifyRequest(BaseModel):
+    rollout_id: str = Field(min_length=1)
+    attempt: int = Field(ge=0)
+    verify: dict[str, JsonValue]
+    participant_outcomes: tuple[ParticipantOutcome, ...]
+
+
+class EpisodeVerifyResponse(BaseModel):
+    verify: dict[str, JsonValue]
+    reward_components: dict[str, float] | None = None
+    metrics: dict[str, float] = Field(default_factory=dict)
+    artifacts: tuple[ArtifactPayload | DurableArtifactRef, ...] = ()
+```
+
+`EpisodeVerifyRequest.verify` preserves the concrete environment-specific request as JSON, including its model input, primary `NeMoGymResponse`, and benchmark fields. The resolved resources-server adapter validates it against that server's `BaseVerifyRequest` subclass before calling `verify()`. The envelope adds attempt identity and every participant outcome so a multi-agent verifier does not have to reconstruct the interaction from the final policy response. The primary response is the full-loop response or the final primary-participant turn response. The complete sequence of turn responses remains in `participant_outcomes`. The processor rejects an environment-directed completion that occurs before the primary participant produces a response.
+
+The adapter serializes the concrete `BaseVerifyResponse` into `EpisodeVerifyResponse.verify`, including its required `reward`. The envelope normalizes data that the processor copies into `EpisodeResult`. `reward_components` carries optional objective values. `metrics` contains benchmark-defined numeric values used for aggregation. `artifacts` contains only bounded payloads or durable references copied out before cleanup. Existing resources servers can use an adapter that moves their additional top-level numeric verify fields into `metrics`; the compatibility result serializer flattens those metrics again while current aggregation expects top-level values.
 
 ## The processor server hosts an episode processor implementation
 
@@ -798,24 +824,45 @@ class TaskSandboxSpecRequest(BaseModel):
 
 `POST /sandbox_spec` is an authenticated processor-to-resources-server route. It must apply the same task-data authorization and verifier-metadata handling as seed. Harnesses and guest processes cannot call it.
 
-### Seed API changes
-
-`BaseSeedSessionRequest` gains:
+### `EpisodeSeedSessionRequest` and `EpisodeSeedSessionResponse`
 
 ```python
-workspace: WorkspaceRequest | None = None
+class EpisodeSeedSessionRequest(BaseModel):
+    rollout_id: str = Field(min_length=1)
+    attempt: int = Field(ge=0)
+    workspace: WorkspaceRequest
+    seed: dict[str, JsonValue]
+
+
+class EpisodeSeedSessionResponse(BaseModel):
+    seed: dict[str, JsonValue]
+    workspace: SandboxWorkspace | None = None
+    initial_turn: TurnInput | None = None
 ```
 
-`BaseSeedSessionResponse` gains:
-
-```python
-workspace: SandboxWorkspace | None = None
-initial_turn: TurnInput | None = None
-```
+`EpisodeSeedSessionRequest` wraps the existing environment-specific seed body only on the processor path. `JsonValue` is Pydantic's recursive JSON type, so the envelope preserves concrete fields without accepting arbitrary Python objects. The resolved resources-server adapter validates `seed` against that server's `BaseSeedSessionRequest` subclass before calling `seed_session()`. It serializes the concrete `BaseSeedSessionResponse` back into `EpisodeSeedSessionResponse.seed`. Existing agent servers can continue sending their current unwrapped seed body while resources servers migrate. `rollout_id` and `attempt` identify the session and allow seed, tool, verify, and cleanup operations to reject stale work consistently.
 
 In `resources_server` mode, the response must include an operate workspace owned by the resources server. In `provided` mode, the resources server acknowledges the provided workspace and does not assume cleanup authority. In `none` mode, returning a workspace is an error.
 
+Seed is transactional from the processor's perspective. If the resources server starts B or connects to a provided B and then fails before returning `EpisodeSeedSessionResponse`, it must disconnect or stop every resource acquired by that seed attempt before returning the error. The processor cannot clean up a resources-owned handle or session it never received. It still stops any processor-owned B that it supplied.
+
 `initial_turn` is present only for an environment-directed episode. This avoids a separate observation endpoint.
+
+### `CleanupSessionRequest` and `CleanupSessionResponse`
+
+```python
+class CleanupSessionRequest(BaseModel):
+    rollout_id: str = Field(min_length=1)
+    attempt: int = Field(ge=0)
+
+
+class CleanupSessionResponse(BaseModel):
+    failures: tuple[CleanupFailure, ...] = ()
+```
+
+`POST /cleanup_session` gives the resources server an explicit point to release session state, disconnect borrowed task workspaces, and stop resources-server-owned sandboxes. The authenticated session cookie selects the state created by `/seed_session`; the body carries rollout and attempt identity so stale cleanup cannot destroy a newer attempt. The response acknowledges completion and reports any cleanup operations that failed. The processor records those failures, continues its own cleanup, and does not replace a valid response or reward with a cleanup error.
+
+`SimpleResourcesServer.setup_webserver()` registers `/cleanup_session` as an authenticated internal lifecycle route. The route name is added to `RESERVED_MCP_TOOL_NAMES` so automatic tool harvesting cannot expose cleanup to a harness or model. Legacy resources servers use a no-op compatibility implementation until they own per-session state that requires explicit teardown.
 
 ### `HarnessRequirements`
 
@@ -1221,7 +1268,9 @@ flowchart TB
 
 The creator of A, B, or V owns its destruction. A trusted borrower receives only operate access and disconnects. A guest harness receives no provider handle or owner descriptor.
 
-## The complete episode sequence includes server and execution boundaries
+## One sequence follows every call from collection to the returned rollout
+
+The HTML rendering makes each numbered call selectable. Selecting a call shows the complete request, response, and state available to the caller and callee. This static rendering shows the same control flow and names every payload type.
 
 ```mermaid
 sequenceDiagram
@@ -1231,98 +1280,141 @@ sequenceDiagram
     participant P as StandardEpisodeProcessor
     participant R as Resources server
     participant S as Sandbox control
-    participant W as Local worker or remote agent
-    participant L as Shared sandbox launcher
-    participant H as Agent behavior
+    participant X as Harness executor or launcher
+    participant H as Agent harness
     participant M as Model server
+    participant C as Evaluation or NeMo RL caller
 
-    RCH->>PS: POST /run to EpisodeProcessorRef
-    PS->>PS: Authenticate, translate if needed, and acquire admission
-    PS->>P: process EpisodeRequest
-    P->>P: Admit attempt and reject stale work
+    RCH->>RCH: Build EpisodeRequest from task row and run config
+    RCH->>PS: POST /run with EpisodeRequest
+    PS->>PS: Authenticate, translate or validate, acquire admission
+    PS->>P: process(EpisodeRequest)
+    P->>P: Resolve refs, validate TaskData, fence rollout attempt
 
-    alt Resources server creates task workspace
-        P->>R: /seed_session workspace.mode=resources_server
-        R->>S: Start task sandbox B
-        S-->>R: Owner AsyncSandbox
-        R->>S: Serialize operate descriptor
-        R-->>P: SandboxWorkspace owner=resources_server
-    else Processor provides task workspace
-        P->>R: /sandbox_spec
-        R-->>P: Task SandboxSpec
-        P->>S: Start task sandbox B
-        S-->>P: Owner AsyncSandbox
-        P->>R: /seed_session workspace.mode=provided
-        R->>S: Connect to B with operate access
-        R-->>P: Seed acknowledgement
-    else No task workspace
-        P->>R: /seed_session workspace.mode=none
-        R-->>P: Environment state
+    opt Processor-owned task workspace requested
+        P->>R: POST /sandbox_spec with TaskSandboxSpecRequest
+        R-->>P: SandboxSpec
+        P->>S: start(SandboxSpec) for task sandbox B
+        S-->>P: Owner AsyncSandbox and attested capabilities
     end
 
-    alt Supervised local worker
-        P->>W: Invoke _HarnessInvocation
-        W->>H: AgentHarness.responses or TurnAgent.act
-    else Harness runs in task workspace
-        P->>S: Connect to B with operate access
-        P->>L: Invoke with operate workspace
-        L->>S: Upload bundle and exec entrypoint in B
-        S->>H: Start harness guest
-    else Dedicated harness sandbox
-        P->>S: Start processor-owned harness sandbox A
-        P->>L: Invoke with owned sandbox
-        L->>S: Upload bundle and exec entrypoint in A
-        S->>H: Start harness guest
-    else Remote behavior service
-        P->>W: POST /v1/responses
-        W->>H: Invoke remote harness
+    P->>R: POST /seed_session with EpisodeSeedSessionRequest
+    alt Resources server owns B
+        R->>S: start(SandboxSpec), then serialize operate descriptor
+        S-->>R: Owner AsyncSandbox and operate descriptor
+    else Processor supplied B
+        R->>S: connect(descriptor, owns_lifecycle=false)
+        S-->>R: Borrowed AsyncSandbox
+    end
+    alt Seed succeeds
+        R-->>P: EpisodeSeedSessionResponse with workspace and optional initial_turn
+    else Seed fails after acquiring resources
+        R->>S: Roll back resources acquired by the failed seed attempt
+        S-->>R: Rollback outcome
+        R-->>P: Classified seed failure
+        P->>P: Classify terminal versus retryable seed failure
     end
 
-    loop Harness model and tool loop
-        H->>M: Model request with rollout identity
-        M-->>H: Response items and usage
-        opt Environment tool call
-            H->>R: Authorized tool call
-            R-->>H: Tool result
+    opt Seed succeeded
+        P->>X: invoke(HarnessDeploymentConfig, HarnessCall)
+        alt Supervised local worker
+            X->>H: AgentHarness.responses or TurnAgent.act
+        else Harness in task workspace B
+            X->>S: connect to B, upload invocation, exec entrypoint
+            S->>H: Start harness guest with _HarnessInvocation
+        else Dedicated harness sandbox A
+            X->>S: start A, upload invocation, exec entrypoint
+            S->>H: Start harness guest with _HarnessInvocation
+        else Existing remote agent server
+            X->>H: POST /v1/responses with response params and rollout context
+        end
+
+        loop Each harness model or tool exchange
+            H->>M: POST /v1/responses with model input and rollout identity
+            M-->>H: NeMoGymResponse with output, usage, and response id
+            opt Environment tool call
+                H->>R: Authorized tool request with session cookie
+                R-->>H: Tool result visible to the next model request
+            end
+        end
+
+        alt Full-loop harness
+            H-->>X: HarnessResult
+        else Turn-capable harness
+            H-->>X: TurnResult containing NeMoGymResponse
+        end
+        X-->>P: HarnessResult or TurnResult
+
+        loop Environment-directed turns only
+            P->>R: POST /apply_turn with TurnResult.response.output
+            R-->>P: EnvironmentTurnState with next_turn or episode_done
+            opt Another participant acts
+                P->>X: invoke next participant with HarnessCall
+                X-->>P: TurnResult
+            end
+        end
+
+        alt Harness execution completed
+            P->>R: POST /verify with EpisodeVerifyRequest
+            alt Portable submission such as SWE-bench
+                R->>S: exec and download patch from B
+                R->>S: start verifier V, apply patch, run tests, download artifacts
+                S-->>R: Bounded patch, reward evidence, and declared logs
+            else Live-state submission such as Terminal Bench
+                R->>S: upload tests, exec in B, download reward and logs
+                S-->>R: Reward evidence and declared logs
+            else No task sandbox
+                R->>R: Verify from response and resources-server session state
+            end
+            R-->>P: EpisodeVerifyResponse with reward, metrics, and artifacts
+        else Harness failed, timed out, or was cancelled
+            P->>P: Classify failure and skip verification
+        end
+
+        opt Turn application or verification fails
+            P->>P: Classify terminal versus retryable lifecycle failure
         end
     end
-    alt Local worker
-        H-->>W: HarnessResult
-        W-->>P: HarnessResult
-    else Remote behavior service
-        H-->>W: NeMoGymResponse
-        W-->>P: Wrap as HarnessResult
-    else Sandboxed harness
-        H-->>L: Typed result file
-        L-->>P: HarnessResult
-    end
 
-    P->>R: /verify while task workspace is alive
-    alt Portable SWE submission
-        R->>S: Extract and copy patch from B
-        R->>S: Create verifier V, apply patch, and test
-        S-->>R: Reward, test output, and declared logs
-    else Live Terminal Bench submission
-        R->>S: Upload tests and execute in B
-        S-->>R: Reward file and declared logs
+    opt Resources session was established
+        P->>R: POST /cleanup_session with rollout identity and attempt
+        R->>S: disconnect borrowed B and stop resources-owned B or remaining V
+        S-->>R: Cleanup outcome
+        R-->>P: CleanupSessionResponse
     end
-    R-->>P: Reward, components, and artifacts
-
-    opt Processor borrowed task workspace B
-        P->>S: Disconnect from B
+    opt Processor owns sandbox A or B
+        P->>S: stop processor-owned A or B
+        S-->>P: Cleanup outcome
     end
-    P->>R: /cleanup_session
-    R->>S: Disconnect borrowed B, then stop resources-owned B and V
-    R-->>P: Cleanup complete
-    P->>S: Stop processor-owned A or B
-    P-->>PS: EpisodeResult
-    PS->>PS: Release admission
-    PS-->>RCH: Compatible rollout result
+    alt Terminal result
+        P-->>PS: EpisodeResult
+    else Retryable attempt failure
+        P-->>PS: RetryableEpisodeError after cleanup
+    end
+    PS->>PS: Serialize compatibility shape and release admission
+    PS-->>RCH: HTTP response with EpisodeResult or retryable failure
+    RCH->>RCH: Correlate identity and merge model-call capture and trajectory
+    RCH->>RCH: Persist success, sidecar failure, or no-persist attempt
+    opt Exporters configured after all futures complete
+        RCH->>RCH: Run configured rollout exporters
+    end
+    RCH->>RCH: Sort complete in-memory and persisted-only result collections
+    opt Aggregate metrics enabled
+        RCH->>R: POST /aggregate_metrics with accepted verify results
+        R-->>RCH: AggregateMetrics
+    end
+    RCH-->>C: Return rollout result batch
 ```
 
-`S` represents either a direct native provider or PR #2085's sandbox server. The episode sequence does not change between those implementations. Cleanup is ordered rather than parallel: all users release borrowed access before the logical owner destroys a sandbox.
+`S` represents either a direct native provider or PR #2085's sandbox server. Calls to `start`, `connect`, `exec`, `upload`, `download`, `disconnect`, and `stop` use the same `AsyncSandbox` facade in either case. The creator remains the owner. A borrower disconnects before the owner stops the physical sandbox.
 
-For an environment-directed schedule, seed also returns `initial_turn`. The processor calls the selected `TurnAgent`, sends `ApplyTurnRequest` to the resources server, receives `EnvironmentTurnState`, and repeats until `episode_done` is true.
+The request sent in the second call contains the complete `EpisodeRequest`: model-visible `responses_create_params`, opaque validated `task_data`, `instance_config`, rollout and attempt identity, the resources-server reference, participants and their model bindings, schedule, primary participant, and deadline. Server endpoints, resolved credentials, provider handles, and sandbox descriptors are absent because the processor derives them from trusted deployment configuration.
+
+The final HTTP response contains `EpisodeResult`: status, participant outcomes, the primary `NeMoGymResponse`, `terminal_response_id`, reward, reward components, metrics, artifacts, cleanup failures, and a terminal failure when applicable. The compatibility serializer also exposes the fields consumed by current rollout collection and NeMo RL.
+
+Current rollout collection raises on non-success HTTP status and represents retry behavior with result sentinels such as `_ng_failure_class` and `_ng_no_persist`. The target collector must learn the processor's stable retryable transport response before `RetryableEpisodeError` can be exposed over HTTP. During migration, a compatibility processor serializes the current sentinel result instead. Neither representation is persisted as a completed rollout.
+
+The final helper return is a sorted in-memory batch after every rollout future has completed and optional export and aggregate-metrics work has run. The main rollout JSONL contains accepted successes. The failure sidecar and no-persist attempts can still appear in the returned in-memory batch, matching current `RolloutCollectionHelper.run_from_config()` behavior.
 
 ## Compatibility translation is explicit
 
@@ -1358,7 +1450,7 @@ legacy_routes:
 
 The processor must not call the old agent's `/run`, because that endpoint already seeds and verifies an episode. Before a harness is extracted, the collector continues routing that execution through the legacy agent-server path. After extraction, the existing deployment hosts the compatibility processor and invokes the harness behavior locally or in a sandbox.
 
-The target collector constructs `EpisodeRequest` directly from agent-agnostic task data and run configuration, then routes through `EpisodeProcessorRef`. The response compatibility projection preserves `agent_ref`, `response`, `terminal_response_id`, scalar reward, reward components, and `instance_config`.
+The target collector constructs `EpisodeRequest` directly from agent-agnostic task data and run configuration, then routes through `EpisodeProcessorRef`. The response compatibility projection preserves `agent_ref`, `response`, `terminal_response_id`, scalar reward, reward components, verifier metrics, and `instance_config`. It maps `EpisodeResult(status="failed"|"cancelled")` to `_ng_failure_class` and sets `_ng_failure_terminal=true` for terminal failures so the current collector writes them to the failure sidecar rather than the success JSONL.
 
 ## Baseline reliability restarts unfinished episodes
 
