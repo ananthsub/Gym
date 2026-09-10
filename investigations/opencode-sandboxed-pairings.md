@@ -1,6 +1,6 @@
 # How the sandboxed OpenCode agent works with each SWE-style resources server
 
-Status: analysis, 2026-09-10, against upstream main at `9506eb87c`.
+Status: analysis, 2026-09-10, against upstream main at `d33e04575`.
 
 Four resources servers allow `opencode_sandboxed_agent`: `swebench`, `deepswe`, `terminal_bench_2_1`, and `swebench_pro`. `vibench_agent` subclasses it, and `terminus_2_sandboxed_agent` copies its handoff. This note describes what the agent does, what each server does, where the pairings hold together by luck, and what that means for the sandbox contract in the design.
 
@@ -55,11 +55,11 @@ None of the four servers set `num_workers`, so each runs as one process. That is
 
 The four pairings are the same pattern with four hand-written variants. The design turns the pattern into a contract and removes the variants.
 
-- One record replaces `sandbox_handle`, `sandbox_descriptor`, and `pty_session_id`. It carries the provider name, the serialized pointer from `serialize()`, the working directory, who created the sandbox, and what it can do. deepswe already produces almost exactly this. The agent connects from the record and starts in the right directory.
+- `SandboxWorkspace` replaces the bare `sandbox_handle` and ad hoc `sandbox_descriptor`. It carries the provider name, the complete reconnect descriptor, the working directory, who created the sandbox, and what it can do. DeepSWE already produces most of this information. SWE-bench Pro's `pty_session_id` remains resources-server session state because OpenCode does not attach to that PTY; a future harness that requires an existing terminal session would need an explicit attachment contract.
 - The base resources server owns the session table. A server that creates a sandbox calls one helper in seed and returns the record. The table is keyed by rollout id and attempt, not by cookie, and a retried seed stops the previous sandbox before creating a new one, which deepswe and swebench_pro already do and swebench and terminal_bench_2_1 do not.
 - Whoever creates the sandbox stops it. The agent never stops a sandbox it did not create. That removes the double stop and the dependence on the provider ignoring a second kill.
-- Verify runs before the creator stops the sandbox, and the server copies out what it grades first. The two grading shapes stay as they are: swebench, deepswe, and swebench_pro copy a patch out and test it in a fresh sandbox; terminal_bench_2_1 tests the live sandbox. Patch extraction uses one shared implementation with `add -N` and a size limit, so new files count everywhere.
+- Verify runs before the creator stops the sandbox, and the server copies out what it grades first. The two grading shapes stay as they are: SWE-bench, DeepSWE, and SWE-bench Pro copy a patch out and test it in a fresh sandbox; Terminal Bench 2.1 tests the live sandbox. Each SWE-style server keeps its submission rule: DeepSWE runs its pinned commit-aware collect hook, SWE-bench Pro filters pristine untracked files, and SWE-bench must add canonical untracked and binary-file handling. Common helpers may enforce result bounds and cleanup without replacing those benchmark rules.
 - The agent runs inside the task sandbox as a placement decision, not as a separate agent directory. The OpenCode install, config, and run command are the harness's job; the reconnect, working directory, model address, and cleanup are the framework's.
 - A missing sandbox in the seed response is an error before any model call, never a fallback to a hardcoded image.
 - Failures get a class. An install failure or a missing transcript is reported as an infrastructure failure, so it lands in the failure sidecar instead of counting as a wrong answer.
-- Reconnecting by id stays OpenSandbox-only until Docker, Apptainer, and local providers can rebuild a handle on the same host, which is a small provider change and does not need a sandbox server for any of these four benchmarks.
+- The current raw-id reconnect works only for providers that can reconstruct the handle from that identifier. The target uses the complete provider descriptor. A native connectable provider remains the direct path; a non-connectable provider needs same-host reconnect support or the sandbox-server adapter rather than an assumed raw-id reconstruction.

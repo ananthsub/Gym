@@ -2,7 +2,7 @@
 
 Status: orientation, 2026-09-10.
 
-This branch holds two documents that describe the same change from different sides. `rfcs/gym-architecture.md` is the public RFC (sanitized snapshot at revision `6c57b803`). `investigations/episode-orchestration-design.md` is the target architecture and its contracts. They use different names for the same components and disagree on six decisions. This guide states the design in one page, maps the vocabulary, lists the disagreements, and gives a reading order.
+This branch holds the public RFC, the target architecture, and a concrete analysis of the current sandboxed OpenCode benchmark stack. `rfcs/gym-architecture.md` is the public RFC (sanitized snapshot at revision `6c57b803`). `investigations/episode-orchestration-design.md` defines the target architecture and its contracts. `investigations/opencode-sandboxed-pairings.md` traces the current OpenCode integration with four resources servers. This guide states the design in one page, maps the vocabulary, lists the disagreements, and gives a reading order.
 
 ## The design in six decisions
 
@@ -43,9 +43,10 @@ This branch holds two documents that describe the same change from different sid
 ## Reading order
 
 1. This guide.
-2. In the design: "One episode in plain terms", "The current OpenCode benchmark stack is the migration baseline", and "Contract summary". These sections explain the proposal and its concrete migration target.
-3. In the design: "The agent execution decision changes one boundary" compares the agent-server and pure-harness paths. Its expandable call reference contains the complete rollout sequence. Every named type is defined in the "Complete definitions" sections and can be read on demand.
-4. In the RFC: "Problem statement" and "Personas and Use Cases" for the motivation, then "Proposed solution" to see the alternative the design departs from. The RFC's appendix is evidence about today's code and does not need to be read to understand either proposal.
+2. Read `opencode-sandboxed-pairings.md` for the current execution path and the differences among SWE-bench, DeepSWE, SWE-bench Pro, and Terminal Bench 2.1.
+3. In the design: "One episode in plain terms", "The current OpenCode benchmark stack is the migration baseline", and "Contract summary". These sections explain the proposal and its concrete migration target.
+4. In the design: "The agent execution decision changes one boundary" compares the agent-server and pure-harness paths. Its expandable call reference contains the complete rollout sequence. Every named type is defined in the "Complete definitions" sections and can be read on demand.
+5. In the RFC: "Problem statement" and "Personas and Use Cases" for the motivation, then "Proposed solution" to see the alternative the design departs from. The RFC's appendix is evidence about today's code and does not need to be read to understand either proposal.
 
 ## What each file is
 
@@ -54,4 +55,5 @@ This branch holds two documents that describe the same change from different sid
 | `rfcs/gym-architecture.md` | Public RFC, sanitized snapshot | Gym architecture working group; in review |
 | `investigations/episode-orchestration-design.md` | Target architecture with complete contracts | This branch; proposal |
 | `investigations/episode-orchestration-design.html` | Rendered page of the design with SVG diagrams | Generated from the Markdown |
+| `investigations/opencode-sandboxed-pairings.md` | Current OpenCode and resources-server execution analysis | This branch; analysis |
 | `investigations/episode-orchestration-overview.md` | This guide | This branch |
