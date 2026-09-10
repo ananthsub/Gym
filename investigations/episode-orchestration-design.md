@@ -728,37 +728,55 @@ This is the preferred placement for command-line coding agents when the task san
 
 This form is used only when B cannot host the harness because of incompatible images, dependencies, trust policy, resource requirements, or lifecycle. The processor owns and stops A. The recorded owner stops B.
 
-## SWE-style execution uses one task workspace and optional fresh verification
+## Verification extracts only what the benchmark defines
 
-SWE tasks provide a repository image and working directory. The resources server knows the task-specific image and creates sandbox B during seed.
+The processor does not implement a generic sandbox harvester. It keeps required task state alive and calls `/verify`. The resources server knows which paths, commands, and state constitute a submission, so it performs extraction through `AsyncSandbox.exec()` and `download()`.
 
-The normal path is:
+Verification must copy every required output out of the sandbox before its owner destroys it. A small output may be returned as `ArtifactPayload`; a larger output must be persisted and returned as `DurableArtifactRef`. A sandbox path or descriptor is not an artifact.
 
-1. Resources server starts B and prepares `/testbed`.
-2. Seed returns operate access to B.
-3. The processor starts the coding harness inside B.
-4. The harness edits `/testbed` locally.
-5. The resources server extracts a canonical patch from B.
-6. The environment persists the patch as a bounded artifact.
-7. Verification may create a fresh sandbox, apply the patch, and run tests.
-8. The resources server stops both the verifier sandbox and B.
+SWE-bench and Terminal Bench use different verification patterns.
 
-The harness and task workspace are co-located, but the resources server remains the lifecycle owner. The processor is an operator.
+### SWE-bench extracts a portable patch
 
-## Terminal Bench-style execution verifies the same live task state
+SWE tasks provide a repository image and working directory. Task sandbox B contains the repository modified by the coding harness. The patch is the portable submission:
 
-Terminal Bench tasks can change installed packages, services, processes, permissions, and other machine state that a patch cannot represent.
+1. Seed creates B and prepares `/testbed`.
+2. The processor runs the coding harness inside B.
+3. `/verify` executes benchmark-owned patch extraction in B.
+4. The resources server validates the command result, bounds the patch, computes its digest, and copies it out of B.
+5. The resources server creates fresh verifier sandbox V.
+6. It applies the extracted patch to V and runs the SWE-bench tests.
+7. It copies reward, test output, and any declared logs out of V.
+8. It returns the reward and patch artifact.
+9. It stops V in `finally`.
+10. The owner of B stops B after extraction and verification complete.
 
-The normal path is:
+Current SWE-bench code already creates B during seed, executes `git --no-pager diff` in B, and runs `run_instance()` against fresh V. The target implementation must also:
 
-1. Resources server starts task sandbox B from the task image.
-2. Seed returns operate access to B.
-3. A compatible CLI harness runs inside B, or a trusted host-side harness delegates every command and file operation to B.
-4. The resources server keeps B alive after the harness returns.
-5. `/verify` uploads the benchmark tests and runs them in the same B.
-6. The resources server reads the reward and stops B.
+- reject a failed patch-extraction command instead of silently verifying an empty patch;
+- include supported untracked and binary changes in the canonical submission;
+- enforce patch and log size limits;
+- copy the validated patch out before B is destroyed;
+- stop both sandboxes on every success, failure, timeout, and cancellation path.
 
-A fresh verifier sandbox would discard the state being graded. The processor therefore always calls verify before owner-directed cleanup. The same seed and workspace APIs support SWE and Terminal Bench; the verification relationship belongs to the resources server.
+When the resources server created B, it retains the owner handle and stops B. When the processor created B from `/sandbox_spec`, the resources server verifies through operate access and disconnects; the processor stops B after `/verify` returns.
+
+### Terminal Bench verifies the same live machine
+
+Terminal Bench tasks can change packages, services, processes, permissions, and machine state that a patch cannot represent. The modified machine is the submission:
+
+1. Seed creates task sandbox B from the task image.
+2. The processor runs the CLI harness inside B or gives a host-side harness sandbox-backed tools that operate B.
+3. The resources server keeps B alive after the harness returns.
+4. `/verify` uploads benchmark tests into `/tests` in B.
+5. It executes `/tests/test.sh` in B.
+6. It downloads `/logs/verifier/reward.txt` and any declared bounded logs.
+7. It returns reward and verifier output.
+8. The owner stops B after those outputs have been copied out.
+
+Terminal Bench does not extract a portable submission before verification. Creating fresh verifier sandbox V would discard the state being graded. The task sandbox therefore remains alive through test execution and reward extraction.
+
+When the resources server owns B, it runs verification with its owner handle and stops B. When the processor owns B, the resources server uses operate access, disconnects after verification, and leaves destruction to the processor.
 
 ## The complete episode sequence makes sandbox decisions visible
 
@@ -825,8 +843,14 @@ sequenceDiagram
     end
 
     P->>R: /verify while task workspace is alive
-    R->>O: Inspect live state or create fresh verifier
-    O-->>R: Verification output
+    alt Portable SWE submission
+        R->>O: Extract and copy patch from task sandbox
+        R->>O: Create fresh verifier, apply patch, and test
+        O-->>R: Reward, test output, and declared logs
+    else Live Terminal Bench submission
+        R->>O: Upload tests and execute in task sandbox
+        O-->>R: Reward file and declared logs
+    end
     R-->>P: Reward, components, and artifacts
 
     par Resources-server-owned cleanup
@@ -889,19 +913,6 @@ Responsibility is divided as follows:
 A turn-capable episode has a processor-visible boundary after `/apply_turn` commits the environment transition. A full-loop harness has processor-visible boundaries before and after `AgentHarness.responses()`. Mid-loop continuation requires a whitebox harness capability defined by #3024 because the processor cannot observe internal model and tool boundaries. An opaque CLI process is restart-only until its runtime can freeze and restore the process, filesystem, environment state, and in-flight effects coherently.
 
 A resources server may expose save and restore hooks even when a particular harness is restart-only. Capability negotiation determines whether the complete episode can continue or must restart from input. A sandbox descriptor used for cross-process access is not checkpoint state.
-
-## Submission extraction remains environment-owned
-
-The processor does not inspect benchmark-specific paths. It calls `/verify` while the task workspace is alive.
-
-The resources server decides whether to:
-
-- inspect live state;
-- extract a patch and apply it in a fresh verifier;
-- package named deliverables;
-- read structured response output.
-
-It returns a bounded `ArtifactPayload` or an already durable `DurableArtifactRef`. Shared library functions may implement path validation, limits, digesting, and packaging while the resources server remains responsible for selecting and extracting benchmark artifacts.
 
 ## NeMo RL observes the same training contract
 
@@ -1051,6 +1062,8 @@ Deterministic contract tests cover:
 - lease expiry, server restart, multiple workers, and destroy-versus-borrower fencing;
 - cancellation during bundle upload, setup, execution, verification, and cleanup;
 - non-root guest execution, scoped credential cleanup, network policy, and bounded results;
+- SWE patch extraction failure, untracked-file handling, artifact bounds, and cleanup;
+- Terminal Bench tests and reward extraction using the original task sandbox;
 - stale attempts rejected by processor, model, and resources services;
 - retryable failures restarting from original input under a newer attempt;
 - local and sandboxed Gym-native agents producing equivalent response contracts;
