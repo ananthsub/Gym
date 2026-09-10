@@ -42,7 +42,7 @@ This branch holds the public RFC, the target architecture, and a concrete analys
 
 ## Reading order
 
-1. This guide.
+1. This guide, then `design-questions.md`, which answers each design question in a paragraph with the decision, the reason, and the evidence.
 2. Read `opencode-sandboxed-pairings.md` for the current execution path and the differences among SWE-bench, DeepSWE, SWE-bench Pro, and Terminal Bench 2.1.
 3. In the design: "One episode in plain terms", "The current OpenCode benchmark stack is the migration baseline", and "Contract summary". These sections explain the proposal and its concrete migration target.
 4. In the design: "The agent execution decision changes one boundary" compares the agent-server and pure-harness paths. Its expandable call reference contains the complete rollout sequence. Every named type is defined in the "Complete definitions" sections and can be read on demand.
@@ -57,3 +57,4 @@ This branch holds the public RFC, the target architecture, and a concrete analys
 | `investigations/episode-orchestration-design.html` | Rendered page of the design with SVG diagrams | Generated from the Markdown |
 | `investigations/opencode-sandboxed-pairings.md` | Current OpenCode and resources-server execution analysis | This branch; analysis |
 | `investigations/episode-orchestration-overview.md` | This guide | This branch |
+| `investigations/design-questions.md` | Direct answers to the design questions | This branch |
