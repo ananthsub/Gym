@@ -1268,9 +1268,59 @@ flowchart TB
 
 The creator of A, B, or V owns its destruction. A trusted borrower receives only operate access and disconnects. A guest harness receives no provider handle or owner descriptor.
 
-## One sequence follows every call from collection to the returned rollout
+## The agent execution decision changes one boundary
 
-The HTML rendering makes each numbered call selectable. Selecting a call shows the complete request, response, and state available to the caller and callee. This static rendering shows the same control flow and names every payload type.
+Both designs use the same episode owner. `RolloutCollectionHelper` calls `EpisodeProcessorServer`. `StandardEpisodeProcessor` seeds the resources server, invokes agent behavior, verifies the result, cleans up, and returns `EpisodeResult`. The designs differ only in how the processor reaches the agent behavior.
+
+```mermaid
+flowchart TB
+    subgraph ServerPath [Agent remains an HTTP server]
+        direction LR
+        SP["StandardEpisodeProcessor"] -->|"HTTP POST /v1/responses"| AS["Agent server"]
+        AS -->|"Python launcher call"| SL["Sandbox launcher"]
+        SL -->|"exec"| SG["Agent harness guest in sandbox"]
+    end
+
+    subgraph ProtocolPath [Agent becomes a Python behavior protocol]
+        direction LR
+        PP["StandardEpisodeProcessor"] -->|"Python HarnessExecutor.invoke"| EX["SandboxHarnessExecutor"]
+        EX -->|"exec"| PG["AgentHarness guest in sandbox"]
+    end
+
+    SG --> MS1["Model and resources servers"]
+    PG --> MS2["Model and resources servers"]
+```
+
+### Agent server path
+
+The processor sends model-visible input to a separately deployed agent server over HTTP. That server remains responsible for translating the request into a sandbox invocation, launching the guest, and returning `NeMoGymResponse`. The agent server provides independent scaling, language neutrality, and an existing process boundary. It also preserves a second network service, deployment configuration, health surface, admission limit, and HTTP serialization step for behavior that ultimately runs in a sandbox.
+
+```text
+collector → processor server → processor → agent server → sandbox → agent harness
+```
+
+### Pure Python harness path
+
+The processor calls `HarnessExecutor.invoke()` in its own trusted worker. `SandboxHarnessExecutor` provisions or borrows the sandbox and launches the guest. The guest implements `AgentHarness.responses()` or the equivalent typed invocation-file contract. The Python harness does not call the sandbox API and does not own the sandbox. The executor owns the host-side sandbox handle, process control, timeout, and cleanup.
+
+```text
+collector → processor server → processor → sandbox executor → sandbox → agent harness
+```
+
+### Recommendation
+
+Use the pure harness path as the default for Gym-native agents. Keep the agent-server path as a compatibility adapter and for agents that must deploy or scale independently. In both paths, untrusted CLI behavior runs in the sandbox. Removing the agent server removes one transport and deployment boundary; it does not move CLI execution into the processor process.
+
+The rest of the episode flow is identical:
+
+```text
+seed resources → execute through the selected boundary → verify resources → cleanup owners → return EpisodeResult
+```
+
+<details>
+<summary>Open the complete call-by-call reference</summary>
+
+The HTML rendering makes each numbered call selectable. Selecting a call shows the complete request, response, and state available to the caller and callee.
 
 ```mermaid
 sequenceDiagram
@@ -1415,6 +1465,8 @@ The final HTTP response contains `EpisodeResult`: status, participant outcomes, 
 Current rollout collection raises on non-success HTTP status and represents retry behavior with result sentinels such as `_ng_failure_class` and `_ng_no_persist`. The target collector must learn the processor's stable retryable transport response before `RetryableEpisodeError` can be exposed over HTTP. During migration, a compatibility processor serializes the current sentinel result instead. Neither representation is persisted as a completed rollout.
 
 The final helper return is a sorted in-memory batch after every rollout future has completed and optional export and aggregate-metrics work has run. The main rollout JSONL contains accepted successes. The failure sidecar and no-persist attempts can still appear in the returned in-memory batch, matching current `RolloutCollectionHelper.run_from_config()` behavior.
+
+</details>
 
 ## Compatibility translation is explicit
 
