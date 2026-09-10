@@ -10,7 +10,7 @@ This branch holds two documents that describe the same change from different sid
 2. The agent is a Python behavior contract, not a server. `AgentHarness.responses(params, context)` runs a complete loop; `TurnAgent.act(turn, context)` runs one scheduled turn. Neither seeds, verifies, selects a sandbox provider, or cleans up. An agent that must stay an HTTP service is reached through a remote executor that calls only `/v1/responses`.
 3. Placement is configuration. `AgentRuntimeConfig` puts a harness in a supervised local worker, inside the task workspace the benchmark created, in a dedicated sandbox the processor creates, or behind a remote endpoint. Command-line harnesses run in a sandbox in production; a missing sandbox is a preflight error, never a host fallback.
 4. Sandbox ownership is explicit. Whoever calls `start()` owns the sandbox and is the only one who calls `stop()`. Every other trusted component connects with `owns_lifecycle=False` and disconnects. `/seed_session` states who created the task workspace through `WorkspaceRequest.mode` and returns operate-only `SandboxWorkspace`. The harness process never receives a descriptor. A sandbox server is used only for providers that cannot reconnect natively.
-5. Verification stays with the resources server, and it extracts before the owner destroys. SWE-bench copies a patch out of the task sandbox and grades it in a fresh verifier sandbox. Terminal Bench grades the live task sandbox. Artifacts leave the sandbox as bounded payloads or durable references, never as paths.
+5. Verification stays with the resources server, and it extracts before the owner destroys. SWE-bench extracts a diff, DeepSWE runs its commit-aware collect hook, and SWE-bench Pro filters pristine files before those servers grade patches in fresh verifier sandboxes. Terminal Bench 2.1 grades the live task sandbox. Artifacts leave the sandbox as bounded payloads or durable references, never as paths.
 6. Compatibility is preserved by translation, not by a second lifecycle. `agent_ref.name`, `_ng_rollout_id`, `response.output`, `reward`, `reward_components`, and `instance_config.mask_sample` keep their meanings for NeMo RL. A `legacy_routes` table lets an existing deployment translate today's `/run` body into an `EpisodeRequest`.
 
 ## The vocabulary map
@@ -28,7 +28,7 @@ This branch holds two documents that describe the same change from different sid
 | Routing key on rows | `EpisodeProcessorRef` in run configuration; `execution_name` projects to a compatibility `agent_ref` | The processor, which names the harness; author note proposes removing `agent_ref.name` | `agent_ref.name` or `task_source` |
 | More than one agent | `participants`, `ScheduleSpec`, `TurnAgent`, `/apply_turn` | Not modeled; tau2 handled by a custom processor | tau2 drives both seats internally |
 | Task data | `task_data` validated by the resources server's `TaskData` | `EpisodeContext` declared on base request models | Flat row extras with `extra="allow"` |
-| Migration | Fifteen dependency-ordered steps; compatibility deployments first, routing change at step 12 | Legacy processor first, then releases 0.7.0, 0.8.0, 0.9.0 | None |
+| Migration | Eighteen dependency-ordered steps; compatibility deployments and concrete OpenCode benchmark migrations precede routing changes | Legacy processor first, then releases 0.7.0, 0.8.0, 0.9.0 | None |
 
 ## Where the two documents disagree
 
@@ -36,15 +36,15 @@ This branch holds two documents that describe the same change from different sid
 - Where the harness runs. The RFC runs it inside the processor interpreter and accepts the loss of fault isolation. The design runs trusted Python in a supervised worker and untrusted CLIs in a sandbox guest, and keeps the processor's event loop free of harness code.
 - What the harness receives. The RFC hands it the live `AsyncSandbox`. The design hands it a working directory and endpoints, and keeps every descriptor in trusted host code.
 - Who owns sandboxes. The RFC assigns all of them to the processor. The design assigns each to its creator, which is what pooled tool sandboxes and benchmark-created workspaces already require.
-- The routing key. The RFC moves it to the processor. The design keeps `agent_ref.name` on rows and results because NeMo RL main and the verl recipe read it.
+- The routing key. The RFC moves it to the processor. The design keeps source task rows agent-agnostic, selects the processor and harness from run configuration, and emits compatibility `agent_ref.name` only in materialized requests and results while NeMo RL requires it.
 - The sandbox server. The RFC gates its Phase 3 on it. The design uses native reconnect for OpenSandbox and E2B and reserves the server for providers that cannot reconnect.
 - Multiple agents. The RFC defers them. The design models participants and turns from the first request.
 
 ## Reading order
 
 1. This guide.
-2. In the design: "One episode in plain terms", then "Contract summary" at the end. Those two sections are the whole proposal.
-3. In the design: the sequence diagram under "One sequence follows every call from collection to the returned rollout". Every named type in the diagram is defined in the two "Complete definitions" sections, which are reference material and can be read on demand.
+2. In the design: "One episode in plain terms", "The current OpenCode benchmark stack is the migration baseline", and "Contract summary". These sections explain the proposal and its concrete migration target.
+3. In the design: "The agent execution decision changes one boundary" compares the agent-server and pure-harness paths. Its expandable call reference contains the complete rollout sequence. Every named type is defined in the "Complete definitions" sections and can be read on demand.
 4. In the RFC: "Problem statement" and "Personas and Use Cases" for the motivation, then "Proposed solution" to see the alternative the design departs from. The RFC's appendix is evidence about today's code and does not need to be read to understand either proposal.
 
 ## What each file is

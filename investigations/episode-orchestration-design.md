@@ -119,6 +119,87 @@ flowchart LR
 
 The transition therefore does not require one global processor, removal of process isolation, or immediate routing changes. It first turns existing named deployments into hosts for common processor behavior.
 
+## The current OpenCode benchmark stack is the migration baseline
+
+The migration design must preserve the behavior implemented together by [`opencode_sandboxed_agent`](https://github.com/NVIDIA-NeMo/Gym/tree/main/responses_api_agents/opencode_sandboxed_agent) and the [`swebench`](https://github.com/NVIDIA-NeMo/Gym/tree/main/resources_servers/swebench), [`deepswe`](https://github.com/NVIDIA-NeMo/Gym/tree/main/resources_servers/deepswe), [`terminal_bench_2_1`](https://github.com/NVIDIA-NeMo/Gym/tree/main/resources_servers/terminal_bench_2_1), and [`swebench_pro`](https://github.com/NVIDIA-NeMo/Gym/tree/main/resources_servers/swebench_pro) resources servers on upstream `main`.
+
+Today `OpenCodeSandboxedAgent.run()` owns the complete episode. It asks the selected resources server to seed a task sandbox, reconnects to the returned `sandbox_handle`, runs OpenCode in that sandbox, asks the resources server to verify the result, and merges harness and verifier fields into the returned rollout.
+
+```mermaid
+flowchart LR
+    Collector["RolloutCollectionHelper"] -->|"POST /run"| Agent["OpenCodeSandboxedAgent"]
+    Agent -->|"POST /seed_session"| Resources["Selected resources server"]
+    Resources -->|"create and retain owner AsyncSandbox"| Task["Task sandbox B"]
+    Resources -->|"sandbox_handle and benchmark fields"| Agent
+    Agent -->|"AsyncSandbox.connect"| Borrowed["Borrowed connection to B"]
+    Borrowed -->|"install and run OpenCode; export transcript"| OpenCode["OpenCode CLI in B"]
+    OpenCode -->|"Responses API"| Model["Model server"]
+    Agent -->|"POST /verify"| Resources
+    Resources -->|"extract or test live state"| Task
+    Resources -->|"when required"| Verifier["Fresh verifier sandbox V"]
+    Resources -->|"reward, evidence, and metrics"| Agent
+    Agent -->|"merged rollout"| Collector
+```
+
+This implementation proves the desired placement: OpenCode already runs inside the benchmark-owned task sandbox. The architectural problem is that the agent server also owns episode ordering and keeps connected `AsyncSandbox` objects and harness results in process-local dictionaries. Sandbox ownership is split because the resources server retains its owner object while the agent server later calls `stop()` on its connected object.
+
+The current handoff is also provider-coupled. OpenCode reads only `sandbox_handle`, reconstructs `{"sandbox_id": sandbox_handle}`, and reconnects through the provider configured on the agent server. It ignores DeepSWE's serialized `sandbox_descriptor` and SWE-bench Pro's `pty_session_id`. The agent and resources deployments must therefore configure compatible providers even though the seed response does not state that requirement. `SandboxWorkspace` replaces this implicit coupling with the configured provider name, complete reconnect descriptor, workdir, and effective capabilities.
+
+The target keeps the benchmark placement and moves the orchestration boundary:
+
+```mermaid
+flowchart LR
+    Collector["RolloutCollectionHelper"] -->|"POST /run"| ProcessorServer["EpisodeProcessorServer"]
+    ProcessorServer --> Processor["StandardEpisodeProcessor"]
+    Processor -->|"POST /seed_session"| Resources["Selected resources server"]
+    Resources -->|"create and retain owner"| Task["Task sandbox B"]
+    Resources -->|"operate-only SandboxWorkspace"| Processor
+    Processor --> Executor["SandboxHarnessExecutor"]
+    Executor -->|"connect, launch, disconnect"| Guest["OpenCodeHarness guest in B"]
+    Guest -->|"Responses API"| Model["Model server"]
+    Guest -->|"HarnessResult"| Executor
+    Executor --> Processor
+    Processor -->|"POST /verify"| Resources
+    Resources -->|"extract or test live B"| Task
+    Resources -->|"when required"| Verifier["Fresh verifier sandbox V"]
+    Resources -->|"EpisodeVerifyResponse"| Processor
+    Processor -->|"POST /cleanup_session"| Resources
+    Resources -->|"release resources left after verify"| Task
+    Processor -->|"EpisodeResult"| Collector
+```
+
+The components have the following responsibilities:
+
+- `EpisodeProcessorServer` supplies the `/run` endpoint, request translation, admission, authentication, and deployment health.
+- `StandardEpisodeProcessor` orders seed, harness execution, verification, cleanup, and result construction. It never interprets a Git patch or Terminal Bench reward file.
+- `OpenCodeHarness` owns OpenCode configuration, command construction, model interaction, transcript export, observation parsing, and conversion to `NeMoGymResponse`. It does not call `/seed_session`, `/verify`, or `sandbox.stop()`.
+- `SandboxHarnessExecutor` connects to the `SandboxWorkspace`, places or locates OpenCode, launches the guest process, enforces cancellation and bounds, reads `HarnessResult`, and disconnects its borrowed connection.
+- The resources server selects the task image, creates and retains task sandbox B, prepares benchmark state, extracts the benchmark submission, performs verification, and destroys every sandbox and PTY session it owns.
+- `AsyncSandbox` and its provider implement task execution. A native connectable provider supplies the direct handoff. The sandbox-server adapter is used only when the configured provider cannot reconnect across processes or policy requires scoped leases.
+- The model server receives model calls directly from OpenCode inside B. Removing the agent-server wrapper does not add a model request hop.
+
+The current `OpenCodeSandboxedAgent` separates into these target pieces:
+
+- `run()` moves to `StandardEpisodeProcessor`.
+- `_start_sandbox()` moves to `SandboxHarnessExecutor`; the benchmark-specific fallback image is removed from the task-workspace path.
+- `responses()` and its OpenCode helpers become `OpenCodeHarness.responses()`. FastAPI request cookies and request-local state become explicit `HarnessContext` fields.
+- `_sandbox_id_to_sandbox` disappears because the executor receives one workspace for one invocation.
+- `_sandbox_id_to_run_result` disappears because response, observations, diagnostics, and exported artifacts return together in `HarnessResult`.
+
+This is the first migration slice for sandboxed CLI agents. Gym-native Python agents use the same processor and result contracts through a supervised local executor. Existing agent servers remain available through `RemoteAgentHarnessExecutor` while their behavior is being extracted.
+
+### Each resources server keeps its benchmark semantics
+
+**SWE-bench.** Seed creates B and applies anti-cheating setup. Verification extracts a plain `git diff` from B and evaluates that patch in a fresh verifier sandbox. The current extraction omits untracked files and does not establish canonical binary-patch handling. The target resources server adds those checks while retaining verifier execution and owner cleanup.
+
+**DeepSWE.** Seed creates B from the task's pinned image, applies the agent network policy, and returns both a handle and serialized descriptor. Verification runs the benchmark-defined collect hook in B, requires the agent's committed state, stops B after collecting the binary patch, and grades the patch in a fresh sandbox created from the same pinned image. These rules remain entirely inside the DeepSWE resources server.
+
+**Terminal Bench 2.1.** Seed creates B and prepares the machine. Verification uploads `/tests`, runs `/tests/test.sh` in the same B, downloads `/logs/verifier/reward.txt`, and then stops B. The processor must not replace B with a fresh verifier because the live machine state is the submission.
+
+**SWE-bench Pro.** Seed creates B, opens and retains a PTY session, applies anti-cheating setup, normalizes the environment, and records pristine untracked files. Verification extracts a filtered patch, closes the PTY, stops B, and performs bounded retryable verification in fresh sandboxes. The resources server retains this PTY state, patch policy, retry budget, and cleanup behavior. The current OpenCode agent ignores the returned `pty_session_id` and runs through `sandbox.exec()`, so migrating OpenCode does not require the generic executor to adopt that PTY session.
+
+The processor sees one common contract across all four servers: seed may return an operate-only task workspace; the harness runs; verify consumes the still-live benchmark session; cleanup releases any state that remains. The contents of the submission and the number of verifier sandboxes are benchmark decisions.
+
 ## Rollout collection routes to a processor deployment
 
 Source datasets contain model-visible input and benchmark-owned task data. They do not contain an agent, model, runtime, or processor reference. Run configuration supplies those choices.
@@ -283,6 +364,7 @@ The proposal builds on these existing Gym types:
 - `AsyncSandbox` is the live asynchronous control object.
 - `SandboxProvider` performs provider-specific operations.
 - `ConnectableProvider` adds `serialize_handle()` and `connect()` for cross-process access.
+- `AgentObservationBundle` contains structured agent-invocation, tool-call, compaction, and sandbox observations. Model calls remain in rollout-scoped model-call capture and are joined by rollout collection.
 - `ServerClient` is Gym's existing downstream server client.
 
 Every other named type introduced by this proposal is defined below.
@@ -533,9 +615,14 @@ class HarnessContext:
 ```python
 class HarnessResult(BaseModel):
     response: NeMoGymResponse
+    observations: AgentObservationBundle | None = None
+    diagnostics: dict[str, JsonValue] = Field(default_factory=dict)
+    artifacts: tuple[ArtifactPayload | DurableArtifactRef, ...] = ()
 ```
 
-`HarnessResult` wraps the current response shape so harness-specific metadata can be added later without changing the behavior method. Partial-rollout continuation is an optional capability described separately and is not part of this base result.
+`HarnessResult` returns every output produced by one harness invocation without process-local side channels. `response` is the model-facing trajectory. `observations` carries structured execution evidence such as OpenCode invocations, tool calls, and the agent-sandbox outcome. `diagnostics` contains bounded JSON values such as command completion, exit status, and export availability. It must not contain credentials or sandbox-local paths that become invalid after cleanup. `artifacts` carries a bounded transcript export directly or a durable reference created before the sandbox is destroyed.
+
+The current OpenCode agent stores stdout, stderr, export status, and observations in `_sandbox_id_to_run_result`, then merges them after `/verify`. The extracted harness returns those values directly. Partial-rollout continuation remains an optional capability and is not part of this base result.
 
 ### `AgentHarness`
 
@@ -1189,13 +1276,13 @@ The processor does not implement a generic sandbox harvester. It keeps required 
 
 Verification must copy every required output out of the sandbox before its owner destroys it. A small output may be returned as `ArtifactPayload`; a larger output must be persisted and returned as `DurableArtifactRef`. A sandbox path or descriptor is not an artifact.
 
-SWE-bench and Terminal Bench use different verification patterns.
+SWE-bench, DeepSWE, SWE-bench Pro, and Terminal Bench use two different verification families.
 
-### SWE-bench extracts a portable patch
+### SWE-style servers extract a portable patch
 
-SWE tasks provide a repository image and working directory. Task sandbox B contains the repository modified by the coding harness. The patch is the portable submission:
+SWE-bench, DeepSWE, and SWE-bench Pro provide a repository image and working directory. Task sandbox B contains the repository modified by the coding harness. A patch is the portable submission:
 
-1. Seed creates B and prepares `/testbed`.
+1. Seed creates B and prepares the benchmark-defined working directory. DeepSWE and SWE-bench Pro use `/app`; SWE-bench uses the task image's configured workdir.
 2. The processor runs the coding harness inside B.
 3. `/verify` executes benchmark-owned patch extraction in B.
 4. The resources server validates the command result, bounds the patch, computes its digest, and copies it out of B.
@@ -1206,7 +1293,13 @@ SWE tasks provide a repository image and working directory. Task sandbox B conta
 9. It stops V in `finally`.
 10. The owner of B stops B after extraction and verification complete.
 
-Current SWE-bench code already creates B during seed, executes `git --no-pager diff` in B, and runs `run_instance()` against fresh V. The target implementation must also:
+The extraction rule remains benchmark-specific:
+
+- SWE-bench currently runs `git --no-pager diff` and uses `run_instance()` with a fresh sandbox.
+- DeepSWE runs its pinned collect hook, which writes a binary diff from the required agent commit, and applies it in a fresh sandbox from the same pinned image.
+- SWE-bench Pro records pristine untracked files during seed, filters the extracted diff, and retries inconclusive verification in fresh sandboxes under per-attempt and total budgets.
+
+The target implementations must:
 
 - reject a failed patch-extraction command instead of silently verifying an empty patch;
 - include supported untracked and binary changes in the canonical submission;
@@ -1782,7 +1875,10 @@ Deterministic contract tests cover:
 - lease expiry, server restart, multiple workers, and destroy-versus-borrower fencing;
 - cancellation during bundle upload, setup, execution, verification, and cleanup;
 - non-root guest execution, scoped credential cleanup, network policy, and bounded results;
-- SWE patch extraction failure, untracked-file handling, artifact bounds, and cleanup;
+- OpenCode returning response, observations, bounded diagnostics, and transcript artifacts without process-local result maps;
+- SWE-bench patch extraction failure, untracked-file handling, artifact bounds, and cleanup;
+- DeepSWE commit enforcement, pinned collect hook, binary patch transfer, network policy, and same-image verification;
+- SWE-bench Pro PTY cleanup, pristine-untracked filtering, inconclusive-verification retries, and total retry budget;
 - Terminal Bench tests and reward extraction using the original task sandbox;
 - stale attempts rejected by processor, model, and resources services;
 - retryable failures restarting from original input under a newer attempt;
@@ -1794,8 +1890,10 @@ Deterministic contract tests cover:
 Targeted real rollouts cover:
 
 - one supervised local Python harness with risky operations delegated;
-- OpenCode inside an environment-owned SWE workspace, followed by patch extraction and fresh verification;
-- a Terminal Bench harness followed by verification in the same live sandbox;
+- OpenCode inside the environment-owned SWE-bench workspace, followed by patch extraction and fresh verification;
+- OpenCode inside the environment-owned DeepSWE workspace, followed by commit-aware collection and same-image verification;
+- OpenCode inside the environment-owned SWE-bench Pro workspace, followed by PTY cleanup, filtered extraction, and retryable verification;
+- OpenCode inside the environment-owned Terminal Bench 2.1 workspace, followed by verification in the same live sandbox;
 - one processor-owned separate harness sandbox using resources-server tools;
 - one direct native provider;
 - one non-connectable provider through PR #2085;
@@ -1815,14 +1913,17 @@ Full benchmark baselines gate making processor routing the default and retiring 
 5. Extend seed request and response with optional workspace fields. Add owner and borrower tests using a fake connectable provider.
 6. Add `owns_lifecycle=False`, `disconnect()`, safe context-manager exit, and retryable idempotent destruction to `AsyncSandbox` and providers.
 7. Split shared upload, guest execution, and result loading from the sandbox-placement proof into `SandboxHarnessExecutor`.
-8. Run the same Gym-native harness through local-process and dedicated-sandbox executors. Keep routing unchanged.
-9. Implement direct native-provider workspace handoff and run OpenCode inside an environment-owned SWE workspace.
-10. Fix authentication, authorization, revocation, persistence, destination validation, borrower fencing, and required guest operations in PR #2085. Add it as the fallback for non-connectable providers.
-11. Migrate Terminal Bench and prove live-state verification.
-12. Add `EpisodeProcessorRef` and the `episode_processors` server type behind opt-in collector routing. Existing named compatibility deployments remain valid.
-13. Add the turn protocol and one policy-plus-simulated-user episode.
-14. Qualify optional #3024 parking and resources save/restore independently of the base processor rollout.
-15. Run topology canaries, scaling tests, benchmark baselines, and NeMo RL qualification before changing routing defaults or consolidating processor deployments.
+8. Extract `OpenCodeHarness` from `OpenCodeSandboxedAgent.responses()`. Return response, observations, diagnostics, and transcript artifacts directly in `HarnessResult`.
+9. Run the same Gym-native harness through local-process and dedicated-sandbox executors. Keep routing unchanged.
+10. Implement direct native-provider workspace handoff and migrate OpenCode plus SWE-bench without changing SWE-bench verification.
+11. Migrate DeepSWE and preserve its pinned image, commit, collect-hook, network-policy, and fresh-verifier contracts.
+12. Migrate SWE-bench Pro and preserve resources-server-owned PTY state, pristine-file filtering, and verifier retry budgets.
+13. Migrate Terminal Bench 2.1 and prove live-state verification in the original task sandbox.
+14. Fix authentication, authorization, revocation, persistence, destination validation, borrower fencing, and required guest operations in PR #2085. Add it as the fallback for non-connectable providers.
+15. Add `EpisodeProcessorRef` and the `episode_processors` server type behind opt-in collector routing. Existing named compatibility deployments remain valid.
+16. Add the turn protocol and one policy-plus-simulated-user episode.
+17. Qualify optional #3024 parking and resources save/restore independently of the base processor rollout.
+18. Run topology canaries, scaling tests, benchmark baselines, and NeMo RL qualification before changing routing defaults or consolidating processor deployments.
 
 Harness extraction, source-dataset cleanup, prepared guest images, characterization tests, and NeMo RL contract tests can proceed before processor routing or sandbox handoff changes.
 
@@ -1842,6 +1943,7 @@ Harness extraction, source-dataset cleanup, prepared guest images, characterizat
 - Shared launcher code owns sandbox upload, guest execution, and typed result loading.
 - Gym-native agents use the same behavior implementation for local and sandbox placement.
 - A compatible command-line harness runs inside the environment task workspace by default.
+- OpenCode returns its response, observations, diagnostics, and exported artifacts through `HarnessResult` instead of process-local agent-server maps.
 - A separate harness sandbox is created only when requirements force separation.
 - `/seed_session` explicitly declares who creates the task workspace and returns operate-only access.
 - Native `ConnectableProvider` access bypasses the sandbox server.
@@ -1849,8 +1951,8 @@ Harness extraction, source-dataset cleanup, prepared guest images, characterizat
 - The logical sandbox owner alone stops the sandbox.
 - Connected operators disconnect without destroying the sandbox.
 - The harness process never receives provider credentials, owner descriptors, or cleanup authority.
-- SWE verification may extract a patch and use a fresh verifier sandbox.
-- Terminal Bench verification uses the same live task sandbox.
+- SWE-bench, DeepSWE, and SWE-bench Pro retain benchmark-specific patch extraction and fresh-verifier behavior in their resources servers.
+- Terminal Bench 2.1 retains verification in the same live task sandbox.
 - `EpisodeProcessor` remains an implementation-free behavior protocol.
 - `StandardEpisodeProcessor` owns the concrete standard lifecycle.
 - `AgentHarness` owns a complete behavior loop.
