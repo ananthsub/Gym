@@ -20,10 +20,15 @@ Record successful and failed paths for:
 
 The tests must distinguish existing behavior from known defects. Missing-sandbox fallback, double stop, leaked sandboxes, lost workdirs, incomplete SWE-bench patch collection, and Terminal Bench's incorrect stateless reverification declaration are not compatibility requirements.
 
-### 1. Add the processor foundation
+### 1. Add server types and the processor foundation
 
 Implement:
 
+- `episode_processors`, `EpisodeProcessorRef`, and their type and instance config models;
+- `sandbox_servers`, `SandboxServerRef`, and their type and instance config models;
+- config discovery, reference validation, host and port assignment, startup, readiness, status, telemetry, dataset loading, test discovery, and manifest handling for both server types;
+- migration of dataset ownership from each old agent deployment to its processor deployment;
+- legacy `agent_ref` resolution to migrated processor deployment names;
 - `EpisodeKey`, `EpisodeRequest`, and `EpisodeResponse`;
 - `BaseEpisodeProcessor` and `EpisodeContext`;
 - `SingleAgentEpisodeProcessor`;
@@ -31,7 +36,7 @@ Implement:
 - resources-session registration and cleanup;
 - validation, admission, deadlines, cancellation, finalization, compatibility translation, and HTTP projection.
 
-This milestone is complete when the processor validates before side effects, closes all registered resources on every exit path, and reproduces the recorded legacy results.
+This milestone is complete when Gym can spawn and address both new server types, the processor validates before side effects, all registered resources close on every exit path, and the processor reproduces the recorded legacy results.
 
 ### 2. Extract the simple-agent harness server
 
@@ -48,7 +53,7 @@ Implement both sandbox paths:
 - OpenCode creates and owns its configured sandbox when resources returns no access.
 - OpenCode connects as a borrower when resources returns `harness_sandbox_access`.
 
-Implement direct reconnection first. Add sandbox-server lease redemption only when a provider cannot support direct cross-process connection.
+Implement direct reconnection for providers that support it. For process-bound providers, configure a `sandbox_servers` deployment that allocates through its provider, returns owner authority to resources, and issues operate leases to harness sessions.
 
 Migrate SWE-bench first, followed by DeepSWE, SWE-bench Pro, and Terminal Bench 2.1. This milestone is complete when all four pairings preserve their benchmark-specific verification and leave no owned sandbox running.
 
@@ -76,10 +81,6 @@ The first protocol binds `assistant` and `simulated_user` harness servers. It re
 
 Add a concrete processor only when a use case defines its roles, visibility, ordering or concurrency, termination, verification input, and failure semantics. Do not add a generic participant scheduler without those requirements.
 
-### Additional sandbox connectivity
-
-Add the sandbox-server path when resources and a harness cannot directly reconnect to the same provider sandbox. Resources declares that service as a dependency before allocation. The service issues separate owner and operate capabilities. It is not a fallback after direct connection fails.
-
 ### Restart-safe attempts
 
 Back `EpisodeKey` with atomic claims, leases, ownership epochs, stale-writer fencing, and idempotent finalization in a process-shared store. Worker-local admission and dictionaries do not provide these guarantees.
@@ -94,18 +95,22 @@ Add retained artifacts only for a concrete caller requirement. Define storage ow
 
 ## Integration gates
 
-1. Episode contracts and compatibility characterization are agreed.
-2. `simple_agent` runs through `SingleAgentEpisodeProcessor`.
-3. OpenCode runs with a harness-created sandbox against Reasoning Gym.
-4. OpenCode runs with resources-provided sandbox access against SWE-bench and Terminal Bench.
-5. All four OpenCode sandbox pairings preserve verification behavior.
-6. GDPVal moves ordinary deliverable harvesting into resources.
-7. Cancellation and injected failures leave no owned sandbox running.
-8. Measured latency and throughput regressions remain within an agreed budget.
+1. Gym resolves, spawns, and reports health for `episode_processors` and configured `sandbox_servers`.
+2. Episode contracts and compatibility characterization are agreed.
+3. `simple_agent` runs through `SingleAgentEpisodeProcessor`.
+4. OpenCode runs with a harness-created sandbox against Reasoning Gym.
+5. OpenCode runs with resources-provided sandbox access against SWE-bench and Terminal Bench.
+6. A process-bound provider runs through a configured sandbox server without exposing owner authority to the harness.
+7. All four OpenCode sandbox pairings preserve verification behavior.
+8. GDPVal moves ordinary deliverable harvesting into resources.
+9. Cancellation and injected failures leave no owned sandbox running.
+10. Measured latency and throughput regressions remain within an agreed budget.
 
 ## Required foundation tests
 
 - Malformed native and legacy requests fail before admission.
+- Missing or mistyped processor, harness, resources, model, and sandbox-server references fail during configuration validation.
+- Processor and sandbox-server deployments receive distinct addresses and readiness checks.
 - Queue timeout creates no resources session.
 - Scope-entry failure cleans partially acquired state.
 - Seed failure never invokes a harness.

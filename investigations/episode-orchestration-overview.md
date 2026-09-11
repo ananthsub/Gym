@@ -6,14 +6,14 @@ This branch contains the public Gym architecture RFC and a concrete proposal for
 
 ## The two foundations
 
-1. **Episode processor.** Each migrated `responses_api_agents` deployment hosts one concrete processor. `BaseEpisodeProcessor.run()` supplies validation, admission, cancellation, cleanup, finalization, HTTP status, and compatibility projection. A concrete `process()` method owns its interaction protocol.
+1. **Episode processor.** Each `episode_processors` deployment hosts one concrete processor. `BaseEpisodeProcessor.run()` supplies validation, admission, cancellation, cleanup, finalization, HTTP status, and compatibility projection. A concrete `process()` method owns its interaction protocol.
 2. **Agent harness servers.** Each harness remains an independently deployed `responses_api_agents` server with its own package, virtual environment, process, and `POST /v1/responses` behavior endpoint. The processor opens role-scoped sessions and transports resources and optional sandbox access; it does not import harness implementations or their dependencies.
 
-Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available during migration. TaskSet and manifest redesign are follow-on routing work, not a third foundation.
+Gym adds `episode_processors` as a fourth server type and `sandbox_servers` as an optional fifth type. A sandbox server is configured only when a provider handle cannot be reconstructed across the resources and harness processes. Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available during migration. Native callers use `EpisodeProcessorRef`. TaskSet and broader routing redesign remain follow-on work.
 
 ## Four representative deployment paths
 
-The proposal includes complete configuration for three pairings:
+The proposal includes complete configuration for four deployment paths:
 
 1. A Gym-native `simple_agent` harness server uses the existing model server and scoped resources tools. Its implementation supports no sandbox.
 2. OpenCode paired with `reasoning_gym` receives no sandbox access, so the OpenCode harness server creates and owns its configured sandbox.
@@ -31,11 +31,11 @@ A multi-agent processor opens one harness-server session per role or agent insta
 ## Contracts defined by the proposal
 
 - episode key, request, context, result, failure, metrics, diagnostics, and cleanup;
-- processor setup within the existing agent-server category and the single-agent protocol;
+- the `episode_processors` server category, `EpisodeProcessorRef`, and the single-agent protocol;
 - the existing `/v1/responses` behavior endpoint and a separate future turn endpoint;
 - harness-session open, behavior invocation, and idempotent close;
 - trusted harness-server bindings and implementation-owned capability validation;
-- optional resources-provided sandbox access, harness-created sandboxes, direct and sandbox-server connections, and borrower enforcement;
+- the optional `sandbox_servers` category, `SandboxServerRef`, resources-provided sandbox access, harness-created sandboxes, direct connections, operate leases, and borrower enforcement;
 - typed simple-agent and OpenCode harness-server configuration with three complete deployment examples;
 - exact current-to-target behavior mappings for OpenCode and `simple_agent`;
 - role-scoped resources-session access, cookie compatibility, episode-key checks, and idempotent cleanup;
@@ -46,16 +46,16 @@ A multi-agent processor opens one harness-server session per role or agent insta
 
 1. User simulation adds `turn()`, `assistant` and `simulated_user` roles, role visibility, and chronological trainable-role attribution.
 2. Other multi-agent processors add protocol-specific ordering, concurrency, and termination.
-3. A sandbox server becomes a declared resources-server dependency only when an exposed sandbox uses a provider that cannot reconnect directly.
-4. Restart-safe attempts add shared claims, leases, ownership epochs, and stale-writer fencing.
-5. Checkpoint restoration adds coordinated snapshots across every state owner.
-6. Caller-retained artifacts add durable storage and lifecycle policy.
+3. Restart-safe attempts add shared claims, leases, ownership epochs, and stale-writer fencing.
+4. Checkpoint restoration adds coordinated snapshots across every state owner.
+5. Caller-retained artifacts add durable storage and lifecycle policy.
 
 A generic participant scheduler, a combined run/turn request, generic CLI installation plans, and generic artifact payloads are not needed for these foundations.
 
 ## Review position
 
-- A concrete processor runs behind one existing `responses_api_agents` deployment; the proposal adds no fourth server category or umbrella host.
+- A concrete processor runs as a first-class `episode_processors` deployment; the proposal adds no umbrella processor host.
+- A `sandbox_servers` deployment is an optional infrastructure dependency, not an episode owner or a required hop for directly reconnectable providers.
 - The framework supplies a neutral execution envelope, not a universal single-agent loop.
 - `SingleAgentEpisodeProcessor` is a peer of user-simulation and future multi-agent processors, not their superclass.
 - Harness behavior remains behind a dependency-isolated server. The OpenCode control loop runs in that service while its CLI operates either a harness-owned or resources-owned sandbox.
