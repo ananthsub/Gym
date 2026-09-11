@@ -2,6 +2,28 @@
 
 Status: reference, 2026-09-10. This page answers questions where the code and proposal support a decision, pushes back on incorrect premises, and leaves implementation-critical choices open. `episode-orchestration-design.md` is the normative proposal; `opencode-sandboxed-pairings.md` records current behavior.
 
+## Does a Verifiers environment map to a Gym episode processor
+
+Decision: only its protocol half does. Verifiers `Env.run()` maps closely to a concrete Gym processor's `process()`. Verifiers `Env.run_episode()` maps to the framework-owned envelope around every Gym processor. Verifiers `Taskset` and `Task` map to Gym task discovery plus resources-server lifecycle.
+
+Pushback: calling the episode processor “the environment” would hide task setup, stateful tools, verification, and runtime declarations that remain in the resources server. Calling the resources server “the environment” would hide participant scheduling and turn ownership. A Gym environment is the composition of `TaskSet`, resources semantics, processor protocol, and runtime requirements. Agent harnesses and models are bound by a run.
+
+## What scaffolding must the framework supply around `run`
+
+Decision: `BaseEpisodeProcessor.run()` owns authentication, request translation, admission, attempt fencing, deadlines and cancellation, participant capture scopes, cleanup registration, failure classification, result sealing, compatibility serialization, and admission release. It creates an `EpisodeContext` and calls the concrete processor's `process(request, context)`.
+
+Pushback: the framework must not implement a universal seed → execute → verify body. Best-of-N can have several isolated branches and scores. Solver/judge can perform intermediate verification. User simulation can commit many transitions. The common envelope enforces safety before and after protocol logic; scoped helpers make seed, verify, artifact staging, and cleanup safe without fixing their cardinality or order.
+
+Pushback: a bare `process()` interface with no framework-owned scope is also inadequate. It would let each processor bypass fencing, leak resources, mix model-call capture, or publish before cleanup. Peer protocol implementations need freedom inside a mandatory safety envelope.
+
+## How are TaskSet, TaskData, and environment routing separated
+
+Decision: `TaskSet` discovers immutable `TaskRecord` values and supplies identity, revision, provenance, and an `EnvironmentRef`. `TaskData` is the resources server's typed schema for one record's benchmark-owned fields. Neither contains an agent, model, processor endpoint, provider credential, or executable import.
+
+Run materialization selects a task-set revision and split, then resolves the manifest's `EnvironmentRef` to an `EnvironmentProfile`. The run does not repeat or override that environment reference. The profile pins the resources server and required processor protocol. Its task-data schema name and version must exactly match the manifest. Run configuration binds participant harnesses and models and selects a deployment of that protocol. The processor validates `TaskData` before side effects.
+
+Pushback: a JSONL row should not remain the routing authority merely because current Gym puts `agent_ref` in it. Conversely, a task loader should not own sandbox setup or verification merely because Harbor packages those assets beside task metadata. Harbor is the exemplar for immutable work packages and declared runtime requirements, not a reason to make acquisition code the runtime.
+
 ## How is a sandbox represented when it crosses from one server to another
 
 Decision: use one small `SandboxWorkspace` JSON record. It names the configured provider, carries the provider's reconnect descriptor and working directory, records lifecycle ownership, and describes attested capabilities. It never carries a live `AsyncSandbox` object and is never just a bare sandbox id.
@@ -44,17 +66,19 @@ An agent server can reach a sandbox; `opencode_sandboxed_agent` proves that by r
 
 Decision: the default Gym-native boundary is a Python `AgentHarness` executed by the processor through a supervised local worker or sandbox executor. A CLI guest uses the sandbox as its isolation boundary and does not require an HTTP server inside the sandbox. Existing independently deployed agents remain supported through `RemoteAgentHarnessExecutor`. Direct `/v1/responses` clients remain a compatibility surface rather than evidence that every harness must be an episode-owning server.
 
+Pushback: removing HTTP is not automatically faster or simpler. A local worker adds serialization and process scheduling. A sandbox guest adds allocation or reconnect, bundle transfer, and startup. A remote service adds a queue and network hop but can scale and isolate dependencies independently. The recommendation is based on semantic ownership: migrated Gym-native behavior does not need a second service contract. The final placement decision remains subject to controlled tail-latency, throughput, resource, and fault-containment measurements.
+
 ## Where does the resources server keep state between seed and verify
 
-Open question: changing the key from a session cookie to `(rollout_id, attempt)` does not make process-local state available to another worker or replica. A reconnect descriptor recovers sandbox access but not benchmark state, PTYs, attempt ownership, cleanup records, or other session data.
+Decision: changing the dictionary key from a session cookie to `(rollout_id, attempt)` does not create a fence. A retry after processor failure can arrive with a new cookie or on another worker. Before seed causes side effects, the resources server must claim the attempt in a process-shared store keyed independently of cookies. The claim binds the session reattachment token, input digest, state revision, committed seed response, owned-runtime cleanup records, and lease expiry.
 
-The initial migration requires one resources-server worker, or an explicitly guaranteed affinity mechanism, and keeps the authenticated session cookie as the state selector. `rollout_id` and `attempt` fence operations within that selected session. Supporting several workers or replicas requires a process-shared session and attempt store for the complete resources-server state. The proposal does not claim that a new base-class dictionary solves this.
+The initial compatibility migration may retain one resources-server worker and current best-effort recovery, but it must not claim restart safety. Target restart safety requires durable claim checks on seed, tools, transitions, verify, and cleanup, plus stale-attempt retirement and orphan reaping. A reconnect descriptor recovers sandbox access but not benchmark state, PTYs, attempt ownership, or cleanup records.
 
 ## What happens when the same rollout is seeded twice
 
 Decision: seed is idempotent per `(rollout_id, attempt)`. A duplicate with the same validated input returns the committed seed response and workspace. A conflicting duplicate is rejected. An older attempt is rejected before side effects. A newer attempt atomically fences the older attempt before replacing its state, then retires the older resources without allowing stale verify or cleanup to affect the new attempt.
 
-Open question: the process-shared claim, compare-and-swap, in-progress duplicate behavior, and committed-response storage still need an implementation contract. “Stop or reuse” is not sufficient because concurrent duplicate requests could stop an active sandbox or create two different sessions.
+Open question: the storage backend, compare-and-swap API, in-progress duplicate response, reattachment token format, and orphan lease duration still need an implementation contract. “Stop or reuse” is not sufficient because concurrent duplicate requests could stop an active sandbox or create two different sessions.
 
 ## How does the verifier get the agent's work
 
@@ -75,7 +99,7 @@ Pushback: current OpenCode defaults download and install OpenCode on every invoc
 
 Pushback: `HarnessResult` does not carry a failure class. It represents a completed harness invocation with a response, observations, diagnostics, and artifacts. If an executor cannot produce that result, the processor classifies the failure as `EpisodeFailure` and chooses terminal result or retryable transport behavior.
 
-Execution failure, invalid harness output, observation loss, and verification failure are distinct. A lost optional transcript is an `ObservationGap`, not automatically an infrastructure failure or reward zero. If a deployment declares a transcript mandatory, failure to preserve it can invalidate the invocation. Installation or endpoint reachability failures can be infrastructure failures, while invalid deployment configuration is terminal.
+Execution failure, invalid harness output, observation loss, and verification failure are distinct. A lost optional transcript is recorded as an observation gap in bounded diagnostics; it is not automatically an infrastructure failure or reward zero. If a deployment declares a transcript mandatory, failure to preserve it can invalidate the invocation. Installation or endpoint reachability failures can be infrastructure failures, while invalid deployment configuration is terminal.
 
 Current behavior is mixed: OpenCode converts some execution and export failures into degraded responses and still verifies the sandbox, while uncaught `/run` failures can already receive collector failure classes and enter the optional sidecar. The new contract must preserve that evidence while making retryability explicit.
 
@@ -96,7 +120,7 @@ Pushback: current NeMo RL cannot consume such a row directly. It reads `agent_re
 The backward-compatible path is therefore explicit and single-participant:
 
 1. Materialize a legacy training view that injects `agent_ref` before NeMo RL receives the row.
-2. Host `StandardEpisodeProcessor` behind the existing named agent deployment and `/run` configuration shape while old Gym clients do not know the new server type.
+2. Host `SingleAgentEpisodeProcessor` behind the existing named agent deployment and `/run` configuration shape while old Gym clients do not know the new server type.
 3. Translate the legacy request into one internal participant and project the result back to the exact legacy response, reward, token, completion, and `instance_config.mask_sample` shape.
 4. Preserve current token-capture behavior rather than requiring new identifiers from old NeMo RL.
 5. Do not expose multi-participant episodes through this adapter.
@@ -105,18 +129,34 @@ Native NeMo RL support is follow-up work. It must define rollout identity, termi
 
 ## Is the processor base class an interface
 
-Decision: `EpisodeProcessor` is a protocol with one `process()` method and no inherited lifecycle body. `StandardEpisodeProcessor` is the concrete standard lifecycle.
+Decision: each concrete episode processor is directly deployable as a server. `BaseEpisodeProcessor(SimpleServer)` supplies the neutral `/run`, admission, compatibility, cancellation, and health contract, then delegates to an abstract `process()`. `SingleAgentEpisodeProcessor` implements that base for exactly one full-loop participant. There is no umbrella server that hosts a separately selected Python processor object.
 
-Open question: a custom implementation cannot be accepted merely because it satisfies one method signature. Registration must be deployment-selected and trusted, and construction, injected services, shared fencing state, validation, verification ordering, and cleanup conformance must be specified. Until that plugin contract exists, the first implementation uses `StandardEpisodeProcessor`.
+User simulation, environment loops, solver/judge flows, best-of-N, and other multi-agent interaction structures should be peer `BaseEpisodeProcessor` server implementations. They should not subclass `SingleAgentEpisodeProcessor` or accumulate modes in it. This follows the useful separation in Verifiers v1: framework machinery surrounds an environment-authored episode protocol, while distinct environments own single-agent, relayed-turn, game-loop, fan-out, and solver/judge behavior.
+
+Pushback: separate processors must not mean separate ad hoc implementations of fencing, sandbox authority, cancellation, cleanup, or result publication. Those safety mechanics should be injected collaborators and cancellation-safe scopes composed by every processor, with common conformance tests. Inheritance from a concrete single-agent processor is the wrong reuse mechanism, but duplicating lifecycle safety is also unacceptable.
+
+Pushback: separating HTTP transport from protocol behavior is not sufficient justification for a second runtime host/implementation layer. Gym already has server entrypoints, configuration, health, and named routing. An umbrella server would add another registry, another processor selector, and heterogeneous dependency/configuration handling while each deployment still runs one protocol. Pure logic remains testable through `process()` and composed collaborators.
+
+Open question: a processor server cannot be accepted merely because it implements one abstract method. Registration remains deployment-selected and trusted, and injected services, shared fencing state, validation, verification ordering, and cleanup conformance must be specified. The first migration adds `SingleAgentEpisodeProcessor`; the base contract must admit peer processor servers without inheritance from it.
 
 ## Does the design support more than one agent in an episode
 
-Decision: the request, schedule, and verification contracts represent multiple participants from the start. Each participant has a role, harness, model bindings, and capture identity.
+Decision: the request and verification contracts represent multiple participants from the start. Each participant has a role, harness, model bindings, and capture identity. Processor selection determines the interaction protocol; a separate `schedule.kind` must not compete with the selected processor as a second protocol selector.
 
-Open question: representation is not yet a complete NeMo RL training projection. Selecting only the final primary response would drop earlier primary actions. Native integration must order every primary activation, include the intervening visible context, assign response and model-call identities, and construct action masks without admitting non-primary tokens into the policy update.
+Decision: `EpisodeEvent` records participant activations and committed environment transitions in one chronological sequence. `ParticipantOutcome` remains a summary, not the training source of truth.
+
+Open question: representation is not yet a complete NeMo RL training projection. Native integration must project every primary activation, include the intervening visible context, assign response and model-call identities, and construct action masks without admitting non-primary tokens into the policy update.
+
+## Does reconnecting to a sandbox provide checkpointing
+
+No. A descriptor grants access to a runtime that may still exist. It does not prove that filesystem, process, PTY, resources state, model-call lineage, or in-flight effects form one committed recovery point.
+
+Decision: the target baseline abandons an unfinished physical attempt and restarts from immutable task and run inputs with a newer claim in the shared attempt store. The compatibility deployment remains best-effort until durable claims and orphan cleanup exist. Optional continuation uses a coordinator-driven prepare, commit, restore, and resume protocol. The effective capability is the weakest required component: restart-only, turn-boundary, whitebox-harness boundary, or coherent runtime snapshot.
+
+Pushback: opaque full-loop HTTP agents and CLI processes remain restart-only unless they certify parking, stale-attempt fencing, and restoration. Request cancellation alone cannot prove that side effects stopped.
 
 ## What can start now
 
-Work can begin on changes that preserve the legacy wire contract: extract harness behavior behind the Python interface, move shared `/run` lifecycle into `StandardEpisodeProcessor` inside existing named agent deployments, add supervised local workers, extend seed with optional workspace fields, and add borrowed `AsyncSandbox` connections that cannot stop the physical sandbox.
+Work can begin on changes that preserve the legacy wire contract: extract harness behavior behind the Python interface, move the existing one-participant `/run` lifecycle into `SingleAgentEpisodeProcessor` inside existing named agent deployments, add supervised local workers, extend seed with optional workspace fields, and add borrowed `AsyncSandbox` connections that cannot stop the physical sandbox.
 
 The first real target remains OpenCode with SWE-bench, followed by DeepSWE, SWE-bench Pro, and Terminal Bench 2.1. Agent-agnostic canonical data can be introduced at the same time only if existing NeMo RL jobs receive a legacy materialized view with `agent_ref`. Multi-worker resources state, immutable bundle packaging, custom processors, native NeMo RL identity and capture, and multi-participant training projection remain separate qualification work.
