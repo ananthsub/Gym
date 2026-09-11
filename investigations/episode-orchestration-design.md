@@ -1524,9 +1524,9 @@ sequenceDiagram
     C->>P: POST /run with task row and any request cookies
     P->>P: translate, validate, admit
     P->>R: seed_session with current resources cookies
-    R-->>P: optional agent_data; no sandbox access
+    R-->>P: optional agent_data, no sandbox access
     P->>R: delegate resources access for role=agent
-    P->>H: open session(resources access; sandbox=None)
+    P->>H: open session(resources access, sandbox=None)
     P->>H: POST /v1/responses
     loop until assistant message, incomplete response, or max_steps
         H->>M: POST /v1/responses with input + prior outputs
@@ -2020,7 +2020,7 @@ The first implementation must include tests at the actual failure boundaries:
 - queue timeout creates no resources session;
 - scope-entry failure cleans partially acquired state;
 - seed failure never invokes the harness;
-- an environment that requires harness colocation fails seed rather than returning successful no-access;
+- resources fails seed rather than returning no access when verification requires a shared task sandbox;
 - incompatible returned sandbox access fails before a model call;
 - resources-provided context exit disconnects and cannot stop the resources-owned sandbox;
 - harness-session close stops a harness-owned sandbox on success, failure, timeout, and cancellation;
@@ -2063,7 +2063,7 @@ The foundational design is validated when:
 - a harness server can use resources-provided access but cannot destroy the task sandbox;
 - a harness-owned sandbox is created only from trusted harness deployment configuration when seed returns no access and is stopped by that harness server;
 - no live runtime objects or owner credentials cross the seed-session boundary;
-- OpenCode is controlled by a typed, trusted harness-server deployment and its CLI follows the environment-access-or-harness-default branch;
+- OpenCode is controlled by a typed, trusted harness-server deployment and its CLI uses resources-provided access or creates its configured sandbox;
 - SWE-style verification remains resources-server-internal;
 - cancellation and failures clean up all episode-owned connections and resources;
 - one real OpenCode plus SWE-bench rollout matches the characterized legacy behavior;
@@ -2083,7 +2083,7 @@ Four resources-server environments currently allow `opencode_sandboxed_agent`: S
 For each rollout, `OpenCodeSandboxedAgent.run()`:
 
 1. posts the complete materialized task row to `/seed_session` and retains the resources-server cookies;
-2. reads `sandbox_handle` as a bare sandbox id, ignoring a complete descriptor or terminal-session data when the environment returns either;
+2. reads `sandbox_handle` as a bare sandbox id, ignoring a complete descriptor or terminal-session data when resources returns either;
 3. reconnects through the provider independently configured on the agent server, which works only when that provider can reconstruct a sandbox from an id;
 4. loses the environment-selected working directory during raw-id reconnection;
 5. installs or locates OpenCode, writes its configuration, and runs `opencode run` in the task sandbox;
