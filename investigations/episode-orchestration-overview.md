@@ -84,3 +84,4 @@ The integration gates first prove the processor with the simple-agent path, then
 - `investigations/episode-orchestration-design.md`: normative architecture proposal.
 - `investigations/episode-orchestration-design.html`: standalone interactive render.
 - `investigations/episode-orchestration-overview.md`: this guide.
+- `investigations/episode-orchestration-design-review.md`: audit of the proposal against Gym and NeMo RL upstream main, with the change needed for each finding.
