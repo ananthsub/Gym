@@ -1,6 +1,6 @@
 # Review of the episode architecture proposal against Gym and NeMo RL at upstream main
 
-Status: design feedback, 2026-09-11.
+Status: design feedback with disposition, 2026-09-11.
 
 This review checks `episode-orchestration-design.md` at commit `53af3c711` against the code it must fit. Commit `ebe52e96c`, which landed while the review was written, adds typed harness configurations and three complete deployment examples; it changes no finding below, and the examples still use the `episode_processors` category discussed first. The baseline is NeMo Gym upstream `main` at `e3dd5f6b1` and NeMo RL upstream `main` at `5d49fbf4e`. NeMo RL pins Gym as a submodule at `fd5e84d6b`, which is Gym pull request #2872 from 2026-09-04. Where the pin and Gym `main` differ, the pin is the compatibility target.
 
@@ -203,8 +203,18 @@ The evidence is in `nemo_gym/server_utils.py` lines 818 to 823, 927 to 938, 1000
 
 The design is 19,400 words across 12 sections and an appendix. Commit `ebe52e96c` removed the questions page and the pairings note and rewrote the overview, so the branch now has one proposal, one guide, and the RFC snapshot. That is the right shape. Two mismatches remain. The overview names a `CommandSession` contract that the design does not define; the design's facade is `HarnessSandbox` and its implementation is `HarnessAsyncSandbox`. Appendix A is now the only record of the current OpenCode pairing behavior, which is fine, but it belongs in a companion rather than the normative document. Commit messages on the branch still have no bodies, and the history has cycled between five thousand and twenty thousand words twice.
 
-The fixes are mechanical. Align the overview's names with the design. Move Appendix A, sections 5.9 through 5.12, and section 9 to a companion so the normative document is the contracts, the ordering rules, and the compatibility mapping. Give each commit a body that says what changed since the previous draft.
+The naming fix is mechanical. Moving the evidence is optional editorial work: the proposal author has chosen to keep the worked examples and current pairing appendix with the contracts because those examples are the proof that the boundaries preserve current behavior. Give each commit a body that says what changed since the previous draft.
+
+## Resolution in the revised proposal
+
+The revised proposal adopts the server-category, single binding, HTTP status, additive rewards, response preservation, resources-session, token-capture, migration-class, remote-cookie, provider-scope, deadline, worker-lifecycle, naming, and TaskSet findings.
+
+It changes the executor-owned verification recommendation after ownership review. A task workspace now always belongs logically to the resources-server environment. A sandbox service may retain the physical provider handle and issue capabilities, but the processor never owns or transfers task state. An executor may create a separate harness-only workspace only when verification depends solely on the returned response. Vibench and GDPVal therefore migrate their benchmark-specific harvesting into resources and keep the task workspace alive there through verification instead of reversing the workspace handoff.
+
+Wire compatibility and legacy passthrough are now separate mechanisms. A migrated `SingleAgentEpisodeProcessor` translates and projects old wire shapes. An unmigrated agent remains behind `LegacyAgentRunProcessor`, which forwards the whole episode-level call verbatim until that agent has a behavior-only boundary.
+
+The revised proposal also removes RL-oriented `policy` role names from foundational examples. `SingleAgentEpisodeProcessor` binds `agent`; user simulation binds `assistant` and `simulated_user`; other processors choose protocol-specific role names and define their ordering in `process()`.
 
 ## What stands after these changes
 
-With the changes above, the proposal keeps every decision that makes it worth doing and drops the parts that fight the code. The processor is an agent server with extracted behavior and a framework-owned envelope. One deployment binds one harness, and RL routes and sizes by that name. Failures travel in the HTTP status with the body as detail. The verifier's reply keeps everything consumers read today. The resources server gains a session table and a cleanup route so the design's cleanup guarantee has a receiver. Sandboxes are handed off by a serialized operate-only record in either direction, connected directly whenever the provider and topology allow, and brokered only when they do not. Task data splits along the schema each server already declares. The task-set redesign proceeds separately on its own evidence.
+With the changes above, the proposal keeps every decision that makes it worth doing and drops the parts that fight the code. The processor runs under the existing agent-server category with extracted behavior and a framework-owned envelope. One deployment binds one harness, and RL routes and sizes by that name. Failures travel in the HTTP status with the body as detail. The verifier's reply keeps everything consumers read today. The resources server gains a session table and a cleanup route so the design's cleanup guarantee has a receiver. Environment-owned task workspaces are handed to harness executors through serialized operate-only records, connected directly whenever provider scope and topology allow, and brokered only when they do not. Task data continues through each server's existing adapter. The task-set redesign proceeds separately on its own evidence.

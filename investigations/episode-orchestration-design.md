@@ -8,21 +8,20 @@ NeMo Gym needs an episode boundary that can express how one task is executed wit
 
 Today, rollout collection sends `POST /run` to an agent server. That server commonly initializes benchmark state, runs an agent loop, asks a resources server to verify the outcome, and cleans up. The arrangement works when one agent owns the whole interaction, but it leaves three questions without reusable answers:
 
-- Who coordinates an episode when a simulated user or another agent must act between policy turns?
+- Who coordinates an episode when a simulated user or another agent must act between primary-agent turns?
 - Where does a command-line harness run when the benchmark has already created the task sandbox?
 - Which component may reconnect to, inspect, or destroy each sandbox during execution and verification?
 
 The two worked examples demonstrate that this boundary supports materially different episodes without hiding their differences. The `simple_agent` example preserves a complete model-and-tool loop with no task sandbox. The OpenCode example runs a CLI in a resources-server-owned task sandbox and preserves four benchmark-specific verification flows. Both use the same processor envelope for admission, cancellation, cleanup, and response publication. Together they show that the architecture separates episode orchestration from agent behavior and environment ownership without forcing either example into a generic interaction loop.
 
-The design has three ordered foundations:
+The design has two ordered foundations:
 
 1. **Episode processing.** An `EpisodeRequest` enters a concrete processor server. `BaseEpisodeProcessor` supplies the reliable execution envelope, while the concrete processor supplies participant ordering, visibility, verification timing, and termination.
 2. **Agent harness execution and sandboxing.** `AgentHarness.responses()` is the behavior operation currently exposed by Gym agents at `/v1/responses`. An executor places that behavior in the processor, a supervised process, a remote service, or a borrowed task workspace. The OpenCode migration is the demanding reference case because it must install and configure a CLI, run it in a benchmark-owned sandbox, export its transcript, and preserve benchmark-specific verification.
-3. **Task sets and routing.** `TaskSet` supplies typed, immutable `TaskData`. Run configuration binds the task set to a processor deployment and participant harnesses. Task rows identify work; they do not select executable implementations or carry service credentials.
 
-The order is architectural, not merely a release checklist. The processor boundary must exist before harness behavior can be removed from today's agent-owned `/run`. Harness and sandbox ownership must be explicit before task routing can safely compose arbitrary tasks and agents. TaskSet then replaces the current mixture of JSONL loading, prompt materialization, per-row `agent_ref`, and direct dispatch with one validated path.
+The order is architectural, not merely a release checklist. The processor boundary must exist before harness behavior can be removed from today's agent-owned `/run`. Harness and sandbox ownership must be explicit before command-line behavior can safely operate on environment state. Task routing can then evolve separately by extending Gym's existing per-server `TaskData`, dataset, `task_source`, and environment-manifest conventions rather than introducing a second schema system in this proposal.
 
-Several important capabilities build on these foundations. User simulation is the first expected protocol extension and requires the separate `turn()` harness API. A sandbox server can later provide reconnectable operate leases for providers that cannot reconstruct a sandbox in another process. Restart-safe attempts, checkpoint restoration, and retained artifacts require additional storage and ownership contracts. They are not prerequisites for defining the three foundations correctly.
+Several important capabilities build on these foundations. User simulation is the first expected protocol extension and requires the separate `turn()` harness API. A sandbox server can later provide reconnectable operate leases for providers that cannot reconstruct a sandbox in another process. Restart-safe attempts, checkpoint restoration, retained artifacts, and a broader task-routing redesign require additional contracts. They are not prerequisites for defining the two foundations correctly.
 
 The central design rule is:
 
@@ -38,12 +37,12 @@ These are logical responsibilities, not mandatory process boundaries. A concrete
 
 - Let a benchmark author define task setup, stateful tools, verification, cleanup, and runtime requirements without choosing an agent.
 - Let an agent author implement an explicit harness contract without knowing which environment will invoke it: `responses()` owns the model-and-tool loop through one `NeMoGymResponse`, while `turn()` performs one participant activation and returns scheduling control to the processor. The contracts do not share nullable fields or a mode selector.
-- Let a run bind compatible tasks, resources, harnesses, models, and placements through trusted configuration.
+- Let each deployed agent-server route bind one processor protocol, its role-specific harnesses and models, and compatible placement through trusted configuration.
 - Keep existing Gym `/run` integrations and NeMo RL consumers working during migration.
 - Move a CLI agent harness into a benchmark task sandbox without duplicating sandbox lifecycle code in every agent.
 - Preserve resource-server ownership when the resources server creates the task sandbox.
 - Allow a concrete episode processor to define its own protocol and participant roles.
-- Replace per-row executable routing with typed task-set routing.
+- Preserve current `agent_ref` and `task_source` routing during migration while leaving a broader task-routing redesign to a separate proposal.
 - Evolve toward restart-safe rollout execution without implying those guarantees prematurely.
 - Make ownership and cleanup mechanically enforceable.
 
@@ -59,42 +58,40 @@ The following rules define the foundation and remain valid as the architecture g
 6. Resource-server-internal submission transfer is not a public artifact API.
 7. Legacy `/run` requests and native episode results pass through deterministic translators. Golden tests cover every mapped field, rejected input, and legacy output shape.
 8. Cleanup runs on success, failure, timeout, and cancellation.
-9. New distributed guarantees are not implied by in-memory implementations.
+9. Worker-local semaphores, session maps, and cleanup registries do not provide cluster-wide admission, failover, attempt fencing, or restart recovery. Those guarantees require shared state and are not claimed by this foundation.
 
 ### 2.3 What must be defined together
 
-The proposal defines all three foundations, including their native contracts and how they compose. That complete target is needed before teams can implement the boundaries in parallel:
+The proposal defines both foundations, including their native contracts and how they compose. That complete target is needed before teams can implement the boundaries in parallel:
 
 - `EpisodeRequest`, `EpisodeResponse`, `BaseEpisodeProcessor`, and `SingleAgentEpisodeProcessor`;
 - separate harness behavior, deployment, and executor contracts;
-- explicit resources-owned and executor-owned workspace acquisition, including the `SandboxWorkspace` handoff and owner-specific cleanup;
+- explicit environment-owned task workspaces and executor-owned harness workspaces, including the `SandboxWorkspace` handoff and owner-specific cleanup;
 - concrete OpenCode and simple-agent mappings that preserve current behavior;
-- `TaskData`, `TaskSet`, materialization, validation, selection, repeat expansion, and processor routing;
-- deterministic compatibility translation for existing `/run`, JSONL, `agent_ref`, and NeMo RL consumers.
+- deterministic compatibility translation for existing `/run`, JSONL, `agent_ref`, `task_source`, and NeMo RL consumers.
 
-Implementation does not need to switch all three foundations on at once. The processor and harness boundaries can first run behind existing agent names and accept current materialized rows. Native TaskSet routing follows without redesigning either boundary.
+Implementation does not switch every agent at once. Migrated processors run under existing `responses_api_agents` deployment names and accept current materialized rows. Unmigrated agents remain reachable through a dedicated legacy passthrough processor until their behavior and environment protocols are extracted.
 
 ### 2.4 Capabilities added after the foundations
 
 The following capabilities use the foundation but introduce requirements of their own:
 
-- user simulation adds `turn()`, role-specific visibility, and chronological policy attribution;
+- user simulation adds `turn()`, role-specific visibility, and chronological trainable-role attribution;
 - additional multi-agent processors add their own roles, ordering, concurrency, and termination;
-- processor-owned task sandboxes add a typed sandbox-specification request and reverse the borrower relationship;
-- a process-local sandbox provider must be explicitly configured behind a sandbox server before its environment-owned workspace can cross a process boundary;
+- a `process_bound` sandbox provider must be explicitly configured behind a sandbox server before its environment-owned workspace can cross a process boundary;
 - restart-safe attempts add shared claims, leases, ownership epochs, and stale-writer fencing;
 - checkpoint restoration adds coordinated snapshots across processor, resources, harness, model capture, and workspace owners;
 - caller-retained artifacts add durable storage, authorization, retention, and garbage collection.
 
-This sequencing avoids putting speculative fields in the foundation. It does not defer TaskSet, sandbox ownership, or exact harness behavior, because those are required to explain how a task reaches the right processor and how the current agents continue to work.
+This sequencing avoids putting speculative fields in the foundation. It does not defer sandbox ownership or exact harness behavior, because those are required to explain how current agents continue to work.
 
 ### 2.5 The resources server is the environment
 
-In this design, the resources server is the deployed environment. It owns task setup, benchmark state, stateful tools, verification, environment-specific cleanup, and any task runtime it creates. A `TaskSet` supplies immutable tasks accepted by that environment.
+In this design, the resources server is the deployed environment. It owns task setup, benchmark state, stateful tools, verification, environment-specific cleanup, and every task workspace. Existing environment-specific `TaskData` adapters validate the task fields accepted by that environment.
 
 The episode processor is orchestration code between participant harnesses and the environment. It is neither an agent nor part of the environment. It decides participant ordering, visibility, verification timing, and termination, while the framework supplies admission, cancellation, cleanup registration, and response publication. Agent harnesses implement participant behavior, and executors place that behavior in a process, service, or borrowed environment workspace.
 
-Trusted run configuration binds a task set, environment, processor, harnesses, and models. Task rows cannot select executable Python code, deployment credentials, or a processor protocol. Harnesses do not need environment-specific seed, extraction, or verification logic.
+Trusted agent-server deployment configuration binds the environment, processor protocol, role-specific harnesses, models, and placement. Current task rows may retain `task_source` and compatibility `agent_ref`, but they cannot select executable Python code or deployment credentials. Harnesses do not need environment-specific seed, extraction, or verification logic.
 
 ### 2.6 Lessons adopted from Verifiers and Harbor
 
@@ -113,7 +110,7 @@ The proposal does not make Harbor's registry, downloader, directory layout, or g
 
 An episode is the complete interaction for one task attempt. It can contain one agent run or many participant turns. An exported rollout is a training or evaluation projection from that episode.
 
-The distinction is easy to miss in the initial single-agent protocol because one episode produces one policy rollout. It matters for user simulation: the episode contains both policy and simulated-user activity, while the trainable rollout contains only policy model calls with the visible context that preceded them. A compatibility adapter must not pretend a multi-participant episode is one legacy rollout if doing so would discard actions or mix non-policy tokens into training.
+The distinction is easy to miss in the initial single-agent protocol because one episode produces one primary-agent rollout. It matters for user simulation: the episode contains both assistant and simulated-user activity, while the trainable rollout contains only the configured trainable participant's model calls with the visible context that preceded them. A compatibility adapter must not pretend a multi-participant episode is one legacy rollout if doing so would discard actions or mix another participant's tokens into training.
 
 Identity also has several scopes:
 
@@ -134,7 +131,7 @@ flowchart TB
     C[Rollout caller] -->|request and response| P[Single-agent processor]
     P -->|seed, verify, cleanup| R[Resources server]
     R -->|owns| TW[Task workspace]
-    P -->|agent run and result| X[Sandbox executor]
+    P -->|agent response| X[SandboxHarnessExecutor]
     X -->|invokes| H[Agent harness]
     H -->|inference| M[Model endpoint]
     X -->|operates| TW
@@ -146,12 +143,14 @@ Responsibilities are intentionally narrow:
 
 - The rollout caller selects an existing Gym route and submits work. It does not orchestrate an episode.
 - The episode processor executes one protocol and returns one result.
-- The resources server owns benchmark state, task preparation, tools, verification, and any task sandbox it creates.
+- The resources server owns benchmark state, task preparation, tools, verification, and every task workspace.
 - The agent harness implements agent behavior.
 - The harness executor supplies the runtime in which behavior executes.
 - The model endpoint performs inference.
 
-The benchmark workspace is the task sandbox created by the environment. The first OpenCode migration borrows that workspace because all four baseline environments create it. An executor may instead create and own a separate harness workspace when the selected environment does not supply one and does not need to inspect its mutable state. A protocol that needs both workspaces requires an explicit bridge between them.
+`HarnessExecutor` is the executor family. `NativeHarnessExecutor`, `SandboxHarnessExecutor`, and `RemoteHarnessExecutor` are its concrete placements. This proposal does not use “sandbox executor” as a second abstraction; that phrase means the concrete `SandboxHarnessExecutor`.
+
+The benchmark workspace is the task sandbox created by the environment. The first OpenCode migration borrows that workspace because all four baseline environments create it. An executor may instead create and own a separate harness workspace when the selected environment does not supply one and verifies only from the returned response. The environment cannot implicitly inspect that harness workspace; a protocol requiring mutable task state uses an environment-owned task workspace.
 
 ### 3.1 Protocol, behavior, placement, and safety are separate choices
 
@@ -164,17 +163,20 @@ These choices vary independently:
 - Adding a simulated user changes the processor protocol and role bindings; it does not turn the resources server into an agent scheduler.
 - Switching sandbox providers changes deployment configuration and reconnect behavior; it does not change which component owns the task workspace.
 
-The processor never calls another component's episode-level `/run`. A remote harness adapter calls only a behavior endpoint. Otherwise two components would both appear to own seed, verification, cleanup, and publication.
+A migrated protocol processor never calls another component's episode-level `/run`. A remote harness adapter calls only a behavior endpoint. The temporary `LegacyAgentRunProcessor` is the explicit exception: it is a transparent passthrough and does not seed, verify, clean up, or project the forwarded episode itself. Otherwise two components would both appear to own lifecycle.
 
 ### 3.2 Current, transitional, and native routing
 
 The current path routes by `agent_ref.name` to an agent server whose `/run` method owns both orchestration and behavior.
 
-The compatibility path keeps that route and server name. The deployment hosts `SingleAgentEpisodeProcessor`, which translates the legacy body, invokes extracted harness behavior, and projects the result back to the existing shape. The caller does not need to know that the implementation boundary changed.
+There are two different migration mechanisms:
 
-The native TaskSet path selects an environment and processor explicitly, then binds harnesses, models, and placement by participant role. Its contracts are part of this proposal. Activation follows the execution-boundary migration so current behavior remains available while the new routing path is integrated.
+- A migrated deployment keeps its existing `responses_api_agents` name and `/run` route but hosts `SingleAgentEpisodeProcessor`. Its configured wire-compatibility projector translates `BaseRunRequest`, invokes extracted harness behavior, and restores the exact legacy result shape.
+- An unmigrated agent retains its episode-level `/run`. A dedicated `LegacyAgentRunProcessor` forwards to that route and returns its status, headers, cookies, and body verbatim. It does not use `SingleAgentEpisodeProcessor` and is removed after the last agent migrates.
 
-This sequence matters. Changing data routing, agent behavior, sandbox ownership, and NeMo RL output at once would leave no stable comparison point. The compatibility deployment changes code ownership first and preserves observable behavior.
+Wire compatibility is therefore not an alternative to the dedicated legacy processor. The former preserves caller-visible data around new orchestration; the latter temporarily preserves an old component that still owns orchestration. Keeping the passthrough separate avoids teaching the basic processor to call another episode-level `/run`, which would create two apparent lifecycle owners. Nothing is inherently wrong with the dedicated legacy approach; this proposal previously conflated it with wire projection and now makes both roles explicit.
+
+This sequence matters. Changing routing, agent behavior, sandbox ownership, and NeMo RL output at once would leave no stable comparison point. Both migration mechanisms preserve observable behavior while one deployment at a time moves to the new boundary.
 
 ### 3.3 The worked examples are the migration proof
 
@@ -203,7 +205,7 @@ The processor adds an orchestration boundary; it does not replace Gym's service 
 - `AsyncSandbox`, `SandboxSpec`, and provider resolution for runtime operations;
 - `BaseRunRequest`, environment-specific `BaseVerifyRequest` and `BaseVerifyResponse` subclasses, `AggregateMetricsRequest`, and `AggregateMetrics` on compatibility paths.
 
-The new core contracts are limited to the processor request and response, processor deployment reference, resources-session workspace handoff, and an `AsyncSandbox` facade that removes owner-only operations. Any implementation that introduces a parallel HTTP client, model session protocol, Responses wrapper, or generic command protocol is outside this proposal.
+The new core contracts are limited to the processor request and response, inline harness binding, resources-session workspace handoff, and an `AsyncSandbox` facade that removes owner-only operations. Any implementation that introduces a parallel HTTP client, model session protocol, Responses wrapper, or generic command protocol is outside this proposal.
 
 ## 4. Foundation 1: episode processor
 
@@ -211,7 +213,7 @@ The new core contracts are limited to the processor request and response, proces
 
 Existing Gym agent servers combine framework responsibilities with a particular agent loop. This is workable for one loop, but it makes user simulation, multi-agent interaction, and consistent cleanup difficult.
 
-An episode processor is a server because it is a deployable execution boundary. It owns its route, admission capacity, process lifetime, and protocol implementation. There is no umbrella server that dynamically hosts arbitrary processor classes.
+An episode processor is the implementation behind a deployable agent-server boundary. It owns its route, worker-local admission, server lifecycle, and protocol implementation. There is no umbrella server that dynamically hosts arbitrary processor classes.
 
 Each deployment starts one concrete processor server, such as `SingleAgentEpisodeProcessor`. The base class supplies scaffolding through inheritance; it is not a separately routed service.
 
@@ -238,9 +240,9 @@ type JsonValue = (
 
 
 class TaskIdentity(BaseModel):
-    task_set: str
+    source: str
     task_id: str
-    revision: str
+    revision: str | None = None
 
 
 class EpisodeRequest(BaseModel):
@@ -291,6 +293,7 @@ class EpisodeResponse(BaseModel):
     response: NeMoGymResponse | None = None
     reward: float | None = None
     reward_components: dict[str, float] = Field(default_factory=dict)
+    mask_sample: bool = False
     metrics: EpisodeMetrics = Field(default_factory=EpisodeMetrics)
     ng_agent_observations: AgentObservationBundle | None = None
     diagnostics: list[EpisodeDiagnostic] = Field(default_factory=list)
@@ -327,7 +330,7 @@ class EpisodeContext:
     cleanup: EpisodeCleanupRegistry
 ```
 
-`NeMoGymResponseCreateParamsNonStreaming`, `NeMoGymResponse`, `ResponseInputItem`, and `ResponseOutputItem` are existing Responses API models already used by Gym. `AgentObservationBundle`, `ModelServerRef`, `ResourcesServerRef`, `ServerClient`, `SimpleServer`, and `rollout_context` are existing Gym types and helpers. `Request` is FastAPI's HTTP request type. `BaseModel`, `Field`, `PrivateAttr`, `RootModel`, `PositiveInt`, `PositiveFloat`, and `NonNegativeInt` are Pydantic types. `ABC`, `Any`, `AsyncIterator`, `Awaitable`, `Callable`, `Literal`, `Protocol`, `dataclass`, and `datetime` are standard Python types. `Exception` and `ValueError` are Python built-ins. These are reused dependencies, not new proposal contracts.
+`NeMoGymResponseCreateParamsNonStreaming`, `NeMoGymResponse`, `ResponseInputItem`, and `ResponseOutputItem` are existing Responses API models already used by Gym. `AgentObservationBundle`, `BaseRunServerInstanceConfig`, `ModelServerRef`, `ResourcesServerRef`, `ServerClient`, `SimpleServer`, and `rollout_context` are existing Gym types and helpers. `FastAPI` and `Request` are FastAPI types. `BaseModel`, `Field`, `PrivateAttr`, `PositiveInt`, `PositiveFloat`, and `NonNegativeInt` are Pydantic types. `ABC`, `Any`, `AsyncIterator`, `Awaitable`, `Callable`, `Literal`, `Mapping`, `Protocol`, `dataclass`, and `datetime` are standard Python types. `Exception` and `ValueError` are Python built-ins. These are reused dependencies, not new proposal contracts.
 
 All proposal Pydantic models use strict validation and reject unknown fields unless a field is explicitly defined as benchmark- or adapter-owned JSON. Wire compatibility is versioned by the configured processor protocol and harness adapter version rather than by accepting undeclared fields.
 
@@ -337,8 +340,8 @@ All proposal Pydantic models use strict validation and reject unknown fields unl
 
 - `rollout_id` is stable across retries of the same logical sample.
 - `attempt` identifies the physical execution. The compatibility path uses zero unless the existing caller supplies an attempt field.
-- `task` identifies immutable task content independently of a rollout attempt.
-- `responses_create_params` is the complete policy-visible Responses request, including input, tools, tool choice, and generation options after allowed run-level overrides.
+- `task.source` records the current trusted task source or a compatibility source name; `task_id` identifies the task within that source; `revision` is present only when the source provides a stable content revision.
+- `responses_create_params` is the complete agent-visible Responses request, including input, tools, tool choice, and generation options after allowed run-level overrides.
 - `resources_data` contains benchmark-owned seed and verification JSON. The selected resources server validates its benchmark-specific schema before seed side effects.
 - `agent_data` contains task-authored data intentionally visible to the harness but not represented in the Responses request.
 - `deadline` is a timezone-aware absolute timestamp. The processor clamps downstream timeouts to the remaining duration.
@@ -349,9 +352,11 @@ All proposal Pydantic models use strict validation and reject unknown fields unl
 
 `EpisodeMetrics` keeps processor and executor timing separate from verifier metrics so equal keys cannot silently overwrite one another. Harness-specific trajectory data remains in Gym's observability records rather than a parallel metrics payload. The compatibility projector places known verifier and completion metrics back in their legacy locations.
 
+When `reward_components` is non-empty, `reward` equals the finite sum of those components. `finalize_response` enforces this invariant because NeMo RL rejects any other relationship. A verifier with a non-additive score places explanatory component values in `metrics.verification` and returns only the final score as `reward`.
+
 `AgentObservationBundle` remains Gym's typed observation contract. `EpisodeDiagnostic` contains a severity, stable code, and caller-safe message. Neither can contain a live object, unbounded transcript, credential, or sandbox-local path that becomes invalid during cleanup.
 
-`EpisodeRequest` and `EpisodeResponse` are the matching wire models for the processor's `/run` route. `EpisodeResponse` carries identity and one terminal status. A completed response requires `response` and `reward` and forbids `failure`. A failed response requires `failure`; response and reward may be absent. `finalize_response` enforces those conditions. Cleanup failures remain visible even when protocol work completed successfully because failure to destroy a sandbox is operationally important but does not retroactively change a valid reward. Compatibility adapters create the failure sentinels required by legacy callers without placing them in the native contract.
+`EpisodeRequest` and `EpisodeResponse` are the matching wire models for the processor's `/run` route. `EpisodeResponse` carries identity and one terminal status. A completed response requires `response` and `reward` and forbids `failure`. A failed response requires `failure`; response and reward may be absent. `finalize_response` enforces those conditions and runs Gym's existing token-capture delivery step before serialization. `mask_sample` survives in the native response and is projected to `instance_config.mask_sample` for current NeMo RL. Cleanup failures remain visible even when protocol work completed successfully because failure to destroy a sandbox is operationally important but does not retroactively change a valid reward.
 
 Rollout ids, failure messages, observation kinds, diagnostic codes, and metric keys are non-empty and bounded. Reward and numeric metric values must be finite. These validation limits are constants of the processor protocol version, not per-request knobs.
 
@@ -377,6 +382,13 @@ class BaseEpisodeProcessor(SimpleServer, ABC):
     _resources_sessions: ResourcesSessionFactory = PrivateAttr()
     _executors: HarnessExecutorRouter = PrivateAttr()
 
+    def setup_webserver(self) -> FastAPI:
+        app = FastAPI(lifespan=self.lifespan)
+        self.setup_session_middleware(app)
+        app.post("/run")(self.run)
+        app.post("/aggregate_metrics")(self.aggregate_metrics)
+        return app
+
     def model_post_init(self, context: Any, /) -> None:
         super().model_post_init(context)
         self._admission = LocalEpisodeAdmission(
@@ -389,7 +401,7 @@ class BaseEpisodeProcessor(SimpleServer, ABC):
         )
         self._executors = DefaultHarnessExecutorRouter(
             server_client=self.server_client,
-            deployments=resolve_harness_deployments(self.config),
+            bindings=resolve_harness_bindings(self.config),
         )
 
     async def run(
@@ -446,7 +458,8 @@ def translate_or_validate(
 1. Read the deployment's configured wire format.
 2. On a native deployment, validate the body as `EpisodeRequest`.
 3. On a compatibility deployment, validate the body as the existing `BaseRunRequest` and translate it into `EpisodeRequest`.
-4. Reject malformed or ambiguous input before acquiring capacity or creating resources.
+4. If the request has no deadline, clamp it to `now + default_episode_timeout_seconds`.
+5. Reject malformed or ambiguous input before acquiring capacity or creating resources.
 
 It performs no network calls, sandbox creation, session mutation, or logging side effects beyond validation diagnostics. Keeping it pure makes the compatibility mapping golden-testable.
 
@@ -567,11 +580,22 @@ def project_response(
     ...
 ```
 
+Projection also chooses the HTTP status; a failed body is never returned as an ordinary HTTP 200:
+
+| Failure | HTTP behavior |
+| --- | --- |
+| invalid request | `422` |
+| retryable infrastructure, deadline, internal, admission timeout, or shutdown | `503` with `Retry-After` |
+| harness failure without a valid response | `500` |
+| verification failsafe preserved for compatibility | `200` with reward zero and the existing `_ng_failure_class` sidecar marker |
+
+The structured `EpisodeFailure` remains in native error bodies, but current NeMo RL classifies failures from HTTP status rather than inspecting that body. The verification row preserves current behavior explicitly: NeMo RL currently consumes it as a reward-zero sample, which requires a separate decision with NeMo RL owners rather than an undocumented transport change.
+
 ### 4.4 Lifecycle boundaries
 
 There are four different lifecycle scopes:
 
-1. Process setup and shutdown
+1. Worker setup and shutdown
   - validate deployment configuration;
   - resolve trusted harness factories;
   - initialize admission and executor pools;
@@ -593,7 +617,7 @@ There are four different lifecycle scopes:
 
 These scopes must not be collapsed into a single `teardown()` hook. Their owners and failure behavior differ.
 
-The server exposes process-scoped lifecycle hooks through its FastAPI lifespan:
+`SimpleServer` does not currently expose lifecycle hooks. Stage 1 adds a FastAPI lifespan that calls worker-scoped hooks:
 
 ```python
 async def startup(self) -> None:
@@ -604,9 +628,9 @@ async def shutdown(self) -> None:
     ...
 ```
 
-Server startup validates everything that can be checked without allocating task state. It resolves the resources server, participant bindings, model endpoints, registered harness adapters, executor compatibility, and sandbox-provider configuration. A processor that cannot execute its configured harness fails readiness before accepting `/run`. Startup does not seed a benchmark or create a workspace.
+Each uvicorn worker runs these hooks independently. Worker startup validates everything that can be checked without allocating task state. It resolves the resources server, participant bindings, model endpoints, registered harness adapters, executor compatibility, and sandbox-provider configuration. A processor that cannot execute its configured harness fails readiness before accepting `/run`. Startup does not seed a benchmark or create a workspace.
 
-Server shutdown first closes admission so no new episode starts. It then waits up to `shutdown_grace_seconds` for active episodes. After the grace period, it cancels the episode tokens, waits for registered cleanup, closes reusable executor and HTTP clients, and reports any resources that could not be released. Process shutdown is not a substitute for resources-server `/cleanup_session`; it is the final containment path.
+Worker shutdown first closes its admission so no new episode starts in that worker. It then waits up to `shutdown_grace_seconds` for active episodes. After the grace period, it cancels the episode tokens, waits for registered cleanup, closes reusable executor and HTTP clients, and reports any resources that could not be released. Worker shutdown is not a substitute for resources-server `/cleanup_session`; it is the final containment path. The compatibility path also treats Gym's existing client-disconnect middleware as a cancellation carrier and unwinds the episode scope when the caller disconnects.
 
 Within one episode, acquisition and release order are deterministic:
 
@@ -615,12 +639,12 @@ Within one episode, acquisition and release order are deterministic:
 3. Seed benchmark state and any environment-owned task workspace.
 4. Let the executor borrow the task workspace or create a harness workspace and register the corresponding invocation cleanup.
 5. Run the harness.
-6. Disconnect from the borrowed task workspace or stop the owned harness workspace.
-7. Verify while any environment-owned task workspace is still alive.
+6. Disconnect from a borrowed environment task workspace. If the executor instead owns a harness workspace and verification uses only the returned response, stop that harness workspace.
+7. Verify while every environment-owned task workspace remains alive.
 8. Exit the episode scope, which asks resources to clean up and stop its task workspace.
-9. Finalize and publish the result.
+9. Ensure any executor-owned harness workspace has stopped, then finalize and publish the result.
 
-For the baseline path, the executor disconnects from the task workspace before verification because its invocation has ended, while resources retains that workspace through verification. For an executor-owned harness workspace, the harness must copy all verification input out before executor cleanup; the environment cannot inspect that workspace implicitly. Cancellation at any step unwinds the registered operations in reverse acquisition order.
+For the baseline path, the executor disconnects from the task workspace before verification because its invocation has ended, while resources retains that workspace through verification. An executor-owned harness workspace is permitted only when the environment verifies from `NeMoGymResponse`; it is not an implicit task-state handoff. An environment that must inspect files or machine state owns the task workspace from seed through verification. The processor never owns or transfers ownership of task state. Cancellation at any step unwinds the registered operations in reverse acquisition order.
 
 ### 4.5 The first concrete protocol
 
@@ -631,11 +655,13 @@ class LegacyCompatibilityConfig(BaseModel):
     expected_agent_name: str
 
 
-class BaseEpisodeProcessorConfig(BaseModel):
+class BaseEpisodeProcessorConfig(BaseRunServerInstanceConfig):
     resources_server: ResourcesServerRef
     max_concurrent_episodes: PositiveInt
     queue_timeout_seconds: PositiveFloat
     shutdown_grace_seconds: PositiveFloat
+    default_episode_timeout_seconds: PositiveFloat
+    token_id_capture: bool = False
     compatibility: LegacyCompatibilityConfig | None = None
 ```
 
@@ -644,24 +670,24 @@ When `compatibility` is absent, `/run` accepts only the native episode request. 
 The concrete processor declares its dependencies:
 
 ```python
-class HarnessDeploymentRef(BaseModel):
-    name: str
-
-
-class ParticipantBinding(BaseModel):
-    harness: HarnessDeploymentRef
+class HarnessBinding(BaseModel):
+    adapter: "HarnessAdapterRef"
+    config: dict[str, JsonValue]
+    executor: "HarnessExecutorConfig"
     model_server: ModelServerRef
 
 
 class SingleAgentEpisodeProcessorConfig(BaseEpisodeProcessorConfig):
-    policy: ParticipantBinding
+    agent: HarnessBinding
     skip_verification: bool = False
     skip_verification_reward: float = 0.0
 ```
 
-`ModelServerRef` and `ResourcesServerRef` are Gym's existing typed references from `nemo_gym.config_types`. `HarnessDeploymentRef` is the only new reference in this block; it selects a trusted harness deployment whose full schema is defined in section 5.4. The model name and generation parameters remain in `responses_create_params`, as they do in the current Responses API. Service URLs, adapter keys, executable entrypoints, and credentials remain deployment state; they do not travel in task rows.
+`ModelServerRef` and `ResourcesServerRef` are Gym's existing typed references from `nemo_gym.config_types`. `HarnessBinding` is defined once on the concrete processor deployment; its adapter and executor schema is completed in section 5.4. There is no `HarnessDeploymentRef`, global harness registry block, or second run-time participant binding to resolve. The model name and generation parameters remain in `responses_create_params`, as they do in the current Responses API. Service URLs, adapter keys, executable entrypoints, and credentials remain deployment state; they do not travel in task rows.
 
-The base class does not define agent harnesses. A concrete protocol names the roles it needs. `SingleAgentEpisodeProcessor` has one role, `policy`. A processor deployment can have several replicas, each replica can have several HTTP workers, and each worker can admit several episodes. Those scaling choices do not create additional participant roles or change protocol semantics.
+The existing `allowed_agents` compatibility check resolves through a processor deployment to each role's registered harness adapter key. For `SingleAgentEpisodeProcessor`, it checks the one `agent` binding. A multi-participant processor defines whether all roles or only selected roles must be accepted by the environment. The check no longer compares the processor entrypoint name, because that identifies orchestration rather than behavior.
+
+The base class does not define agent harnesses. A concrete protocol names the roles it needs. `SingleAgentEpisodeProcessor` has one role, `agent`. A user-simulation processor can instead name roles such as `assistant` and `simulated_user`; a peer protocol can use domain-specific names rather than RL terminology. The concrete `process()` method defines when each role acts and what it can observe. A processor deployment can have several replicas, each replica can have several HTTP workers, and each worker can admit several episodes. Worker-local capacity is `max_concurrent_episodes`; the deployment's nominal capacity is that value times `num_workers`, although it is not a cluster-wide admission guarantee.
 
 The processing sequence is:
 
@@ -675,7 +701,7 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor):
         context: EpisodeContext,
     ) -> EpisodeResponse:
         workspace_request = self._executors.workspace_request(
-            self.config.policy.harness
+            self.config.agent
         )
         seed = await context.resources.seed_session(
             EpisodeSeedSessionRequest(
@@ -687,8 +713,7 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor):
         )
 
         agent_response = await self._executors.responses(
-            deployment=self.config.policy.harness,
-            model_server=self.config.policy.model_server,
+            binding=self.config.agent,
             workspace=seed.workspace,
             resources=context.resources,
             body=request.responses_create_params,
@@ -729,6 +754,7 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor):
             response=agent_response,
             reward=verification.reward,
             reward_components=verification.reward_components,
+            mask_sample=verification.mask_sample,
             metrics=EpisodeMetrics(verification=verification.metrics),
             ng_agent_observations=agent_observations,
             diagnostics=verification.diagnostics,
@@ -760,7 +786,7 @@ The processor uses one seed response for both the harness and verification. It n
 
 `workspace_request()` is derived from the resolved executor and adapter requirements validated at startup. It returns `mode="none"` for the representative simple agent and for an executor-owned harness workspace. It returns `mode="resources_server"` for the baseline OpenCode deployments that borrow the environment's task workspace. Task data cannot change it. `AggregateMetricsRequest` and `AggregateMetrics` are existing Gym models; the processor preserves the current simple-agent proxy behavior.
 
-`SingleAgentEpisodeProcessor` intentionally permits only one policy binding. It does not carry a one-element participant list or a schedule object merely to resemble the future multi-agent shape. The user-simulation processor adds role-specific configuration when the second role and its ordering semantics exist.
+`SingleAgentEpisodeProcessor` intentionally permits only one `agent` binding. It does not carry a one-element participant list or a schedule object merely to resemble the future multi-agent shape. The user-simulation processor adds `assistant` and `simulated_user` bindings when the second role and its ordering semantics exist.
 
 Reward judges used by SWE-bench-style verifiers remain resources-server internals. There is no foundational `SolverJudgeEpisodeProcessor`. A judge should become an episode participant only if a future interaction protocol actually requires a participant with judge behavior.
 
@@ -792,7 +818,9 @@ class AgentHarness(Protocol):
 
 The method accepts and returns the same Gym models as `/v1/responses`; there is no harness-specific response wrapper. The participant's existing `ModelServerRef` selects the configured Gym model server and is injected when the trusted harness is constructed. The executor also injects `AgentHarnessContext`, which carries rollout and attempt identity, the absolute deadline, and any task or seed data intentionally exposed to the agent. Invocation dependencies do not alter the Responses API body.
 
-An in-process harness does not need an HTTP request object to learn the rollout id. The processor places `rollout_id` and `attempt` in `AgentHarnessContext`. `NativeHarnessExecutor` derives the existing capture key—`rollout_id` for attempt zero and `"{rollout_id}-a{attempt}"` for later attempts—and enters Gym's existing `rollout_context(...)` around `harness.responses()`. `ServerClient` then applies that rollout prefix to model and resources calls exactly as it does for a server-hosted agent. A harness may also read the two original identity fields when it creates `AgentObservationBundle` records. For a sandbox CLI or remote harness, the executor applies the same derived prefix to the model and resources endpoints it supplies across that boundary.
+An in-process harness does not need an HTTP request object to learn the rollout id. The processor places `rollout_id` and `attempt` in `AgentHarnessContext`. `NativeHarnessExecutor` derives the existing capture key—`rollout_id` for attempt zero and `"{rollout_id}-a{attempt}"` for later attempts—and enters Gym's existing `rollout_context(...)` around `harness.responses()`.
+
+That context alone is not sufficient for training-token capture. Today the agent server chooses the token-capture URL prefix from global `token_id_capture` settings and the agent deployment's `token_id_capture` flag. The executor must reproduce that decision, construct the explicit model URL path with `rollout_path_prefix(..., token_capture=enabled)`, and pass it to a native harness or write it into a CLI's model configuration. The ordinary rollout context continues to correlate resources calls and observability. For a sandbox CLI or remote harness, the executor propagates the same derived capture path across the execution boundary.
 
 Agent trajectory capture continues to use Gym's existing model-call correlation, `TrajectoryRecord`, and `AgentObservationBundle` contracts. As current agents do, a behavior implementation may attach `_ng_agent_observations` to its internal Responses payload. `split_agent_observations()` removes that private field before verification, validates it as `AgentObservationBundle`, and places it in `EpisodeResponse.ng_agent_observations`. Compatibility projection preserves `ng_trajectory` and `ng_agent_observations` in their current locations. No new observation wrapper is introduced.
 
@@ -828,7 +856,7 @@ OpenCode has a different split. The current Python code is a harness adapter tha
 
 This distinction avoids two unnecessary requirements: the task image does not need the Gym harness package installed, and the framework does not need a generic protocol for shipping arbitrary Python harness implementations into every sandbox. A future harness may place more adapter logic in the guest, but that is a deployment option rather than the baseline contract.
 
-For a remote harness, an executor forwards the Responses API body to a behavior-only endpoint. That endpoint must not expose episode-level seed, verify, or cleanup operations. In every placement, the episode processor sees the same `responses()` semantics and remains responsible for the episode protocol.
+For a remote harness, an executor forwards the Responses API body to a behavior-only endpoint. That endpoint must not expose episode-level seed, verify, or cleanup operations. The remote executor sends `ResourcesSessionClient.export_cookies()` with the behavior request and merges every `Set-Cookie` update from the response through `merge_cookies()` before verification or cleanup. This preserves the mixed model-and-resources cookie round trip used by current remote agents. Strictly separate model and resources cookie state is guaranteed only for native and sandbox harnesses whose executor controls both clients. In every placement, the episode processor sees the same `responses()` semantics and remains responsible for the episode protocol.
 
 This distinction also keeps failures attributable. A schema error is a deployment validation failure. A provider reconnect error is an executor failure. A CLI exit or malformed harness response is a harness failure. A wrong answer that executes normally is a valid `NeMoGymResponse` that may receive reward zero.
 
@@ -856,7 +884,7 @@ class HarnessSandbox(Protocol):
         ...
 ```
 
-`HarnessSandbox` deliberately mirrors the relevant `AsyncSandbox` methods instead of inventing a second command protocol. It omits `start()` and `stop()` because the executor, not the harness, finalizes either ownership mode. Its implementation clamps each timeout to the episode deadline, observes cancellation, bounds command output and downloads, and uses the selected workdir by default.
+`HarnessSandbox` deliberately mirrors the relevant `AsyncSandbox` methods instead of inventing a second command protocol. It omits `start()` and `stop()` because the harness never owns runtime lifecycle. The sandbox harness executor disconnects borrowed access; the resources server stops an environment-owned task workspace; and the executor stops a harness-only workspace it created. The facade clamps each timeout to the episode deadline, observes cancellation, bounds command output and downloads, and uses the selected workdir by default.
 
 Installation is visible in the OpenCode harness rather than hidden in the executor:
 
@@ -883,9 +911,9 @@ class OpenCodeHarness(AgentHarness):
 Today, `OpenCodeSandboxedAgent._start_sandbox()` has a second path when seed returns no `sandbox_handle`: the agent resolves its configured `sandbox_provider`, applies `sandbox_config`, creates an `AsyncSandbox`, and owns its lifecycle. That path is not actually general because the `SandboxSpec.image` is hardcoded to one Astropy SWE-bench image. The target removes the hardcoded fallback but preserves the legitimate ownership mode explicitly:
 
 - `workspace_source="resources_server"` means seed must return `SandboxWorkspace`; the executor borrows it and calls `disconnect()`.
-- `workspace_source="executor"` means trusted harness deployment configuration supplies the provider and complete `SandboxSpec`; the executor creates the harness workspace, owns it, and calls `stop()` on every exit path.
+- `workspace_source="executor"` means the trusted processor config's harness binding supplies the provider and complete `SandboxSpec`; the executor creates the harness workspace, owns it, and calls `stop()` on every exit path.
 
-An executor-owned workspace is valid only when the environment can verify from the `NeMoGymResponse` or from another explicit transfer contract. If the environment must prepare or inspect the same workspace but cannot create it, the environment must return a typed sandbox specification. That processor-owned task-workspace flow is the separate capability in stage 6.
+An executor-owned workspace is valid only when the environment can verify from `NeMoGymResponse`. It is a harness runtime, not transferable task state. If the environment must prepare, harvest, or inspect files or machine state, it owns the task workspace from seed through verification. A sandbox service may be the physical custodian and expose owner and operate leases, but the resources server remains the logical lifecycle owner and decides when destruction occurs. The processor never owns a task workspace.
 
 ### 5.4 Trusted deployment registry
 
@@ -908,11 +936,11 @@ type SandboxCapability = Literal[
 
 
 class HarnessRequirements(BaseModel):
-    workspace: Literal["none", "task"]
+    workspace: Literal["none", "sandbox"]
     capabilities: set[SandboxCapability] = Field(default_factory=set)
 
 
-class ResourcesWorkspaceSandboxExecutorConfig(BaseModel):
+class BorrowedTaskWorkspaceExecutorConfig(BaseModel):
     kind: Literal["sandbox"]
     workspace_source: Literal["resources_server"]
     accepted_connection_kinds: set[
@@ -922,7 +950,7 @@ class ResourcesWorkspaceSandboxExecutorConfig(BaseModel):
     max_response_bytes: PositiveInt
 
 
-class ExecutorWorkspaceSandboxExecutorConfig(BaseModel):
+class OwnedHarnessWorkspaceExecutorConfig(BaseModel):
     kind: Literal["sandbox"]
     workspace_source: Literal["executor"]
     sandbox_provider: str
@@ -931,30 +959,24 @@ class ExecutorWorkspaceSandboxExecutorConfig(BaseModel):
     max_response_bytes: PositiveInt
 
 
-class NativeExecutorConfig(BaseModel):
+class NativeHarnessExecutorConfig(BaseModel):
     kind: Literal["native"]
     isolation: Literal["in_process", "subprocess"]
     max_response_bytes: PositiveInt
 
 
-class RemoteExecutorConfig(BaseModel):
+class RemoteHarnessExecutorConfig(BaseModel):
     kind: Literal["remote"]
     server: AgentServerRef
     max_response_bytes: PositiveInt
 
 
 type HarnessExecutorConfig = (
-    NativeExecutorConfig
-    | ResourcesWorkspaceSandboxExecutorConfig
-    | ExecutorWorkspaceSandboxExecutorConfig
-    | RemoteExecutorConfig
+    NativeHarnessExecutorConfig
+    | BorrowedTaskWorkspaceExecutorConfig
+    | OwnedHarnessWorkspaceExecutorConfig
+    | RemoteHarnessExecutorConfig
 )
-
-
-class HarnessDeploymentConfig(BaseModel):
-    adapter: HarnessAdapterRef
-    config: dict[str, JsonValue]
-    executor: HarnessExecutorConfig
 
 
 class SimpleAgentHarnessConfig(BaseModel):
@@ -965,6 +987,7 @@ class OpenCodeHarnessConfig(BaseModel):
     opencode_version: str
     remote_opencode_install_script_path: str | None = None
     remote_opencode_binary_path: str | None = None
+    remote_opencode_musl_binary_path: str | None = None
     opencode_config: dict[str, JsonValue] = Field(default_factory=dict)
     opencode_max_context_window: PositiveInt
     debug: bool = False
@@ -980,10 +1003,11 @@ class RegisteredHarnessAdapter:
 
 
 @dataclass(frozen=True)
-class ResolvedHarnessDeployment:
+class ResolvedHarnessBinding:
     adapter: RegisteredHarnessAdapter
     config: BaseModel
     executor: HarnessExecutorConfig
+    model_server: ModelServerRef
 
 
 class SandboxHarnessRegistry(Protocol):
@@ -1002,24 +1026,22 @@ class SandboxHarnessRegistry(Protocol):
 
 At processor startup:
 
-1. Resolve `HarnessDeploymentRef.name` in the merged deployment configuration.
+1. Read the concrete processor deployment's role-specific `HarnessBinding`.
 2. Resolve `HarnessAdapterRef(key, version)` to an allowlisted `RegisteredHarnessAdapter`.
-3. Validate `HarnessDeploymentConfig.config` with that adapter's Pydantic model.
+3. Validate `HarnessBinding.config` with that adapter's Pydantic model.
 4. Validate that the configured executor can satisfy the adapter's declared requirements.
-5. Store a `ResolvedHarnessDeployment`.
+5. Store a `ResolvedHarnessBinding`.
 6. Fail startup if any name, version, schema, or executor capability is unsupported.
 
-`HarnessDeploymentRef`, defined with the first processor configuration in section 4.5, contains only a stable deployment name. It appears in processor and run configuration. The named `HarnessDeploymentConfig` lives in trusted merged Gym configuration. Neither task rows nor episode requests can provide an adapter key or executable entrypoint.
-
-The serialized `config` must be a JSON object because deployment configuration crosses a file boundary. It never reaches execution as an unvalidated dictionary. Successful resolution produces an adapter-specific Pydantic model inside `ResolvedHarnessDeployment`.
+The serialized `config` must be a JSON object because deployment configuration crosses a file boundary. It never reaches execution as an unvalidated dictionary. Successful resolution produces an adapter-specific Pydantic model inside `ResolvedHarnessBinding`. Neither task rows nor episode requests can provide a second binding, adapter key, or executable entrypoint.
 
 `HarnessAdapterRef` identifies a registered adapter without implying one universal Python constructor. `key` is an allowlisted symbolic identifier such as `opencode`; `version` is an exact adapter contract version rather than a floating package constraint. Each registry entry provides its config model, requirements, and an executor-specific construction function. A sandbox adapter is constructed with a borrower-only sandbox facade. A native adapter receives Gym's `ServerClient` and typed server refs. A remote adapter is represented by a protocol client. These construction dependencies are trusted deployment wiring, not serialized task fields.
 
 `RegisteredHarnessAdapter` is the process-local registry record used for validation. It is intentionally not a wire model. Executor-specific registries own construction because their dependencies differ. The proposal does not require every harness class to be importable in every execution target. Startup validation imports only the registered adapter and configuration schema in the processor deployment.
 
-`ResourcesWorkspaceSandboxExecutorConfig` requires the seed response to contain a task workspace and explicitly lists the connection kinds the deployment accepts. A deployment that expects direct provider reconnection does not silently fall back to a sandbox server, and a deployment reviewed for brokered access does not silently accept a raw provider descriptor. `ExecutorWorkspaceSandboxExecutorConfig` validates its provider and complete `SandboxSpec` at startup and creates a harness workspace during invocation. In both ownership modes, `command_timeout_seconds` is bounded by the episode deadline and the executor limits the returned `NeMoGymResponse`.
+`BorrowedTaskWorkspaceExecutorConfig` requires the seed response to contain a task workspace and explicitly lists the connection kinds the deployment accepts. A deployment that expects direct provider reconnection does not silently fall back to a sandbox server, and a deployment reviewed for brokered access does not silently accept a raw provider descriptor. `OwnedHarnessWorkspaceExecutorConfig` validates its provider and complete `SandboxSpec` at startup and creates a harness-only workspace during invocation. In both placements, `command_timeout_seconds` is bounded by the episode deadline and the executor limits the returned `NeMoGymResponse`.
 
-`HarnessRequirements.workspace` says whether behavior needs a task workspace. `capabilities` lists the sandbox operations it requires. OpenCode declares a task workspace plus `exec` and `download`; a harness that stages configuration files may also require `upload`. Deployment validation checks these requirements against both the executor and the `SandboxWorkspace` returned at runtime.
+`HarnessRequirements.workspace` says whether behavior needs any sandbox runtime. `capabilities` lists the sandbox operations it requires. OpenCode declares `workspace="sandbox"` plus `exec` and `download`; a harness that stages configuration files may also require `upload`. The deployment separately chooses an environment task workspace or an executor-owned harness workspace. Deployment validation checks adapter requirements against the executor and, for a borrowed task workspace, against the `SandboxWorkspace` returned at runtime.
 
 For the initial OpenCode path, the reviewed adapter and its Pydantic configuration model are installed in the processor image. A prepared task image should contain the pinned OpenCode binary. During compatibility migration, the existing staged installer and binary fields may remain available so the new path can reproduce current behavior before prepared images are universal. No Python harness package is required inside the sandbox workspace.
 
@@ -1033,43 +1055,44 @@ Each form needs its own validation. A raw import string is not the common denomi
 
 ### 5.4.1 Complete deployment examples
 
-Most users should select a shipped environment-and-agent combination rather than write executor configuration. The following examples show the complete processor-and-harness portion of the merged configuration so that ownership and placement can be reviewed. Existing named model-server declarations are unchanged. Existing resources-server declarations are unchanged except that sandbox-owning environments must expose a typed workspace handoff from `seed_session`.
+Most users should select a shipped environment-and-agent combination rather than write executor configuration. Migrating a shipped `simple_agent` or `opencode_sandboxed_agent` config does not require its user to add a processor, adapter, executor, or workspace block; maintainers change the shipped config and its existing selection name remains stable. Harness authors see the typed behavior config. Environment authors configure a task sandbox only when their resources server owns one. The fully resolved examples below are for framework implementers, operators, and reviewers.
+
+The following examples show the complete processor-and-harness portion of that resolved configuration so ownership and placement can be reviewed. The inner `single_agent_episode_processor` key selects `responses_api_agents/single_agent_episode_processor/app.py`; the outer key remains the route selected by `agent_ref`. Existing named model-server declarations are unchanged. Existing resources-server declarations are unchanged except that sandbox-owning environments must expose a typed workspace handoff from `seed_session`.
 
 #### Gym-native `simple_agent` in a supervised subprocess
 
 `reasoning_gym` does not need a task workspace. The processor opens the resources session, and the subprocess executor runs the trusted Python harness with behavior-only access to the model and resources clients.
 
 ```yaml
-episode_processors:
-  reasoning_gym_simple_agent:
-    resources_server:
-      type: resources_servers
-      name: reasoning_gym
-    policy:
-      harness:
-        name: simple_agent_subprocess
-      model_server:
-        type: responses_api_models
-        name: policy_model
-    max_concurrent_episodes: 32
-    queue_timeout_seconds: 300
-    shutdown_grace_seconds: 60
-    skip_verification: false
-    skip_verification_reward: 0.0
-    compatibility:
-      expected_agent_name: reasoning_gym_simple_agent
-
-harness_deployments:
-  simple_agent_subprocess:
-    adapter:
-      key: simple_agent
-      version: "1"
-    config:
-      max_steps: null
-    executor:
-      kind: native
-      isolation: subprocess
-      max_response_bytes: 8388608
+reasoning_gym_simple_agent:
+  responses_api_agents:
+    single_agent_episode_processor:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: reasoning_gym
+      agent:
+        adapter:
+          key: simple_agent
+          version: "1"
+        config:
+          max_steps: null
+        executor:
+          kind: native
+          isolation: subprocess
+          max_response_bytes: 8388608
+        model_server:
+          type: responses_api_models
+          name: agent_model
+      max_concurrent_episodes: 32
+      queue_timeout_seconds: 300
+      shutdown_grace_seconds: 60
+      default_episode_timeout_seconds: 3600
+      token_id_capture: false
+      skip_verification: false
+      skip_verification_reward: 0.0
+      compatibility:
+        expected_agent_name: reasoning_gym_simple_agent
 ```
 
 The harness declaration contains only `SimpleAgentHarnessConfig`. The resources and model bindings remain on the processor. Subprocess supervision, cancellation, client transport, and result bounds belong to the native executor.
@@ -1079,54 +1102,64 @@ The harness declaration contains only `SimpleAgentHarnessConfig`. The resources 
 `reasoning_gym` verifies the returned response and does not prepare or inspect a task machine. Its seed response therefore contains no workspace. The executor creates a generic OpenCode runtime sandbox from trusted deployment configuration, runs the CLI, copies the `NeMoGymResponse` out, and stops the sandbox before the processor asks `reasoning_gym` to verify.
 
 ```yaml
-episode_processors:
-  reasoning_gym_opencode:
-    resources_server:
-      type: resources_servers
-      name: reasoning_gym
-    policy:
-      harness:
-        name: opencode_executor_workspace
-      model_server:
-        type: responses_api_models
-        name: policy_model
-    max_concurrent_episodes: 32
-    queue_timeout_seconds: 300
-    shutdown_grace_seconds: 60
-    skip_verification: false
-    skip_verification_reward: 0.0
+reasoning_gym_opencode:
+  responses_api_agents:
+    single_agent_episode_processor:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: reasoning_gym
+      agent:
+        adapter:
+          key: opencode
+          version: "1"
+        config:
+          opencode_version: 1.17.11
+          remote_opencode_install_script_path: null
+          remote_opencode_binary_path: null
+          remote_opencode_musl_binary_path: null
+          opencode_max_context_window: 262144
+          opencode_config: {}
+          debug: false
+          transcript_required: true
+        executor:
+          kind: sandbox
+          workspace_source: executor
+          sandbox_provider: sandbox
+          sandbox_spec:
+            image: approved-opencode-runtime@sha256:...
+            workdir: /workspace
+            ttl_s: 18000
+            ready_timeout_s: 1200
+            resources:
+              cpu: 2
+              memory_mib: 8192
+              disk_gib: 30
+            provider_options: {}
+            metadata:
+              harness: opencode
+          command_timeout_seconds: 10800
+          max_response_bytes: 8388608
+        model_server:
+          type: responses_api_models
+          name: agent_model
+      max_concurrent_episodes: 32
+      queue_timeout_seconds: 300
+      shutdown_grace_seconds: 60
+      default_episode_timeout_seconds: 10800
+      token_id_capture: false
+      skip_verification: false
+      skip_verification_reward: 0.0
+      compatibility:
+        expected_agent_name: reasoning_gym_opencode
 
-harness_deployments:
-  opencode_executor_workspace:
-    adapter:
-      key: opencode
-      version: "1"
-    config:
-      opencode_version: 1.17.11
-      remote_opencode_install_script_path: null
-      remote_opencode_binary_path: null
-      opencode_max_context_window: 262144
-      opencode_config: {}
-      debug: false
-      transcript_required: true
-    executor:
-      kind: sandbox
-      workspace_source: executor
-      sandbox_provider: sandbox
-      sandbox_spec:
-        image: approved-opencode-runtime@sha256:...
-        workdir: /workspace
-        ttl_s: 18000
-        ready_timeout_s: 1200
-        resources:
-          cpu: 2
-          memory_mib: 8192
-          disk_gib: 30
-        provider_options: {}
-        metadata:
-          harness: opencode
-      command_timeout_seconds: 10800
-      max_response_bytes: 8388608
+# The environment declares no task workspace or sandbox image.
+reasoning_gym:
+  resources_servers:
+    reasoning_gym:
+      entrypoint: app.py
+      domain: knowledge
+      verified: true
 ```
 
 The sandbox provider and complete `SandboxSpec` are executor configuration because the executor creates and destroys this harness workspace. They are not fields on `OpenCodeHarnessConfig`. This pairing is valid only because verification depends on the returned response rather than on machine state left in that sandbox.
@@ -1136,44 +1169,44 @@ The sandbox provider and complete `SandboxSpec` are executor configuration becau
 SWE-bench and Terminal Bench derive the task image and complete `SandboxSpec` from trusted environment configuration and task data. The resources server creates the workspace during seed, returns an operate-only connection, keeps the workspace alive through verification, and destroys it during resources-session cleanup. The OpenCode deployment names no provider, image, or sandbox resources.
 
 ```yaml
-episode_processors:
-  opencode_swebench:
-    resources_server:
-      type: resources_servers
-      name: swebench_resources_server
-    policy:
-      harness:
-        name: opencode_resources_workspace
-      model_server:
-        type: responses_api_models
-        name: policy_model
-    max_concurrent_episodes: 32
-    queue_timeout_seconds: 300
-    shutdown_grace_seconds: 60
-    skip_verification: false
-    skip_verification_reward: 0.0
-    compatibility:
-      expected_agent_name: opencode_sandboxed_agent
-
-harness_deployments:
-  opencode_resources_workspace:
-    adapter:
-      key: opencode
-      version: "1"
-    config:
-      opencode_version: 1.17.11
-      remote_opencode_install_script_path: null
-      remote_opencode_binary_path: null
-      opencode_max_context_window: 262144
-      opencode_config: {}
-      debug: false
-      transcript_required: true
-    executor:
-      kind: sandbox
-      workspace_source: resources_server
-      accepted_connection_kinds: [direct, sandbox_server]
-      command_timeout_seconds: 10800
-      max_response_bytes: 8388608
+opencode_sandboxed_agent:
+  responses_api_agents:
+    single_agent_episode_processor:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: swebench_resources_server
+      agent:
+        adapter:
+          key: opencode
+          version: "1"
+        config:
+          opencode_version: 1.17.11
+          remote_opencode_install_script_path: null
+          remote_opencode_binary_path: null
+          remote_opencode_musl_binary_path: null
+          opencode_max_context_window: 262144
+          opencode_config: {}
+          debug: false
+          transcript_required: true
+        executor:
+          kind: sandbox
+          workspace_source: resources_server
+          accepted_connection_kinds: [direct, sandbox_server]
+          command_timeout_seconds: 10800
+          max_response_bytes: 8388608
+        model_server:
+          type: responses_api_models
+          name: agent_model
+      max_concurrent_episodes: 32
+      queue_timeout_seconds: 300
+      shutdown_grace_seconds: 60
+      default_episode_timeout_seconds: 10800
+      token_id_capture: false
+      skip_verification: false
+      skip_verification_reward: 0.0
+      compatibility:
+        expected_agent_name: opencode_sandboxed_agent
 
 # Existing environment-owned settings remain with the resources server.
 swebench_resources_server:
@@ -1194,27 +1227,47 @@ swebench_resources_server:
           benchmark: swebench-verified
 ```
 
-For Terminal Bench, the processor changes only `resources_server.name`. The same `opencode_resources_workspace` deployment is reusable:
+For Terminal Bench, the harness binding has the same values and only `resources_server.name` changes. A shipped Hydra config group can compose the shared OpenCode binding; the resolved example repeats it so the deployment remains complete:
 
 ```yaml
-episode_processors:
-  opencode_terminal_bench:
-    resources_server:
-      type: resources_servers
-      name: terminal_bench_2_1_resources_server
-    policy:
-      harness:
-        name: opencode_resources_workspace
-      model_server:
-        type: responses_api_models
-        name: policy_model
-    max_concurrent_episodes: 32
-    queue_timeout_seconds: 300
-    shutdown_grace_seconds: 60
-    skip_verification: false
-    skip_verification_reward: 0.0
-    compatibility:
-      expected_agent_name: opencode_sandboxed_agent
+opencode_sandboxed_agent:
+  responses_api_agents:
+    single_agent_episode_processor:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: terminal_bench_2_1_resources_server
+      agent:
+        adapter:
+          key: opencode
+          version: "1"
+        config:
+          opencode_version: 1.17.11
+          remote_opencode_install_script_path: null
+          remote_opencode_binary_path: null
+          remote_opencode_musl_binary_path: null
+          opencode_max_context_window: 262144
+          opencode_config: {}
+          debug: false
+          transcript_required: true
+        executor:
+          kind: sandbox
+          workspace_source: resources_server
+          accepted_connection_kinds: [direct, sandbox_server]
+          command_timeout_seconds: 10800
+          max_response_bytes: 8388608
+        model_server:
+          type: responses_api_models
+          name: agent_model
+      max_concurrent_episodes: 32
+      queue_timeout_seconds: 300
+      shutdown_grace_seconds: 60
+      default_episode_timeout_seconds: 10800
+      token_id_capture: false
+      skip_verification: false
+      skip_verification_reward: 0.0
+      compatibility:
+        expected_agent_name: opencode_sandboxed_agent
 
 terminal_bench_2_1_resources_server:
   resources_servers:
@@ -1235,7 +1288,7 @@ terminal_bench_2_1_resources_server:
           benchmark: terminal-bench-2.1
 ```
 
-These examples expose the resolved configuration for review, not the expected quick-start surface. A shipped environment-and-agent preset should supply the processor, harness deployment, executor, limits, and compatibility block. A normal user should select that preset and a model. An agent author supplies the typed harness configuration and static requirements. An environment author supplies sandbox configuration only when that environment creates the task workspace.
+These examples expose the resolved configuration for review, not the expected quick-start surface. A shipped environment-and-agent preset should supply the processor, inline harness binding, executor, limits, and compatibility block. A normal user should select that preset and a model. An agent author supplies the typed behavior configuration and static requirements. An environment author supplies sandbox configuration only when that environment creates the task workspace.
 
 ### 5.5 Seed-session request and response
 
@@ -1297,6 +1350,7 @@ class EpisodeVerifyRequest(BaseModel):
 class EpisodeVerifyResponse(BaseModel):
     reward: float
     reward_components: dict[str, float] = Field(default_factory=dict)
+    mask_sample: bool = False
     metrics: dict[str, int | float | str | bool] = Field(default_factory=dict)
     diagnostics: list[EpisodeDiagnostic] = Field(default_factory=list)
 
@@ -1347,6 +1401,12 @@ class ResourcesSessionClient(Protocol):
     def for_harness(self) -> ResourcesToolClient:
         ...
 
+    def export_cookies(self) -> dict[str, str]:
+        ...
+
+    def merge_cookies(self, cookies: Mapping[str, str]) -> None:
+        ...
+
     async def close(self) -> None:
         ...
 
@@ -1373,7 +1433,7 @@ Request and response validation enforces:
 - response `agent_data` contains no verifier-only fields or provider credentials;
 - `workdir` is absolute and exists in the prepared workspace;
 - `connection.kind` is accepted by the configured executor;
-- a direct descriptor is supported by the named reconnectable provider, or a brokered lease is supported by the named sandbox server;
+- a direct descriptor is compatible with the named provider's connection scope and deployment topology, or a brokered lease is supported by the named sandbox server;
 - `rollout_id` and `attempt` match the active resources session for verify and cleanup.
 
 `DirectSandboxConnection.provider` is a trusted provider configuration name, not a package import. Its `descriptor` contains the complete data required to reconstruct an operate-only connection in another process. `SandboxServerConnection.server` names a trusted sandbox-server deployment, and `operate_lease` is a bounded, opaque capability that cannot stop the workspace. `workdir` is the benchmark-selected absolute working directory. `capabilities` is the provider- or server-attested set the executor can rely on. The foundational capability vocabulary is closed and versioned rather than accepting arbitrary strings.
@@ -1382,24 +1442,28 @@ Request and response validation enforces:
 
 A verifier's sandbox requirement is not communicated as a field in the verify request. The resources-server environment already knows its verification procedure and retains the task workspace created during seed in the same cookie-bound session. SWE-bench, DeepSWE, and SWE-bench Pro extract from that workspace and create their own verifier sandbox. Terminal Bench 2.1 verifies the live task workspace. The processor always verifies before closing the resources session, so either procedure can run while the task workspace is available.
 
-`EpisodeVerifyResponse` contains normalized reward fields, bounded scalar metrics, and caller-safe verification diagnostics required to build `EpisodeResponse`.
+`EpisodeVerifyResponse` contains normalized reward fields, `mask_sample`, bounded scalar metrics, and caller-safe verification diagnostics required to build `EpisodeResponse`. The resources-session adapter moves every top-level numeric, boolean, or string field from the environment's concrete verify response into `metrics`. It also retains the complete concrete verify response as an opaque, processor-internal compatibility payload. Only the legacy projector can read that payload and flatten current verifier metrics, logs, observation records, and benchmark-specific extras back to their existing locations. Unknown legacy fields do not enter the strict native response.
 
-`ResourcesSessionFactory` is process-scoped and uses `BaseEpisodeProcessorConfig.resources_server` to construct session clients over Gym's existing `ServerClient`. `ResourcesSessionClient` owns the affinity mechanism for one attempt. It starts with the cookies received by the processor's `/run` request. Every seed, tool, verify, and cleanup call sends the current resources cookie state and atomically applies the response's `Set-Cookie` updates before the next resources call.
+`ResourcesSessionFactory` is worker-scoped and uses `BaseEpisodeProcessorConfig.resources_server` to construct session clients over Gym's existing `ServerClient`. `ResourcesSessionClient` owns the affinity mechanism for one attempt. It starts with the cookies received by the processor's `/run` request. Every seed, tool, verify, and cleanup call sends the current resources cookie state and atomically applies the response's `Set-Cookie` updates before the next resources call.
 
 Cookie updates cannot use assignment such as `cookies = response.cookies`, because a response may update only one key and would discard all unchanged keys. The session client merges changed keys, honors cookie deletion, and serializes resources calls with an asynchronous lock so two concurrent tool responses cannot overwrite one another. `ResourcesToolClient` is a restricted view of this same object, not a copied cookie dictionary. Therefore cookies set during a harness tool call are visible to later harness calls, verification, and cleanup. Model-server cookies remain a separate harness-local state and are never merged into the resources cookie state.
 
-This contract prevents cookie loss inside a live processor attempt. It does not survive processor loss; compatibility sessions remain worker-affine until the restart-safe attempt store in stage 7 replaces process-local state.
+This contract prevents cookie loss inside a live processor attempt. `export_cookies()` returns a snapshot for a remote behavior call; `merge_cookies()` applies its response updates under the same lock. A remote response may contain model and resources cookies together, matching current agent behavior. The seed cookie still lets cleanup find the resources session if the remote harness fails before returning later cookie updates.
 
 `close()` sends an idempotent `CleanupSessionRequest`, validates `CleanupSessionResponse`, and then closes client-side session state. A resources server that already destroys its task workspace in `/verify` treats cleanup as a no-op for that resource. During migration, repeated cleanup must be safe.
 
 `CleanupSessionResponse.released=True` means no resources owned by this session remain. It is also returned when a prior idempotent cleanup already released them. A false value is converted into a `CleanupFailure`; it is not silently accepted as success.
+
+These cleanup and identity operations do not exist in `SimpleResourcesServer` today, so they are explicit stage-1 work rather than assumed infrastructure. The base resources server gains a worker-local session table keyed by its signed session-cookie id. Seed records `rollout_id` and `attempt`; environments register owned state and sandboxes through that table. Verify and cleanup reject an identity mismatch. `POST /cleanup_session` releases registered resources idempotently and reports whether anything remains. Sandbox benchmarks migrate their private cookie-keyed dictionaries to this table.
+
+The table is worker-local. A stateful resources server that uses it must run with one worker until a shared session store and request routing provide cross-worker affinity. It does not provide failover, stale-attempt fencing, or restart recovery.
 
 The response never contains:
 
 - a live `AsyncSandbox` object;
 - an owner handle;
 - owner credentials or unscoped provider credentials;
-- a `HarnessDeploymentConfig`;
+- another participant's `HarnessBinding`;
 - agent runtime configuration;
 - an executor object;
 - harness installation details.
@@ -1439,19 +1503,17 @@ class NativeHarnessRegistry(Protocol):
 class NativeHarnessExecutor:
     async def responses(
         self,
-        deployment: HarnessDeploymentRef,
-        model_server: ModelServerRef,
+        binding: ResolvedHarnessBinding,
         body: NeMoGymResponseCreateParamsNonStreaming,
         context: AgentHarnessContext,
         resources: ResourcesSessionClient,
         cancellation: CancellationToken,
     ) -> NeMoGymResponse:
-        resolved = self.deployments[deployment.name]
         harness = self.native_harnesses.create(
-            adapter=resolved.adapter,
-            config=resolved.config,
+            adapter=binding.adapter,
+            config=binding.config,
             server_client=self.server_client,
-            model_server=model_server,
+            model_server=binding.model_server,
             resources=resources.for_harness(),
             context=context,
         )
@@ -1466,16 +1528,14 @@ class NativeHarnessExecutor:
 class SandboxHarnessExecutor:
     async def responses(
         self,
-        deployment: HarnessDeploymentRef,
-        model_server: ModelServerRef,
+        binding: ResolvedHarnessBinding,
         body: NeMoGymResponseCreateParamsNonStreaming,
         context: AgentHarnessContext,
         workspace: SandboxWorkspace | None,
         cancellation: CancellationToken,
     ) -> NeMoGymResponse:
-        resolved = self.deployments[deployment.name]
         async with self.open_workspace(
-            config=resolved.executor,
+            config=binding.executor,
             resources_workspace=workspace,
             cancellation=cancellation,
         ) as acquired:
@@ -1485,11 +1545,11 @@ class SandboxHarnessExecutor:
                 cancellation=cancellation,
             )
             harness = self.sandbox_harnesses.create(
-                adapter=resolved.adapter,
-                config=resolved.config,
+                adapter=binding.adapter,
+                config=binding.config,
                 sandbox=sandbox,
                 server_client=self.server_client,
-                model_server=model_server,
+                model_server=binding.model_server,
                 context=context,
             )
             capture_key = rollout_capture_key(
@@ -1503,14 +1563,13 @@ class SandboxHarnessExecutor:
 class HarnessExecutorRouter(Protocol):
     def workspace_request(
         self,
-        deployment: HarnessDeploymentRef,
+        binding: HarnessBinding,
     ) -> WorkspaceRequest:
         ...
 
     async def responses(
         self,
-        deployment: HarnessDeploymentRef,
-        model_server: ModelServerRef,
+        binding: HarnessBinding,
         body: NeMoGymResponseCreateParamsNonStreaming,
         context: AgentHarnessContext,
         workspace: SandboxWorkspace | None,
@@ -1526,7 +1585,7 @@ There is no separate model-session client. `NativeHarnessExecutor` reuses the `S
 
 For a native harness, `ModelServerRef.name` is passed directly to `ServerClient.post(..., url_path="/v1/responses")`. For OpenCode, the executor resolves the same ref to the rollout-prefixed model base URL using the existing Gym server configuration and supplies that URL to the host-side adapter when it writes OpenCode's provider configuration. The CLI inside the task workspace then calls the existing Gym model server. The model name remains `body.model`.
 
-`HarnessExecutorRouter` resolves the already-validated deployment and calls exactly one configured executor kind. A native executor requires `workspace=None`. A resources-workspace sandbox executor requires a valid `SandboxWorkspace`. An executor-workspace sandbox executor requires `workspace=None`, then creates and owns the harness workspace from trusted deployment configuration. The router does not select placement from task data or retry with another executor when the configured one fails.
+`HarnessExecutorRouter` resolves the already-validated deployment and calls exactly one configured executor kind. `NativeHarnessExecutor` requires `workspace=None`. `SandboxHarnessExecutor` requires a valid `SandboxWorkspace` when borrowing an environment task workspace; when configured for an executor-owned harness workspace, it requires `workspace=None` and creates that workspace from trusted deployment configuration. The router does not select placement from task data or retry with another executor when the configured one fails.
 
 `SandboxHarnessExecutor.open_workspace()` implements the ownership branch. For a resources-owned workspace, it dispatches on `connection.kind`: `direct` reconstructs the provider connection from the descriptor, while `sandbox_server` redeems the operate lease with the named server. Both paths return the same operate-only facade, and context exit calls `disconnect()`. For `workspace_source="executor"`, the executor resolves the configured provider, starts the harness workspace from the configured `SandboxSpec`, and its context exit calls `stop()`. The harness receives the same facade in every case and therefore cannot destroy the workspace itself.
 
@@ -1549,18 +1608,21 @@ The executor does not pass direct descriptors or brokered leases to the CLI prog
 
 ### 5.7 Provider connectivity and deployment topology
 
-For a resources-owned workspace, connection sharing has two explicit forms:
+Provider capability and deployment topology determine whether an environment-owned workspace can be shared:
 
-1. A provider registered as `reconnectable` returns a complete direct descriptor. The executor resolves the named provider in trusted deployment configuration and reconstructs an operate-only facade in its own process. OpenSandbox and E2B support this form.
-2. A provider registered as `process_local` cannot return a direct connection. The environment must be configured to allocate that provider through a sandbox server. The sandbox server creates the sandbox, retains the non-serializable owner handle in its process, and returns separate owner and operate capabilities. Resources retains owner authority, while `EpisodeSeedSessionResponse` carries only the brokered operate lease.
+1. `anywhere` means a complete descriptor can reconnect from another host. OpenSandbox and E2B support this form.
+2. `same_host` means another process can reconnect only on the owner host. Docker, Apptainer, and the local provider can support this form after they implement explicit descriptor serialization and connection with a host-identity check.
+3. `process_bound` means the live provider handle cannot be reconstructed outside its owner process. Fargate's current tunnel and client state has this shape. Daytona is treated as unsupported until its connection signature and descriptor contract agree with the provider API.
+
+The provider registry gains this three-valued `connection_scope`; it does not infer scope from the presence of a method. A direct `SandboxWorkspace` descriptor is valid when scope and placement allow it. A sandbox server is required for a process-bound provider and for a same-host provider when resources and the harness executor can land on different nodes.
 
 The sandbox server is the physical custodian of a brokered provider handle, not the episode-lifecycle owner. The resources-server environment decides when verification is complete and uses its owner capability to stop the workspace. The harness executor can only operate and disconnect.
 
-The sandbox server is therefore required only when a process-local provider backs an environment-owned workspace that another process must operate. It cannot be added after resources has already created the sandbox because the non-serializable handle is precisely what cannot cross into the server. The alternatives are to use a reconnectable provider, create an executor-owned workspace, or colocate ownership and operation in one process when the deployment permits that topology.
+The sandbox server is therefore required only when a direct connection is incompatible with provider scope and placement. It cannot be added after resources has already created the sandbox because the non-serializable handle is precisely what cannot cross into the server. Gym currently runs resources and agent-server deployments as separate processes, so same-process colocation is not a foundational fallback.
 
-Opt-in is explicit on both sides. The sandbox-provider registry declares `connection_scope="reconnectable"` or `connection_scope="process_local"`. Trusted environment configuration selects `handoff.kind="sandbox_server"` and names the sandbox server before allocation. The harness deployment includes `sandbox_server` in `accepted_connection_kinds`. A process-local provider with direct handoff, a missing sandbox-server binding, or a returned connection kind that the executor did not accept fails readiness or seed. The processor never inserts a sandbox server or falls back to another connection mode at runtime.
+Opt-in is explicit on both sides. The sandbox-provider registry declares `connection_scope="anywhere"`, `"same_host"`, or `"process_bound"`. Trusted environment configuration selects direct handoff or names a sandbox server before allocation. The harness binding lists the connection kinds it accepts. An incompatible provider scope, host topology, missing sandbox-server binding, or unaccepted returned connection fails readiness or seed. The processor never inserts a sandbox server or falls back to another connection mode at runtime.
 
-For example, a process-local provider is configured behind a sandbox server rather than selected directly by the executor:
+For example, a `process_bound` provider is configured behind a sandbox server rather than selected directly by the executor:
 
 ```yaml
 resources_server:
@@ -1578,13 +1640,13 @@ harness_deployment:
     accepted_connection_kinds: [sandbox_server]
 ```
 
-For an executor-owned workspace, the executor resolves `sandbox_provider` directly and creates the harness workspace from the deployment's `SandboxSpec`. No cross-process handoff is required.
+For an executor-owned workspace, the executor resolves `sandbox_provider` directly and creates the harness workspace from its binding's `SandboxSpec`. No cross-process handoff is required.
 
 Provider validation happens before model compute:
 
-- every direct connection names a provider registered as reconnectable in both owner and executor deployments;
+- every direct connection names a provider whose `anywhere` or `same_host` scope is compatible with the actual owner and executor placement;
 - every brokered connection names the configured sandbox server and carries a valid, unexpired operate lease;
-- a process-local provider is allocated through its configured sandbox server before seed returns;
+- a `process_bound` provider is allocated through its configured sandbox server before seed returns;
 - required `exec`, `upload`, `download`, or `pty` capabilities are present;
 - the harness's prepared runtime is available;
 - the model and resources endpoints are reachable from the selected workspace;
@@ -1634,7 +1696,7 @@ The diagram compresses the following execution:
 2. Pure translation validates the request before admission or side effects.
 3. The processor opens a resources session and asks it to seed a resources-owned workspace.
 4. Resources creates the task workspace, prepares benchmark state, retains owner authority, and returns an operate-only descriptor.
-5. The processor asks `SandboxHarnessExecutor` to run the configured policy harness.
+5. The processor asks `SandboxHarnessExecutor` to invoke the configured agent harness.
 6. The executor reconnects as a borrower and gives the host-side OpenCode adapter a bounded, borrower-only `AsyncSandbox` facade. The adapter installs or locates OpenCode, runs the CLI in `workdir`, exports and downloads its transcript, and converts it to `NeMoGymResponse`.
 7. The processor asks the same resources session to verify while the task workspace remains alive.
 8. Resources either inspects the task workspace directly or extracts benchmark-defined state into a verifier sandbox.
@@ -1734,6 +1796,7 @@ sequenceDiagram
 
 The current configuration maps into the target as follows:
 
+- `OpenCodeSandboxedAgentConfig` is split rather than nested whole under the harness. The migrated processor does not inherit `BaseResponsesAPIAgentConfig`: host, port, workers, and entrypoint come through `BaseRunServerInstanceConfig`; resources binding and token-capture enablement live on `BaseEpisodeProcessorConfig`; model binding lives in the role's `HarnessBinding`; and the current `skip_verification` fields remain on `SingleAgentEpisodeProcessorConfig`. The behavior harness does not inherit a server config.
 - Processor configuration owns the resources-server binding, model binding, deadline, admission, and legacy projection.
 - Resources configuration owns `sandbox_provider`, `sandbox_config`, the task image, task preparation, verifier configuration, and final destruction of the task workspace. The agent no longer carries a second provider choice.
 - `OpenCodeHarnessConfig` retains `opencode_version`, staged installer and binary locations during migration, `opencode_config`, `opencode_max_context_window`, debug behavior, and transcript policy. Execution deadlines and command-output bounds belong to the executor.
@@ -1821,204 +1884,43 @@ This example establishes that a harness does not need a sandbox simply because i
 
 Other simple resources servers follow this pattern when their tools are ordinary typed HTTP operations and verification does not depend on a mutable task machine. Their task-specific tool schemas, seed data, and reward logic remain in resources. The harness stays reusable because it only sees advertised tool definitions, model-visible outputs, and agent-visible seed data.
 
-## 6. Foundation 3: TaskData, TaskSet, and routing
+### 5.13 Migration classes and GDPVal
 
-The processor and harness contracts answer how one episode executes. TaskSet answers where episode requests come from and how a task is bound to an environment without letting dataset rows select executable code.
+The repository does not contain one uniform agent shape. Migration work is classified by observable behavior:
 
-### 6.1 Current behavior and the boundary to replace
+- An agent whose behavior already lives in `responses()` can extract that method into a native harness and move its current `run()` ordering into `SingleAgentEpisodeProcessor`.
+- A remote or run-only agent first needs a behavior-only endpoint that cannot seed, verify, clean up, or publish an episode. Until then it remains behind `LegacyAgentRunProcessor`.
+- A step-based environment such as Gymnasium needs another concrete processor whose `process()` owns the step protocol. It should not add modes to the single-agent processor.
+- An agent that grades locally must move benchmark semantics into its resources-server environment before it can use the foundational processor.
 
-Today `RolloutCollectionHelper` reads arbitrary JSONL dictionaries, optionally renders prompts, resolves `task_source` through the merged server configuration, applies `agent_name` or `agent_map`, expands `fan_out`, adds or preserves `agent_ref`, applies Responses API overrides, stamps skills, derives `_ng_task_index`, expands repeats into `_ng_rollout_index`, and posts each row to `row["agent_ref"]["name"]/run`. The same dictionary contains prompt input, verifier-only fields, source routing, executable routing, repeat identity, and eventually result fields.
+Vibench follows the same ownership rule. Its current agent-side tar creation and shared-host-path handoff move into the Vibench resources server, which owns the task workspace and harvests the application before cleanup. The design deliberately does not add a reverse `harness_executor` workspace handoff solely to preserve that agent-specific implementation.
 
-That flexibility made new benchmarks easy to add, but it has three architectural costs:
+GDPVal is in the last category and confirms why task-workspace ownership belongs to the environment. Upstream `stirrup_agent` currently selects and starts the GDPVal Apptainer runtime, materializes reference files, persists deliverables under `persist_deliverables_dir`, and sends that host-local directory to `resources_servers/gdpval` for judging. The resources server already defines the rubric and comparison judges and reads the deliverable tree; it does not yet own collection or the task runtime.
 
-- a task row can directly name the executable deployment through `agent_ref`, while `task_source` still resolves indirectly to an agent deployment before dispatch;
-- there is no typed boundary between agent-visible and verifier-only task data;
-- stable task identity is inferred from a source line or caller-stamped index rather than declared by the task source.
+GDPVal can migrate without a public artifact contract:
 
-TaskSet replaces that internal representation. JSONL remains a supported source format and can compile into the new types.
+1. GDPVal resources seed creates the task workspace with its required image, materializes reference inputs, records rollout and attempt identity, and returns operate-only workspace access.
+2. `SandboxHarnessExecutor` lets the Stirrup harness operate that workspace. Harness behavior produces the assistant response and task files but does not choose a host persistence directory.
+3. GDPVal resources verification harvests benchmark-defined deliverables while the owned workspace is alive, persists them in its private cache when configured, and passes the resulting resources-local directory to its existing rubric or comparison implementation.
+4. Execute-only, judge-only, rerun-incomplete, finish-marker, and cached-verify behavior move with that cache into the GDPVal environment. They are benchmark workflow semantics, not general harness or episode fields.
+5. Resources cleanup stops the task workspace after harvesting and verification. The private directory path never appears in `EpisodeResponse`.
 
-### 6.2 Normative task models
+This is feasible, but “move artifact harvesting” understates the refactor. Sandbox provisioning, reference-file materialization, cache ownership, finish markers, and judge-only replay must move with harvesting so the resources server can reproduce current GDPVal behavior independently of the agent host filesystem. Characterization tests should cover deliverable files, text-only fallback, audio/video routing, execute-only persistence, cached judging, rerun-incomplete behavior, and cleanup.
 
-```python
-type ResponsesOverrideField = Literal[
-    "include",
-    "instructions",
-    "max_output_tokens",
-    "max_tool_calls",
-    "metadata",
-    "parallel_tool_calls",
-    "reasoning",
-    "service_tier",
-    "temperature",
-    "text",
-    "tool_choice",
-    "top_logprobs",
-    "top_p",
-    "truncation",
-]
+## 6. Task routing is a follow-on proposal
 
+This proposal changes which code executes behind a current `responses_api_agents` `/run` route. It does not add an `episode_processors` server category, `EpisodeProcessorRef`, `EpisodeRunConfig`, `TaskSet`, or a second participant-binding layer.
 
-class ResponsesOverrides(RootModel[dict[ResponsesOverrideField, JsonValue]]):
-    root: dict[ResponsesOverrideField, JsonValue] = Field(default_factory=dict)
+During migration, `RolloutCollectionHelper` continues to resolve `task_source`, apply `agent_name` or `agent_map`, materialize current rows, and route by `agent_ref`. A migrated agent-server deployment owns exactly one concrete processor configuration, including its role-specific harness and model bindings. The processor converts the current row to `EpisodeRequest` at its boundary.
 
+Gym already has per-server `task_data.py` adapters, benchmark dataset placement, rollout materialization, and `EnvironmentManifest`. A separate task-routing proposal may strengthen those seams, but it must start from their current contracts and migration requirements. Episode orchestration does not depend on replacing them.
 
-class TaskData(BaseModel):
-    identity: TaskIdentity
-    responses_create_params: NeMoGymResponseCreateParamsNonStreaming
-    resources_data: dict[str, JsonValue] = Field(default_factory=dict)
-    agent_data: dict[str, JsonValue] = Field(default_factory=dict)
+The only task-data requirements imposed here are:
 
-
-class TaskSetRef(BaseModel):
-    name: str
-    version: str
-    split: str
-
-
-class TaskSelection(BaseModel):
-    limit: PositiveInt | None = None
-    include_task_ids: list[str] | None = None
-    shard_index: NonNegativeInt = 0
-    num_shards: PositiveInt = 1
-
-
-class TaskSet(Protocol):
-    ref: TaskSetRef
-    task_model: type[TaskData]
-
-    async def iter_tasks(
-        self,
-        selection: TaskSelection,
-    ) -> AsyncIterator[TaskData]:
-        ...
-```
-
-`TaskIdentity` is defined with the episode models in section 4.2. `NeMoGymResponseCreateParamsNonStreaming` is Gym's existing complete Responses request model. It contains task-authored input, tools, tool choice, and generation options. `ResponsesOverrides` is a strict run-level patch whose keys are limited by `ResponsesOverrideField`. It cannot replace input or tools and excludes model selection, deployment addresses, credentials, `agent_ref`, processor selection, and harness configuration. After applying the patch, the collector validates the complete request again as `NeMoGymResponseCreateParamsNonStreaming`.
-
-`TaskIdentity.task_id` is stable within one `(task_set, revision)`. `revision` identifies immutable task content, preparation assets, and verifier expectations. Changing those inputs creates a new revision rather than silently changing an existing task. A split selects a named subset of that revision; it is part of `TaskSetRef`, not task identity.
-
-`resources_data` contains benchmark-owned seed and verification input. It is sent only to the resources server. `agent_data` contains task-authored data intentionally visible to the harness in addition to `responses_create_params`. It must not contain expected answers, verifier secrets, provider credentials, or executable deployment selectors.
-
-The base `TaskData` model is deliberately small. A registered TaskSet may use a stricter subclass for benchmark fields, but it must serialize through these visibility boundaries. Arbitrary extra fields are rejected after source-specific parsing so misspelled verifier fields do not disappear into an untyped dictionary.
-
-### 6.3 Environment and run configuration
-
-TaskSet does not choose the environment, processor, or agent. Trusted run configuration binds them:
-
-```python
-class TaskSetConstraint(BaseModel):
-    name: str
-    version_specifier: str
-    splits: set[str]
-    task_schema_version: str
-
-
-class EnvironmentRef(BaseModel):
-    name: str
-    version: str
-
-
-class EnvironmentConfig(BaseModel):
-    name: str
-    version: str
-    resources_server: ResourcesServerRef
-    accepted_task_sets: list[TaskSetConstraint]
-
-
-class ParticipantRunBinding(BaseModel):
-    harness: HarnessDeploymentRef
-    model_server: ModelServerRef
-
-
-class EpisodeProcessorRef(BaseModel):
-    type: Literal["episode_processors"]
-    name: str
-
-
-class EpisodeRunConfig(BaseModel):
-    task_set: TaskSetRef
-    selection: TaskSelection = Field(default_factory=TaskSelection)
-    environment: EnvironmentRef
-    processor: EpisodeProcessorRef
-    participants: dict[str, ParticipantRunBinding]
-    num_repeats: PositiveInt = 1
-    responses_overrides: ResponsesOverrides = Field(
-        default_factory=ResponsesOverrides
-    )
-```
-
-`TaskSetConstraint` identifies accepted TaskSet names, version ranges, supported splits, and the JSON schema version expected by the resources server. `EnvironmentRef` selects one trusted resources-server environment by name and version. `ResourcesServerRef` and `ModelServerRef` are existing Gym types. `EpisodeProcessorRef` is new because the proposal adds a server category for the orchestration bridge. The selected processor validates that the environment supports its protocol and that the supplied participant roles match that protocol. `SingleAgentEpisodeProcessor` requires exactly `policy`; the future user-simulation processor requires `policy` and `simulated_user`.
-
-`version_specifier` uses Python packaging specifier syntax and is evaluated only against registry metadata. Task rows cannot supply or alter it. `TaskSelection` validation requires `shard_index < num_shards`; task-id inclusion is applied before sharding and `limit` is applied afterward.
-
-The existing `EnvironmentManifest` should evolve to describe the resources server, accepted task sets, supported processor protocols, and workspace capabilities. It should not absorb processor implementation, participant harness, or model configuration. `EpisodeRunConfig` selects those experiment choices independently. During migration, `agent_server` remains available for legacy integrations and becomes optional when native processor routing is enabled.
-
-### 6.4 Materialization and dispatch
-
-The rollout collection path becomes:
-
-```mermaid
-flowchart LR
-    S[TaskSet source] --> Validate[Validate TaskData]
-    Validate --> Q[Apply selection and stable sharding]
-    Q --> O[Merge allowed Responses overrides]
-    O --> E[Expand repeats into attempts]
-    E --> Resolve[Resolve environment, processor, and participants]
-    Resolve --> R[Build EpisodeRequest]
-    R --> P[POST processor /run]
-    P --> Z[EpisodeResponse]
-```
-
-
-
-For each selected task, the collector:
-
-1. resolves `TaskSetRef` through a trusted task-set registry;
-2. validates source data with the registered task model;
-3. applies deterministic task-id filtering and sharding;
-4. merges run-level Responses overrides only for fields allowed by policy;
-5. expands repeats and assigns a unique `rollout_id` plus zero-based `attempt`;
-6. resolves the trusted environment, processor, and participant deployments;
-7. validates the merged `TaskData.responses_create_params` and places it in `EpisodeRequest.responses_create_params`;
-8. copies task identity, `resources_data`, and `agent_data` into their corresponding `EpisodeRequest` fields;
-9. posts to the environment's processor endpoint;
-10. writes `EpisodeResponse` together with task and rollout identity.
-
-The collector never reads a deployment name from `TaskData`. Routing decisions are validated once from `EpisodeRunConfig`, not independently for every row. A task schema mismatch fails before episode admission and before any sandbox is created.
-
-Stable sharding hashes `(task_set, revision, task_id)` rather than the materialized line number. Repeat expansion does not change task identity. `rollout_id` identifies one logical sample, while `attempt` distinguishes a retry of that sample. Repeating a task for independent sampling produces distinct rollout ids rather than incrementing attempt.
-
-### 6.5 JSONL and `agent_ref` compatibility
-
-Existing benchmark JSONL does not need an immediate rewrite. A compatibility TaskSet loader:
-
-- reads the current row;
-- validates `responses_create_params`;
-- preserves the complete validated `responses_create_params`;
-- uses a benchmark-specific adapter to separate resources data from allowed agent data;
-- derives a stable compatibility task id from `_ng_task_index` or a canonical content digest;
-- rejects ambiguous fields when the benchmark has no registered separation rule.
-
-Legacy `agent_ref` is accepted only by the legacy rollout configuration adapter. It is translated into a trusted `EpisodeRunConfig` participant binding before task iteration, then removed from `TaskData`. Native TaskSet files cannot contain it.
-
-Legacy `task_source`, `agent_name`, `agent_map`, and `fan_out` remain configuration-adapter inputs. `task_source` maps to a `TaskSetRef` and `EnvironmentRef`. `agent_name` and `agent_map` map to a processor plus participant run bindings. `fan_out` creates several run configurations over the same selected tasks rather than copying executable names into task records. Per-agent repeat maps are expanded from those run configurations before dispatch.
-
-Prompt rendering becomes a TaskSet-source transformation that produces validated `TaskData.input`; it no longer mutates an arbitrary row immediately before dispatch. Skills are a run-level harness input or immutable reference, not an untyped field stamped into verifier data.
-
-The compatibility output writer can continue to emit materialized-input JSONL, `_ng_task_index`, `_ng_rollout_index`, `agent_ref`, and current result fields for NeMo RL and profiling tools. Those are projections from native identity and configuration, not the internal source of routing truth.
-
-### 6.6 TaskSet acceptance criteria
-
-The TaskSet foundation is ready when:
-
-- the representative simple-agent JSONL and one SWE-bench row compile to strict `TaskData`;
-- verifier-only fields cannot reach the harness;
-- task rows cannot select processor, harness, model, provider, or credentials;
-- selection and sharding are deterministic across input ordering;
-- repeats produce distinct rollout ids while retries preserve rollout id and increment attempt;
-- schema or environment incompatibility fails before processor admission;
-- native routing posts directly to the configured processor;
-- the compatibility projection reproduces current materialized rows and `agent_ref` routing for unmigrated consumers.
+- the compatibility translator preserves the complete current row needed by the environment's concrete seed and verify models;
+- harness-visible input is explicitly separated from verifier-only data before behavior executes;
+- task data cannot select a Python implementation, sandbox provider credentials, or another processor after the trusted agent-server route has been resolved;
+- rollout and attempt identity survive translation and projection.
 
 ## 7. Compatibility implementation
 
@@ -2046,14 +1948,14 @@ The tests should snapshot behavior, not implementation details. They record the 
 
 The migration proceeds without a flag day:
 
-1. Add the native processor types and compatibility translators.
-2. Deploy `SingleAgentEpisodeProcessor` behind an existing `agent_ref`.
-3. Accept the legacy `/run` body and project the result back to the legacy shape.
+1. Add the base processor types, wire translators, and a dedicated `LegacyAgentRunProcessor`.
+2. Route unmigrated agent deployments through the passthrough processor without changing their `/run`.
+3. Deploy `SingleAgentEpisodeProcessor` behind one migrated `agent_ref`, accept the legacy body, and project the result back to the legacy shape.
 4. Add `SandboxWorkspace` as an optional field to resources seed responses; old clients ignore it.
 5. Migrate one OpenCode plus SWE-bench pairing end to end.
 6. Migrate remaining compatible agent/resources pairings.
 7. Update NeMo RL to consume the native episode result.
-8. Remove compatibility fields only after all in-repository and supported external consumers have a published migration window.
+8. Remove passthrough and wire-compatibility paths only after all in-repository and supported external consumers have a published migration window.
 
 Until step 7, NeMo RL does not need to understand processor internals or `SandboxWorkspace`. It continues to call the route selected by `agent_ref` and receives its existing response projection.
 
@@ -2066,7 +1968,7 @@ The request translator performs a deterministic mapping:
 3. Obtain `rollout_id` and `attempt` from established internal fields when present, or derive the documented compatibility identity.
 4. Copy the complete Responses request into `EpisodeRequest.responses_create_params`.
 5. Apply the registered benchmark compatibility adapter to separate `resources_data` from agent-visible data and assign a compatibility `TaskIdentity`.
-6. Use the resources and policy bindings from `SingleAgentEpisodeProcessorConfig`.
+6. Use the resources and agent bindings from `SingleAgentEpisodeProcessorConfig`.
 7. Reject fields that would imply a second participant or a different processor protocol.
 
 `BaseRunRequest` is the existing Gym request model, not a new type from this proposal. Its exact imported version and permissive-extra behavior are part of the golden characterization.
@@ -2081,11 +1983,11 @@ The result projector preserves the complete legacy contract:
 - `instance_config.mask_sample`;
 - existing failure sentinels and sidecar behavior.
 
-Reward components are explanatory values, not an implicit sum. A verifier may compute the scalar reward with a weighted aggregate, minimum, mean, or another benchmark-specific policy. Compatibility projection preserves both rather than recomputing reward.
+When current verifier output contains additive reward components, the compatibility translator preserves them and validates that their finite sum equals `reward`. A verifier with non-additive explanatory scores moves those values into verification metrics rather than mislabeling them as reward components.
 
 In token-echo mode, each trainable output preserves the existing prompt token ids, generation token ids, and generation log probabilities. If the pinned integration uses receipt-based capture, its existing correlation, terminal attribution, manifest retrieval, and reassembly path remains authoritative. The compatibility processor does not introduce a new capture identifier that old NeMo RL cannot consume.
 
-The adapter accepts exactly one policy run. It cannot expose user simulation or multi-agent episodes because one legacy `response.output` cannot represent multiple independently attributed model-call streams without either discarding policy actions or including non-policy tokens as trainable data.
+The adapter accepts exactly one agent run. It cannot expose user simulation or multi-agent episodes because one legacy `response.output` cannot represent multiple independently attributed model-call streams without either discarding trainable-agent actions or including another participant's tokens as trainable data.
 
 ### 7.3 Compatibility limits
 
@@ -2099,11 +2001,11 @@ The adapter preserves current behavior; it does not add distributed guarantees. 
 
 These limits must be documented in deployment configuration and tests so the compatibility layer is not mistaken for the final reliability model.
 
-Native NeMo RL integration is a separate consumer change. It must define processor routing, unique rollout identity, terminal model-call attribution, capture finalization ownership, retryable failure transport, masking, and projection of every policy activation in chronological context. Only after that path is deployed can Gym remove the legacy materialized row and result projection.
+Native NeMo RL integration is a separate consumer change. It must define processor routing, unique rollout identity, terminal model-call attribution, capture finalization ownership, retryable failure transport, masking, and projection of every trainable-participant activation in chronological context. Only after that path is deployed can Gym remove the legacy materialized row and result projection.
 
 ## 8. Delivery sequence
 
-The contracts for all three foundations should be reviewed together, but implementation should land in an order that leaves a working compatibility path after each stage.
+The contracts for both foundations should be reviewed together, but implementation should land in an order that leaves a working compatibility path after each stage.
 
 ### Stage 0: freeze current observable behavior
 
@@ -2113,7 +2015,7 @@ This stage defines compatibility evidence. It does not freeze known bugs such as
 
 ### Stage 1: episode processor foundation
 
-Implement `EpisodeRequest`, `EpisodeResponse`, `BaseEpisodeProcessor`, `EpisodeContext`, and `SingleAgentEpisodeProcessor`. Add pure legacy translation and projection. Deploy the processor behind existing agent names while it delegates to current behavior.
+Implement `EpisodeRequest`, `EpisodeResponse`, `BaseEpisodeProcessor`, `EpisodeContext`, `SingleAgentEpisodeProcessor`, and `LegacyAgentRunProcessor` under the existing `responses_api_agents` deployment category. Add `SimpleServer` lifespan support, pure legacy translation and projection, and explicit HTTP status mapping. Add worker-local resources-session registration, identity checking, idempotent cleanup, and the single-worker restriction for stateful resources servers. The passthrough processor delegates to current behavior; a migrated `SingleAgentEpisodeProcessor` invokes extracted behavior rather than another `/run`.
 
 The stage gate is an episode framework that:
 
@@ -2121,6 +2023,7 @@ The stage gate is an episode framework that:
 - applies admission, deadline, and cancellation consistently;
 - runs protocol-specific `process()`;
 - closes every registered resource on all exit paths;
+- preserves cookie updates, verifier extras, masking, scalar metrics, and token-capture routing;
 - returns the same legacy result for the characterization cases.
 
 ### Stage 2: agent harness and sandbox foundation
@@ -2129,24 +2032,9 @@ Extract the simple model/tool loop into `SimpleAgentHarness.responses()` and exe
 
 First migrate OpenCode plus SWE-bench, then DeepSWE, SWE-bench Pro, and Terminal Bench 2.1. Preserve the benchmark-specific verification shapes described in section 5. The stage gate requires both worked examples to pass behavior-parity and cleanup tests.
 
-This stage also establishes trusted harness deployment validation. Task data cannot select adapter code, executor kind, model endpoint, provider credentials, or installation source.
+This stage also establishes trusted harness-binding validation. Task data cannot select adapter code, executor kind, model endpoint, provider credentials, or installation source.
 
-### Stage 3: TaskSet and native routing foundation
-
-Implement the models and flow in section 6:
-
-- a trusted TaskSet registry and strict benchmark task models;
-- JSONL compatibility loaders;
-- immutable task identity and revision;
-- deterministic selection, sharding, and repeat expansion;
-- `EnvironmentManifest` evolution for accepted task sets, resources, supported processor protocols, and workspace requirements;
-- `EpisodeRunConfig` for participant harness and model bindings;
-- native dispatch to processor `/run`;
-- legacy materialized-row and `agent_ref` projection.
-
-The stage gate runs the same simple-agent and OpenCode examples from native TaskSet selection through `EpisodeResponse`, while producing equivalent legacy artifacts for NeMo RL and existing evaluation tools.
-
-### Stage 4: turn API and user simulation
+### Stage 3: turn API and user simulation
 
 Introduce a separate turn contract:
 
@@ -2181,33 +2069,33 @@ class TurnAgentHarness(Protocol):
 
 These models describe the semantics required by user simulation. This stage must decide whether a harness reconstructs state from `visible_events`, resumes a rollout-scoped executor session, or supports both. Any continuation handle belongs to the executor and cannot expose process-local objects to the processor.
 
-The first concrete requirement is a policy interacting with a simulated user:
+The first concrete requirement is an assistant interacting with a simulated user:
 
 ```python
 class UserSimulationEpisodeProcessorConfig(BaseEpisodeProcessorConfig):
-    policy: ParticipantBinding
-    simulated_user: ParticipantBinding
+    assistant: HarnessBinding
+    simulated_user: HarnessBinding
     max_turns: PositiveInt
 ```
 
 `UserSimulationEpisodeProcessor.process()` owns ordering:
 
-1. give policy only events visible to the policy;
-2. append the policy result to the canonical interaction log;
+1. give the assistant only events visible to the assistant;
+2. append the assistant result to the canonical interaction log;
 3. give the simulated user only events visible to that role;
 4. append the user result;
-5. stop on task completion, termination policy, deadline, or `max_turns`;
+5. stop on task completion, termination rules, deadline, or `max_turns`;
 6. ask resources to verify the completed interaction.
 
 This example proves why concrete processors, rather than a configurable umbrella loop, are required. The base class supplies execution scaffolding; the user-simulation processor defines role visibility and turn order.
 
 `responses()` and `turn()` implementations may share private model or tool helpers. They do not share a request struct with mutually exclusive nullable fields.
 
-The two roles also need separate model-call capture identities. Simulated-user tokens are context for the policy but are not policy actions. The processor's chronological event log is the source for native rollout projection; taking only the final policy response would lose earlier trainable turns.
+The two roles also need separate model-call capture identities. Simulated-user tokens are context for the assistant but are not assistant actions. The processor configuration identifies which roles are trainable. Its chronological event log is the source for native rollout projection; taking only the final assistant response would lose earlier trainable turns.
 
-User simulation is the first extension because it is already an imminent request. It follows the first three stages so it can bind two harnesses from TaskSet-backed run configuration without inventing a second routing path.
+User simulation is the first extension because it is already an imminent request. Its deployed processor config binds both roles directly; current task routing still selects that one trusted agent-server deployment.
 
-### Stage 5: additional multi-agent protocols
+### Stage 4: additional multi-agent protocols
 
 Add a new concrete processor only when a use case defines:
 
@@ -2222,20 +2110,13 @@ Examples might include collaboration, debate, or supervisor-worker execution, bu
 
 Reward judges remain part of resources verification. An interactive judge participant would be a different protocol and should be added only when needed.
 
-### Stage 6: additional sandbox ownership and connectivity
+### Stage 5: additional sandbox connectivity
 
-Add a processor-owned task workspace only for environments that cannot create one:
+Implement the sandbox-server connection path when provider connection scope and deployment topology prevent direct access to an environment-owned workspace. The environment must opt in before allocation, and the harness binding must accept `connection.kind="sandbox_server"`. The server retains the physical provider handle and issues separate owner and operate capabilities. It is not a permitted fallback for a deployment configured for direct reconnection.
 
-- resources exposes a typed `/sandbox_spec`;
-- the processor or executor creates the task workspace from that spec;
-- the processor owns and stops that workspace;
-- resources receives borrow-only access for setup and verification.
+This stage does not add processor-owned task state. Environments that require filesystem or machine-state verification create their task workspace directly or request creation through the sandbox service while retaining logical lifecycle authority.
 
-Implement the sandbox-server connection path when a registered process-local provider must back a resources-owned workspace across processes. The environment must opt in before allocation, and the harness deployment must accept `connection.kind="sandbox_server"`. The server retains owner handles and issues scoped operate leases. It is not a permitted fallback for a deployment configured for direct reconnection.
-
-Both additions require explicit authority descriptors and cleanup tests. Neither may overload `owner="resources_server"` or change the harness behavior contract.
-
-### Stage 7: restart-safe attempts
+### Stage 6: restart-safe attempts
 
 Add a shared attempt store with:
 
@@ -2256,7 +2137,7 @@ Cookie affinity and `(rollout_id, attempt)` dictionary keys are insufficient. A 
 
 A newer attempt may retire an older attempt only after atomically fencing it. It must not stop a sandbox that an unfenced worker can still mutate. Orphan cleanup follows expired ownership records rather than scanning provider resources by naming convention.
 
-### Stage 8: checkpoint parking and restoration
+### Stage 7: checkpoint parking and restoration
 
 Checkpointing requires coordinated snapshots across owners:
 
@@ -2286,7 +2167,7 @@ The effective capability is the weakest required component:
 
 A reconnect descriptor is only access to a runtime that may still exist. It does not prove that runtime state, resources state, processor position, and model-call lineage form one committed checkpoint.
 
-### Stage 9: retained artifacts
+### Stage 8: retained artifacts
 
 Add a retained-artifact subsystem only when a concrete caller requirement exists. Define storage ownership, opaque identifiers, authorization, retention, garbage collection, size limits, and deletion behavior before adding artifact references to episode results.
 
@@ -2308,7 +2189,7 @@ Running a Gym-native harness in the processor process can avoid one internal hop
 
 ### 9.2 Avoid per-episode control-plane startup
 
-The processor process, HTTP pools, harness registry, and executor pools are process-scoped. Only benchmark state, task-workspace connections, and invocation-scoped CLI processes are episode-scoped. A design that starts an umbrella agent server or imports arbitrary plugins per episode would add latency and enlarge the failure surface.
+HTTP pools, the harness registry, admission state, and executor pools are worker-scoped. Only benchmark state, task-workspace connections, and invocation-scoped CLI processes are episode-scoped. A design that starts an umbrella agent server or imports arbitrary plugins per episode would add latency and enlarge the failure surface.
 
 ### 9.3 Backpressure
 
@@ -2326,7 +2207,7 @@ The initial processor uses per-worker admission. Later global quotas can be adde
 This proposal does not require every harness to remain a standalone server.
 
 - The episode processor itself remains a server.
-- A Gym-native harness may implement `run()` in the processor process.
+- A Gym-native harness may implement `responses()` in the processor worker.
 - A CLI harness is typically a program invoked by `SandboxHarnessExecutor` inside a sandbox workspace.
 - A remote harness may remain a service if isolation, language, or scaling requires it.
 
@@ -2375,14 +2256,16 @@ Cold allocation, reconnect-only, and warm execution must be reported separately.
 
 ## 10. Implementation workstreams and gates
 
-The three foundations establish dependency order, but they do not require one team to finish every implementation before another starts. Work proceeds against reviewed contracts with explicit integration gates.
+The two foundations establish dependency order, but they do not require one team to finish every implementation before another starts. Work proceeds against reviewed contracts with explicit integration gates.
 
 ### Workstream A: processor foundation
 
-- implement the base server and lifecycle scopes;
+- add `SimpleServer` lifespan support and implement the base processor lifecycle scopes;
 - define native request and response models;
-- implement pure compatibility translation and legacy projection;
-- test admission, cancellation, and cleanup.
+- implement pure compatibility translation, legacy projection, and HTTP status mapping;
+- implement the dedicated legacy passthrough processor;
+- add worker-local resources-session registration and idempotent cleanup;
+- test admission, cancellation, session identity, and cleanup.
 
 ### Workstream B: native harness extraction
 
@@ -2400,12 +2283,13 @@ The three foundations establish dependency order, but they do not require one te
 - enforce connect/disconnect versus owner stop;
 - preserve install, configuration, CLI run, transcript export, conversion, and diagnostics.
 
-### Workstream D: TaskSet and routing
+### Workstream D: remaining migration classes
 
-- implement strict `TaskData` and TaskSet registry contracts;
-- evolve `EnvironmentManifest`;
-- implement selection, sharding, repeat identity, and native processor dispatch;
-- compile current JSONL and prompt transformations through compatibility loaders.
+- inventory direct-`responses()`, run-only remote, step-based, and locally graded agents;
+- add behavior endpoints only where a remote integration must remain a service;
+- implement a separate concrete processor for step-based environment protocols;
+- move local grading and benchmark-defined submission harvesting into resources servers;
+- migrate GDPVal's task workspace, deliverable collection, execute-only cache, and judge-only flow as one resources-owned environment protocol.
 
 ### Workstream E: compatibility characterization
 
@@ -2419,13 +2303,13 @@ Integration gates are:
 2. the simple-agent model/tool loop runs through `SingleAgentEpisodeProcessor`;
 3. one resources-owned workspace handoff runs real OpenCode plus SWE-bench;
 4. all four OpenCode pairings preserve their verification behavior;
-5. native TaskSet routing drives both worked examples and reproduces legacy projections;
+5. GDPVal demonstrates that a deliverable-producing agent can move harvesting into its environment without adding public artifact payloads;
 6. cancellation and injected failures leave no owned sandbox running;
 7. measured latency and throughput regressions are within an agreed budget.
 
 Turn execution, additional sandbox topology, restart safety, and checkpointing remain separate workstreams behind later contract gates.
 
-The workstreams are parallel but not independent. A owns the episode request, response, and cleanup contracts consumed by B and C. E freezes the legacy projection A must implement. B and C can test executors against the existing Responses API models before the full processor exists. D can implement task parsing and routing against the agreed `EpisodeRequest` while the harnesses are being extracted. Integration branches combine them only at the listed gates.
+The workstreams are parallel but not independent. A owns the episode request, response, session, and cleanup contracts consumed by B and C. E freezes the legacy projection A must implement. B and C can test executors against the existing Responses API models before the full processor exists. D applies those contracts to agents whose current `/run` does more than the simple and OpenCode reference paths. Integration branches combine them only at the listed gates.
 
 Work can begin without native task routing:
 
@@ -2435,7 +2319,6 @@ Work can begin without native task routing:
 - add optional workspace fields to one resources seed response;
 - move current one-agent ordering into `SingleAgentEpisodeProcessor`;
 - deploy that processor under the existing OpenCode agent name;
-- implement TaskSet loaders and routing independently against an in-memory processor stub;
 - compare old and new paths with the same tasks and model stubs.
 
 The first implementation must include tests at the actual failure boundaries:
@@ -2463,14 +2346,14 @@ Tests for shared attempt claims, owner leases, turn ordering, user-simulation vi
 
 This proposal supports the RFC's goal of separating environment concerns from agent execution, but recommends a narrower foundation:
 
-- make each episode processor a concrete server instead of dynamically hosting processor implementations in an umbrella server;
+- host each concrete processor behind an existing `responses_api_agents` deployment instead of adding a fourth server category or dynamically hosting arbitrary processor implementations;
 - put reliable `run` scaffolding in the framework and protocol logic in `process`;
 - keep the base context bounded to execution utilities;
 - configure participant roles on concrete processors;
 - separate harness behavior from deployment and runtime;
 - start with resources-owned task sandboxes;
 - keep `responses()` and `turn()` behavior contracts separate;
-- evolve `EnvironmentManifest` around the resources-server environment and add `TaskSet` after the execution boundary works;
+- leave `task_data.py`, dataset placement, `task_source`, and `EnvironmentManifest` changes to a separate routing proposal;
 - defer generalized recovery, checkpoint, and artifact contracts until their owners and guarantees are concrete.
 
 The architecture remains extensible because the stable seams are small: `EpisodeRequest`, `EpisodeResponse`, `BaseEpisodeProcessor.process`, the existing Responses API behavior contract, and serialized workspace authority. It does not need to pre-model every future protocol to preserve those seams.
@@ -2490,7 +2373,7 @@ The foundational design is validated when:
 - cancellation and failures clean up all episode-owned connections and resources;
 - one real OpenCode plus SWE-bench rollout matches the characterized legacy behavior;
 - `simple_agent` plus `example_single_tool_call` preserves its model/tool loop, trajectory capture, verification, and aggregation behavior;
-- native TaskSet routing drives both representative examples without per-row executable selection;
+- current `agent_ref` and `task_source` routing can drive both representative examples throughout migration;
 - NeMo RL has a documented additive migration path;
 - the extension sequence for user simulation, sandbox-server adoption, restart safety, checkpointing, and retained artifacts is explicit.
 
@@ -2510,7 +2393,7 @@ For each rollout, `OpenCodeSandboxedAgent.run()`:
 6. exports and downloads the transcript, converts it to Responses API output, and optionally captures OpenCode database diagnostics;
 7. calls `/verify`, stops the sandbox after verification returns, and projects the result into the current caller-visible shape.
 
-If `sandbox_handle` is missing, the current code starts a hardcoded SWE-bench sandbox instead of failing. If installation, inference, transcript export, or verification raises before the final stop, the agent can leave the task sandbox running. The target removes this implicit fallback. A deployment configured with `workspace_source="resources_server"` fails when seed returns no workspace. A deployment configured with `workspace_source="executor"` creates and owns the explicitly configured `SandboxSpec`. Each owner destroys the workspace it created.
+If `sandbox_handle` is missing, the current code starts a hardcoded SWE-bench sandbox instead of failing. If installation, inference, transcript export, or verification raises before the final stop, the agent can leave the task sandbox running. The target removes this implicit fallback. A deployment configured with `workspace_source="resources_server"` fails when seed returns no workspace. `workspace_source="executor"` is a different, harness-only placement allowed for response-only verification; it is not a fallback for these four task-workspace environments.
 
 ### A.2 Environment-specific behavior
 
@@ -2551,7 +2434,7 @@ If `sandbox_handle` is missing, the current code starts a hardcoded SWE-bench sa
 - Every successful pairing attempts to stop the task sandbox twice: once in resources verification and once in the agent.
 - Several exceptional paths stop it zero times.
 - Sandbox creation and provider metadata merging are duplicated across agents and resources servers.
-- Each resources server keeps task sandboxes in a process-local dictionary. The current pairings work because these deployments use one worker; routing seed and verify to different workers would lose the session.
+- Each resources server keeps task sandboxes in a worker-local dictionary. The current pairings work because these deployments use one worker; routing seed and verify to different workers would lose the session.
 
 ### A.4 Contract consequences
 

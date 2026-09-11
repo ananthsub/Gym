@@ -2,15 +2,14 @@
 
 Status: orientation, 2026-09-11.
 
-This branch contains the public Gym architecture RFC and a concrete proposal for episode processing, agent harness execution, sandbox ownership, and task routing.
+This branch contains the public Gym architecture RFC and a concrete proposal for episode processing, agent harness execution, and sandbox ownership.
 
-## The three foundations
+## The two foundations
 
-1. **Episode processor.** Every concrete processor is directly deployable as a server. `BaseEpisodeProcessor.run()` supplies validation, admission, cancellation, cleanup, finalization, and compatibility projection. A concrete `process()` method owns its interaction protocol.
-2. **Agent harness and sandbox execution.** `AgentHarness.responses()` preserves Gym's complete Responses API operation. Executors supply typed service clients, remote transport, supervised subprocesses, or a bounded command session. A host-side OpenCode adapter controls the OpenCode CLI in a sandbox; Gym does not install a generic Python guest runner in that sandbox.
-3. **TaskSet and routing.** A strict `TaskSet` yields immutable `TaskData`. Trusted run configuration binds the task set to an environment processor, resources server, participant harnesses, and models. Task rows cannot select executable deployments.
+1. **Episode processor.** Each migrated `responses_api_agents` deployment hosts one concrete processor. `BaseEpisodeProcessor.run()` supplies validation, admission, cancellation, cleanup, finalization, HTTP status, and compatibility projection. A concrete `process()` method owns its interaction protocol.
+2. **Agent harness and sandbox execution.** `AgentHarness.responses()` preserves Gym's complete Responses API operation. `NativeHarnessExecutor`, `RemoteHarnessExecutor`, and `SandboxHarnessExecutor` place that behavior without changing its contract. A host-side OpenCode adapter controls the OpenCode CLI through a bounded `HarnessSandbox`; Gym does not install a generic Python guest runner in that sandbox.
 
-These contracts are reviewed together and implemented in order. Existing JSONL, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available while the native path is introduced.
+Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available during migration. TaskSet and manifest redesign are follow-on routing work, not a third foundation.
 
 ## Three representative deployment paths
 
@@ -24,22 +23,25 @@ The harness config contains only behavior settings such as OpenCode version and 
 
 The proposal also contains complete step-by-step episode flows. Its HTML render provides interactive walkthroughs for the OpenCode and simple-agent paths.
 
+The resources server is the environment and the sole logical owner of any task workspace. An executor-owned sandbox is a different resource: a harness-only runtime for an environment that verifies solely from the returned response. The processor never owns or transfers task state.
+
 ## Contracts defined by the proposal
 
 - episode identity, request, context, result, failure, metrics, diagnostics, and cleanup;
-- concrete processor server setup and single-agent protocol;
+- processor setup within the existing agent-server category and the single-agent protocol;
 - complete Responses harness behavior and the separate future turn behavior;
-- trusted harness deployment and adapter validation;
-- native, remote, and sandbox-command execution;
+- trusted harness-binding and adapter validation;
+- native, remote, and sandbox harness execution;
 - resources-owned workspace handoff and borrower enforcement;
 - typed `SimpleAgentHarnessConfig` and `OpenCodeHarnessConfig` with three complete deployment examples;
 - exact current-to-target behavior mappings for OpenCode and `simple_agent`;
-- task identity, TaskData, TaskSet, environment binding, selection, sharding, repeat expansion, and native dispatch;
-- legacy JSONL, `agent_ref`, `/run`, and NeMo RL projection.
+- worker-local resources sessions, cookie updates, identity checks, and idempotent cleanup;
+- legacy JSONL, `agent_ref`, `/run`, HTTP behavior, and NeMo RL projection;
+- migration classes for existing agents and a concrete GDPVal migration.
 
 ## Capabilities added after the foundations
 
-1. User simulation adds `turn()`, two participant roles, role visibility, and chronological policy attribution.
+1. User simulation adds `turn()`, `assistant` and `simulated_user` roles, role visibility, and chronological trainable-role attribution.
 2. Other multi-agent processors add protocol-specific ordering, concurrency, and termination.
 3. A sandbox server adds operate leases only for providers that cannot reconnect directly.
 4. Restart-safe attempts add shared claims, leases, ownership epochs, and stale-writer fencing.
@@ -50,27 +52,28 @@ The proposal also contains complete step-by-step episode flows. Its HTML render 
 
 ## Review position
 
-- A concrete episode processor is a server; there is no umbrella host that imports a processor implementation selected inside `/run`.
+- A concrete processor runs behind one existing `responses_api_agents` deployment; the proposal adds no fourth server category or umbrella host.
 - The framework supplies a neutral execution envelope, not a universal single-agent loop.
 - `SingleAgentEpisodeProcessor` is a peer of user-simulation and future multi-agent processors, not their superclass.
 - Harness behavior is independent of deployment. The OpenCode adapter remains host-side while its CLI runs in either an executor-owned harness workspace or an environment-owned task workspace.
-- `CommandSession` standardizes the narrow execution operations shared by CLI harnesses without standardizing their installers or transcript formats.
-- Sandbox ownership follows creation. Borrowers disconnect; owners stop.
+- `HarnessSandbox` is the bounded, operate-only subset of `AsyncSandbox` used by CLI harnesses; it is not a generic command-session protocol.
+- The resources server owns task workspaces. A sandbox service may hold a physical provider handle, but resources decides when the task workspace is destroyed. Executors own and stop only separate harness runtimes.
 - `responses()` and `turn()` are separate behavior contracts.
-- `EnvironmentManifest` evolves as the environment metadata authority; TaskSet handles typed task supply and agent-independent routing.
+- Wire compatibility around a migrated processor is distinct from `LegacyAgentRunProcessor`, which temporarily forwards to an unmigrated agent's episode-level `/run`.
+- Current task-data and routing conventions remain in place until a separate proposal addresses them.
 - Reliability, checkpoint, and retained-artifact contracts arrive with their required backing systems.
 
 ## Parallel implementation work
 
 Five workstreams can progress against reviewed contracts:
 
-1. processor server and lifecycle;
+1. processor lifecycle, resources sessions, compatibility projection, and legacy passthrough;
 2. native simple-agent harness extraction and subprocess execution;
 3. OpenCode adapter, executor-owned sandbox support, and environment-workspace borrowing;
-4. TaskSet, manifest evolution, and routing;
+4. migration of step-based and locally graded agents, including GDPVal;
 5. compatibility characterization for Gym and NeMo RL.
 
-The integration gates first prove the processor with the simple-agent path, then prove an executor-owned OpenCode sandbox with a response-only verifier, then prove environment-owned workspaces with OpenCode plus SWE-bench and Terminal Bench, and finally drive the representative paths through native TaskSet routing.
+The integration gates first prove the processor with the simple-agent path, then prove an executor-owned OpenCode harness sandbox with a response-only verifier, then prove environment-owned task workspaces with OpenCode plus SWE-bench and Terminal Bench, and finally prove GDPVal's resources-owned deliverable harvesting.
 
 ## Reading order
 
