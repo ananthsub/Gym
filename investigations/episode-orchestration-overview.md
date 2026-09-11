@@ -2,62 +2,65 @@
 
 Status: orientation, 2026-09-11.
 
-This branch contains the public Gym architecture RFC and a concrete proposal for episode processing, agent harness execution, and sandbox ownership.
+This branch contains the public Gym architecture RFC and a concrete proposal for episode processing, harness-server sessions, and sandbox ownership.
 
 ## The two foundations
 
 1. **Episode processor.** Each migrated `responses_api_agents` deployment hosts one concrete processor. `BaseEpisodeProcessor.run()` supplies validation, admission, cancellation, cleanup, finalization, HTTP status, and compatibility projection. A concrete `process()` method owns its interaction protocol.
-2. **Agent harness and sandbox execution.** `AgentHarness.responses()` preserves Gym's complete Responses API operation. `NativeHarnessExecutor`, `RemoteHarnessExecutor`, and `SandboxHarnessExecutor` place that behavior without changing its contract. A host-side OpenCode adapter controls the OpenCode CLI through a bounded `HarnessSandbox`; Gym does not install a generic Python guest runner in that sandbox.
+2. **Agent harness servers.** Each harness remains an independently deployed `responses_api_agents` server with its own package, virtual environment, process, and `POST /v1/responses` behavior endpoint. The processor opens role-scoped sessions and transports resources and optional sandbox access; it does not import harness implementations or their dependencies.
 
 Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available during migration. TaskSet and manifest redesign are follow-on routing work, not a third foundation.
 
-## Three representative deployment paths
+## Four representative deployment paths
 
-The proposal includes complete merged configuration for three placements:
+The proposal includes complete configuration for three pairings:
 
-1. A Gym-native `simple_agent` runs in a supervised subprocess and uses typed model and resources clients. No task sandbox exists.
-2. OpenCode paired with `reasoning_gym` runs in an executor-owned sandbox because the environment returns no task workspace. The executor's trusted deployment config supplies the image and destroys the sandbox before verification.
-3. OpenCode paired with SWE-bench or Terminal Bench borrows an environment-owned task workspace. The resources server derives the image and sandbox spec, retains the workspace through verification, and destroys it during resources-session cleanup.
+1. A Gym-native `simple_agent` harness server uses the existing model server and scoped resources tools. Its implementation supports no sandbox.
+2. OpenCode paired with `reasoning_gym` receives no sandbox access, so the OpenCode harness server creates and owns its configured sandbox.
+3. OpenCode paired with SWE-bench or Terminal Bench receives `harness_sandbox_access` because verification requires the CLI to modify the same task sandbox. Resources retains ownership and destroys that sandbox during session cleanup.
+4. Terminus-2 keeps its Python loop and Harbor dependencies in its harness-server virtualenv. Its terminal commands use resources-provided `SandboxAccess` when present and otherwise use its configured server-local workspace.
 
-The harness config contains only behavior settings such as OpenCode version and context limits. Sandbox provider, image, resources, connection mode, supervision, and byte limits belong to the environment or executor that owns them. Most users select a shipped environment-and-agent preset; the expanded deployment configuration is for authors, operators, and reviewers.
+The processor config contains service references and protocol limits. Harness-specific configuration contains behavior settings and any sandbox it may create when resources returns no access. Most users select a shipped environment-and-agent preset; the expanded configuration is for authors, operators, and reviewers.
 
 The proposal also contains complete step-by-step episode flows. Its HTML render provides interactive walkthroughs for the OpenCode and simple-agent paths.
 
-The resources server is the environment and the sole logical owner of any task workspace. An executor-owned sandbox is a different resource: a harness-only runtime for an environment that verifies solely from the returned response. The processor never owns or transfers task state.
+The resources server is the environment. Its state may be public internet, remote services, process-local data, or private sandboxes. `harness_sandbox_access` exposes only a sandbox that a harness may or must operate; it does not list every environment resource or say where harness code runs. Resources cannot implicitly inspect a separate sandbox created by the harness.
+
+A multi-agent processor opens one harness-server session per role or agent instance. If seed returns one access, the protocol may share it through independent borrower connections. If seed returns no access, each harness follows its own configuration. Agents can communicate through shared task state, resources tools, remote services, or the public internet. A protocol requiring several distinct resources-owned sandboxes defines an extended seed contract because their names and sharing rules are protocol semantics.
 
 ## Contracts defined by the proposal
 
 - episode identity, request, context, result, failure, metrics, diagnostics, and cleanup;
 - processor setup within the existing agent-server category and the single-agent protocol;
-- complete Responses harness behavior and the separate future turn behavior;
-- trusted harness-binding and adapter validation;
-- native, remote, and sandbox harness execution;
-- resources-owned workspace handoff and borrower enforcement;
-- typed `SimpleAgentHarnessConfig` and `OpenCodeHarnessConfig` with three complete deployment examples;
+- the existing `/v1/responses` behavior endpoint and a separate future turn endpoint;
+- harness-session open, behavior invocation, and idempotent close;
+- trusted harness-server bindings and implementation-owned capability validation;
+- optional resources-provided sandbox access, harness-created sandboxes, direct and sandbox-server connections, and borrower enforcement;
+- typed simple-agent and OpenCode harness-server configuration with three complete deployment examples;
 - exact current-to-target behavior mappings for OpenCode and `simple_agent`;
-- worker-local resources sessions, cookie updates, identity checks, and idempotent cleanup;
+- role-scoped resources-session access, cookie compatibility, identity checks, and idempotent cleanup;
 - legacy JSONL, `agent_ref`, `/run`, HTTP behavior, and NeMo RL projection;
-- migration classes for existing agents and a concrete GDPVal migration.
+- migration classes for existing agents, GDPVal's ordinary path, and its separate control-mode requirements.
 
 ## Capabilities added after the foundations
 
 1. User simulation adds `turn()`, `assistant` and `simulated_user` roles, role visibility, and chronological trainable-role attribution.
 2. Other multi-agent processors add protocol-specific ordering, concurrency, and termination.
-3. A sandbox server adds operate leases only for providers that cannot reconnect directly.
+3. A sandbox server becomes a declared resources-server dependency only when an exposed sandbox uses a provider that cannot reconnect directly.
 4. Restart-safe attempts add shared claims, leases, ownership epochs, and stale-writer fencing.
 5. Checkpoint restoration adds coordinated snapshots across every state owner.
 6. Caller-retained artifacts add durable storage and lifecycle policy.
 
-`EnvironmentProfile`, a generic participant scheduler, a combined run/turn request, generic CLI installation plans, and generic artifact payloads are not needed for these foundations.
+A generic participant scheduler, a combined run/turn request, generic CLI installation plans, and generic artifact payloads are not needed for these foundations.
 
 ## Review position
 
 - A concrete processor runs behind one existing `responses_api_agents` deployment; the proposal adds no fourth server category or umbrella host.
 - The framework supplies a neutral execution envelope, not a universal single-agent loop.
 - `SingleAgentEpisodeProcessor` is a peer of user-simulation and future multi-agent processors, not their superclass.
-- Harness behavior is independent of deployment. The OpenCode adapter remains host-side while its CLI runs in either an executor-owned harness workspace or an environment-owned task workspace.
+- Harness behavior remains behind a dependency-isolated server. The OpenCode control loop runs in that service while its CLI operates either a harness-owned or resources-owned sandbox.
 - `HarnessSandbox` is the bounded, operate-only subset of `AsyncSandbox` used by CLI harnesses; it is not a generic command-session protocol.
-- The resources server owns task workspaces. A sandbox service may hold a physical provider handle, but resources decides when the task workspace is destroyed. Executors own and stop only separate harness runtimes.
+- Resources owns every sandbox it creates. A sandbox service may hold a physical provider handle, but resources decides when its task sandbox is destroyed. A harness server owns and stops only a sandbox it creates.
 - `responses()` and `turn()` are separate behavior contracts.
 - Wire compatibility around a migrated processor is distinct from `LegacyAgentRunProcessor`, which temporarily forwards to an unmigrated agent's episode-level `/run`.
 - Current task-data and routing conventions remain in place until a separate proposal addresses them.
@@ -68,17 +71,17 @@ The resources server is the environment and the sole logical owner of any task w
 Five workstreams can progress against reviewed contracts:
 
 1. processor lifecycle, resources sessions, compatibility projection, and legacy passthrough;
-2. native simple-agent harness extraction and subprocess execution;
-3. OpenCode adapter, executor-owned sandbox support, and environment-workspace borrowing;
-4. migration of step-based and locally graded agents, including GDPVal;
+2. simple-agent harness-server extraction, session lifecycle, and scoped resources access;
+3. OpenCode harness server, harness-created sandbox, direct sandbox access, and sandbox-server access;
+4. migration of step-based and locally graded agents, including GDPVal's preparation and cached-judging flows;
 5. compatibility characterization for Gym and NeMo RL.
 
-The integration gates first prove the processor with the simple-agent path, then prove an executor-owned OpenCode harness sandbox with a response-only verifier, then prove environment-owned task workspaces with OpenCode plus SWE-bench and Terminal Bench, and finally prove GDPVal's resources-owned deliverable harvesting.
+The integration gates first prove `simple_agent` through a behavior-only harness server, then harness-created OpenCode with a response-only verifier, then resources-provided access with OpenCode plus SWE-bench and Terminal Bench, and finally GDPVal's resources-owned deliverable harvesting and separate control modes.
 
 ## Reading order
 
 1. `episode-orchestration-design.md` for the normative proposal and worked episode flows.
-2. `episode-orchestration-design.html` for the standalone interactive walkthrough.
+2. `episode-orchestration-design.html` for the interactive diagram companion.
 3. `rfcs/gym-architecture.md` for the public RFC being reviewed.
 
 ## File map
