@@ -957,6 +957,20 @@ class HarnessDeploymentConfig(BaseModel):
     executor: HarnessExecutorConfig
 
 
+class SimpleAgentHarnessConfig(BaseModel):
+    max_steps: PositiveInt | None = None
+
+
+class OpenCodeHarnessConfig(BaseModel):
+    opencode_version: str
+    remote_opencode_install_script_path: str | None = None
+    remote_opencode_binary_path: str | None = None
+    opencode_config: dict[str, JsonValue] = Field(default_factory=dict)
+    opencode_max_context_window: PositiveInt
+    debug: bool = False
+    transcript_required: bool = True
+
+
 @dataclass(frozen=True)
 class RegisteredHarnessAdapter:
     ref: HarnessAdapterRef
@@ -1017,28 +1031,73 @@ Future deployment descriptors may be a discriminated union:
 
 Each form needs its own validation. A raw import string is not the common denominator. The common denominator is `AgentHarness.responses()` behavior plus an executor that can materialize it.
 
-An initial deployment can be expressed without a Python class path in user configuration:
+### 5.4.1 Complete deployment examples
+
+Most users should select a shipped environment-and-agent combination rather than write executor configuration. The following examples show the complete processor-and-harness portion of the merged configuration so that ownership and placement can be reviewed. Existing named model-server declarations are unchanged. Existing resources-server declarations are unchanged except that sandbox-owning environments must expose a typed workspace handoff from `seed_session`.
+
+#### Gym-native `simple_agent` in a supervised subprocess
+
+`reasoning_gym` does not need a task workspace. The processor opens the resources session, and the subprocess executor runs the trusted Python harness with behavior-only access to the model and resources clients.
 
 ```yaml
 episode_processors:
-  opencode_swebench:
+  reasoning_gym_simple_agent:
     resources_server:
       type: resources_servers
-      name: swebench
+      name: reasoning_gym
     policy:
       harness:
-        name: opencode_in_task_workspace
+        name: simple_agent_subprocess
       model_server:
         type: responses_api_models
         name: policy_model
     max_concurrent_episodes: 32
     queue_timeout_seconds: 300
     shutdown_grace_seconds: 60
+    skip_verification: false
+    skip_verification_reward: 0.0
     compatibility:
-      expected_agent_name: opencode_sandboxed_agent
+      expected_agent_name: reasoning_gym_simple_agent
 
 harness_deployments:
-  opencode_in_task_workspace:
+  simple_agent_subprocess:
+    adapter:
+      key: simple_agent
+      version: "1"
+    config:
+      max_steps: null
+    executor:
+      kind: native
+      isolation: subprocess
+      max_response_bytes: 8388608
+```
+
+The harness declaration contains only `SimpleAgentHarnessConfig`. The resources and model bindings remain on the processor. Subprocess supervision, cancellation, client transport, and result bounds belong to the native executor.
+
+#### OpenCode in an executor-owned sandbox with `reasoning_gym`
+
+`reasoning_gym` verifies the returned response and does not prepare or inspect a task machine. Its seed response therefore contains no workspace. The executor creates a generic OpenCode runtime sandbox from trusted deployment configuration, runs the CLI, copies the `NeMoGymResponse` out, and stops the sandbox before the processor asks `reasoning_gym` to verify.
+
+```yaml
+episode_processors:
+  reasoning_gym_opencode:
+    resources_server:
+      type: resources_servers
+      name: reasoning_gym
+    policy:
+      harness:
+        name: opencode_executor_workspace
+      model_server:
+        type: responses_api_models
+        name: policy_model
+    max_concurrent_episodes: 32
+    queue_timeout_seconds: 300
+    shutdown_grace_seconds: 60
+    skip_verification: false
+    skip_verification_reward: 0.0
+
+harness_deployments:
+  opencode_executor_workspace:
     adapter:
       key: opencode
       version: "1"
@@ -1048,36 +1107,135 @@ harness_deployments:
       remote_opencode_binary_path: null
       opencode_max_context_window: 262144
       opencode_config: {}
+      debug: false
       transcript_required: true
     executor:
       kind: sandbox
-      workspace_source: resources_server
-      accepted_connection_kinds: [direct]
+      workspace_source: executor
+      sandbox_provider: sandbox
+      sandbox_spec:
+        image: approved-opencode-runtime@sha256:...
+        workdir: /workspace
+        ttl_s: 18000
+        ready_timeout_s: 1200
+        resources:
+          cpu: 2
+          memory_mib: 8192
+          disk_gib: 30
+        provider_options: {}
+        metadata:
+          harness: opencode
       command_timeout_seconds: 10800
       max_response_bytes: 8388608
 ```
 
-The example shows the two lookup boundaries. The processor selects the named harness deployment for its `policy` role. The harness deployment selects an allowlisted adapter and sandbox executor. The task still cannot select either one.
+The sandbox provider and complete `SandboxSpec` are executor configuration because the executor creates and destroys this harness workspace. They are not fields on `OpenCodeHarnessConfig`. This pairing is valid only because verification depends on the returned response rather than on machine state left in that sandbox.
 
-For an environment that does not return a workspace, the trusted harness deployment instead configures executor ownership:
+#### OpenCode in a task workspace owned by SWE-bench or Terminal Bench
+
+SWE-bench and Terminal Bench derive the task image and complete `SandboxSpec` from trusted environment configuration and task data. The resources server creates the workspace during seed, returns an operate-only connection, keeps the workspace alive through verification, and destroys it during resources-session cleanup. The OpenCode deployment names no provider, image, or sandbox resources.
 
 ```yaml
-executor:
-  kind: sandbox
-  workspace_source: executor
-  sandbox_provider: sandbox
-  sandbox_spec:
-    image: approved-opencode-runtime@sha256:...
-    workdir: /workspace
-    ttl_s: 18000
-    resources:
-      cpu: 2
-      memory_mib: 8192
-  command_timeout_seconds: 10800
-  max_response_bytes: 8388608
+episode_processors:
+  opencode_swebench:
+    resources_server:
+      type: resources_servers
+      name: swebench_resources_server
+    policy:
+      harness:
+        name: opencode_resources_workspace
+      model_server:
+        type: responses_api_models
+        name: policy_model
+    max_concurrent_episodes: 32
+    queue_timeout_seconds: 300
+    shutdown_grace_seconds: 60
+    skip_verification: false
+    skip_verification_reward: 0.0
+    compatibility:
+      expected_agent_name: opencode_sandboxed_agent
+
+harness_deployments:
+  opencode_resources_workspace:
+    adapter:
+      key: opencode
+      version: "1"
+    config:
+      opencode_version: 1.17.11
+      remote_opencode_install_script_path: null
+      remote_opencode_binary_path: null
+      opencode_max_context_window: 262144
+      opencode_config: {}
+      debug: false
+      transcript_required: true
+    executor:
+      kind: sandbox
+      workspace_source: resources_server
+      accepted_connection_kinds: [direct, sandbox_server]
+      command_timeout_seconds: 10800
+      max_response_bytes: 8388608
+
+# Existing environment-owned settings remain with the resources server.
+swebench_resources_server:
+  resources_servers:
+    swebench:
+      entrypoint: app.py
+      evaluation_timeout: 1800
+      sandbox_provider: sandbox
+      sandbox_config:
+        ttl_s: 18000
+        ready_timeout_s: 1200
+        resources:
+          cpu: 2
+          memory_mib: 16384
+          disk_gib: 30
+        provider_options: {}
+        metadata:
+          benchmark: swebench-verified
 ```
 
-This replaces the current agent-side `sandbox_provider`, `sandbox_config`, and hardcoded image fallback with one validated deployment contract.
+For Terminal Bench, the processor changes only `resources_server.name`. The same `opencode_resources_workspace` deployment is reusable:
+
+```yaml
+episode_processors:
+  opencode_terminal_bench:
+    resources_server:
+      type: resources_servers
+      name: terminal_bench_2_1_resources_server
+    policy:
+      harness:
+        name: opencode_resources_workspace
+      model_server:
+        type: responses_api_models
+        name: policy_model
+    max_concurrent_episodes: 32
+    queue_timeout_seconds: 300
+    shutdown_grace_seconds: 60
+    skip_verification: false
+    skip_verification_reward: 0.0
+    compatibility:
+      expected_agent_name: opencode_sandboxed_agent
+
+terminal_bench_2_1_resources_server:
+  resources_servers:
+    terminal_bench_2_1:
+      entrypoint: app.py
+      evaluation_timeout: 1800
+      sandbox_provider: sandbox
+      sandbox_config:
+        ttl_s: 18000
+        ready_timeout_s: 1200
+        derive_cpu_env: true
+        resources:
+          cpu: 4
+          memory_mib: 16384
+          disk_gib: 30
+        provider_options: {}
+        metadata:
+          benchmark: terminal-bench-2.1
+```
+
+These examples expose the resolved configuration for review, not the expected quick-start surface. A shipped environment-and-agent preset should supply the processor, harness deployment, executor, limits, and compatibility block. A normal user should select that preset and a model. An agent author supplies the typed harness configuration and static requirements. An environment author supplies sandbox configuration only when that environment creates the task workspace.
 
 ### 5.5 Seed-session request and response
 
@@ -1578,7 +1736,7 @@ The current configuration maps into the target as follows:
 
 - Processor configuration owns the resources-server binding, model binding, deadline, admission, and legacy projection.
 - Resources configuration owns `sandbox_provider`, `sandbox_config`, the task image, task preparation, verifier configuration, and final destruction of the task workspace. The agent no longer carries a second provider choice.
-- `OpenCodeHarnessConfig` retains `opencode_version`, staged installer and binary locations during migration, `opencode_config`, `opencode_max_context_window`, debug behavior, transcript policy, and OpenCode-specific command timeouts.
+- `OpenCodeHarnessConfig` retains `opencode_version`, staged installer and binary locations during migration, `opencode_config`, `opencode_max_context_window`, debug behavior, and transcript policy. Execution deadlines and command-output bounds belong to the executor.
 - `SandboxHarnessExecutor` owns reconnect, workdir enforcement, deadline and cancellation propagation, command-output bounds, transcript download bounds, and borrower disconnect.
 - `OpenCodeHarness` owns query extraction, optional SWE image compatibility setup, OpenCode installation or binary discovery, model-provider configuration, permission configuration, `opencode run`, session export, transcript parsing, usage conversion, Responses output construction, and OpenCode diagnostics.
 
