@@ -508,7 +508,7 @@ class ParticipantOutcome(BaseModel):
     capture_rollout_id: str
 ```
 
-`ParticipantOutcome` records each visible actor and the harness that produced its output. A full-loop participant sets `response`. A turn-capable participant appends every activation to `turn_responses` and sets `response` to its final activation for compatibility. Non-primary participants use separate capture identifiers so simulated-user or critic calls do not enter NeMo RL's primary token-capture manifest.
+`ParticipantOutcome` records each visible actor and the harness that produced its output. A full-loop participant sets `response`. A turn-capable participant appends every activation to `turn_responses` and sets `response` to its final activation as a participant-local summary. That final activation is not, by itself, the NeMo RL compatibility projection: a trainable multi-turn trajectory must preserve every primary activation and its intervening visible context. Non-primary participants use separate capture identifiers so simulated-user or critic calls do not enter the primary token-capture manifest.
 
 ### `CleanupFailure` and `EpisodeFailure`
 
@@ -620,7 +620,9 @@ class HarnessResult(BaseModel):
     artifacts: tuple[ArtifactPayload | DurableArtifactRef, ...] = ()
 ```
 
-`HarnessResult` returns every output produced by one harness invocation without process-local side channels. `response` is the model-facing trajectory. `observations` carries structured execution evidence such as OpenCode invocations, tool calls, and the agent-sandbox outcome. `diagnostics` contains bounded JSON values such as command completion, exit status, and export availability. It must not contain credentials or sandbox-local paths that become invalid after cleanup. `artifacts` carries a bounded transcript export directly or a durable reference created before the sandbox is destroyed.
+`HarnessResult` returns every output produced by one completed harness invocation without process-local side channels. `response` is the model-facing trajectory. `observations` carries structured execution evidence such as OpenCode invocations, tool calls, and the agent-sandbox outcome. `diagnostics` contains bounded JSON values such as command completion, exit status, and export availability. It must not contain credentials or sandbox-local paths that become invalid after cleanup. `artifacts` carries a bounded transcript export directly or a durable reference created before the sandbox is destroyed.
+
+`HarnessResult` does not carry an episode failure class. When an executor cannot produce a valid result, the processor classifies the error as `EpisodeFailure` and chooses terminal or retryable transport behavior. Missing optional observations or transcript artifacts are represented as observation gaps and diagnostics; they are not automatically infrastructure failures. A deployment that requires an artifact must declare that requirement during preflight so failure to preserve it can invalidate the invocation.
 
 The current OpenCode agent stores stdout, stderr, export status, and observations in `_sandbox_id_to_run_result`, then merges them after `/verify`. The extracted harness returns those values directly. Partial-rollout continuation remains an optional capability and is not part of this base result.
 
@@ -807,7 +809,7 @@ class StandardEpisodeProcessor:
 
 Its dependencies are constructed once in each processor worker from merged Gym configuration. They do not travel in an episode request. Its implementation owns request validation, attempt fencing, workspace resolution, harness invocation, turn progression, verification ordering, artifact validation, cancellation-safe cleanup, and result construction. The processor cooperates with optional host-level checkpoint parking at safe boundaries, but it does not coordinate distributed checkpoint publication.
 
-Custom processors are trusted Gym implementations, not arbitrary plugins. They must pass the same conformance tests. A protocol cannot prevent a malicious implementation from issuing effects before fencing or omitting cleanup.
+Custom processors are trusted Gym implementations, not arbitrary plugins. They must pass the same conformance tests. A protocol cannot prevent a malicious implementation from issuing effects before fencing or omitting cleanup. The first implementation registers only `StandardEpisodeProcessor`. Adding another processor requires a separate plugin contract for trusted registration, construction, injected services, shared fencing state, validation, verification ordering, and cleanup conformance; satisfying the one-method protocol alone is insufficient.
 
 `EpisodeProcessorServer` provides the deployment boundary around this object:
 
@@ -934,6 +936,10 @@ In `resources_server` mode, the response must include an operate workspace owned
 Seed is transactional from the processor's perspective. If the resources server starts B or connects to a provided B and then fails before returning `EpisodeSeedSessionResponse`, it must disconnect or stop every resource acquired by that seed attempt before returning the error. The processor cannot clean up a resources-owned handle or session it never received. It still stops any processor-owned B that it supplied.
 
 `initial_turn` is present only for an environment-directed episode. This avoids a separate observation endpoint.
+
+Seed is also idempotent per `(rollout_id, attempt)`. A duplicate with the same validated input returns the committed response and workspace. A conflicting duplicate is rejected. An older attempt is rejected before side effects. A newer attempt atomically fences the older attempt before replacing its state, then retires the older resources without allowing stale verify or cleanup to affect the new attempt. The implementation must define an atomic claim operation, the response to an in-progress duplicate, and committed-response storage; “stop or reuse” is not a safe concurrency contract.
+
+The authenticated session cookie selects resources-server state. `rollout_id` and `attempt` fence operations inside that session; replacing the dictionary key does not make state process-shared. A reconnect descriptor recovers sandbox access but not benchmark state, PTYs, cleanup records, or attempt ownership. The initial migration therefore requires one resources-server worker or guaranteed request affinity. Running several workers or replicas requires a process-shared session and attempt store for the complete resources-server state.
 
 ### `CleanupSessionRequest` and `CleanupSessionResponse`
 
@@ -1079,6 +1085,8 @@ Existing remote agent servers also select their resources server from deployment
 The harness object itself does not receive this config or own lifecycle. The processor's execution adapter interprets it.
 
 `guest_bundle_uri` and its digest identify a versioned harness payload. `entrypoint` is an argument vector executed inside the sandbox as `guest_user`. Credential files use mode `0600`, are owned by that user, and contain only rollout-scoped access to declared model and resources-server endpoints. `max_result_bytes` bounds the result file before parsing. `setup_command` is a transitional development mechanism. Production should use a prepared image or immutable bundle rather than installing from a checkout for every rollout.
+
+Prepared images are the first production path. Immutable bundles remain a packaging direction until Gym defines a manifest, archive and extraction layout, entrypoint resolution, operating-system and architecture compatibility, authenticated retrieval, and cache behavior. The current OpenCode default downloads and installs OpenCode for every invocation; removing that behavior is migration work, not a current guarantee.
 
 ## Owner and operator access have different behavior
 
@@ -1563,9 +1571,9 @@ The final helper return is a sorted in-memory batch after every rollout future h
 
 ## Compatibility translation is explicit
 
-Source datasets may omit `agent_ref` today by supplying `agent_name` in rollout-collection configuration. The current collector stamps that selection into its materialized request. This is the first migration step because it makes stored task data agent-agnostic without changing HTTP routing.
+Source datasets used by Gym's rollout collector may omit `agent_ref` today when rollout-collection configuration supplies `agent_name`; that collector stamps the selection into its materialized request. NeMo RL is different: its current low-level path reads `agent_ref.name` before calling `run_examples`, so an unmodified NeMo RL job must receive a legacy materialized view that already contains `agent_ref`.
 
-An existing named agent deployment can then become an `EpisodeProcessorServer` compatibility deployment without changing its host, port, `/run` route, `num_workers`, or collector routing. Its request translator:
+An existing named agent deployment can host `StandardEpisodeProcessor` behind its current configuration category, host, port, `/run` route, worker count, and collector routing. This is an agent-server compatibility shell while pinned clients do not know the `episode_processors` server type. Its request translator:
 
 1. resolves the configured harness profile from legacy `agent_ref`, `agent_name`, or `task_source`;
 2. resolves the existing `ResourcesServerRef` and model binding from deployment configuration;
@@ -1595,7 +1603,9 @@ legacy_routes:
 
 The processor must not call the old agent's `/run`, because that endpoint already seeds and verifies an episode. Before a harness is extracted, the collector continues routing that execution through the legacy agent-server path. After extraction, the existing deployment hosts the compatibility processor and invokes the harness behavior locally or in a sandbox.
 
-The target collector constructs `EpisodeRequest` directly from agent-agnostic task data and run configuration, then routes through `EpisodeProcessorRef`. The response compatibility projection preserves `agent_ref`, `response`, `terminal_response_id`, scalar reward, reward components, verifier metrics, and `instance_config`. It maps `EpisodeResult(status="failed"|"cancelled")` to `_ng_failure_class` and sets `_ng_failure_terminal=true` for terminal failures so the current collector writes them to the failure sidecar rather than the success JSONL.
+The target collector constructs `EpisodeRequest` directly from agent-agnostic task data and run configuration, then routes through `EpisodeProcessorRef`. The legacy response projection preserves the exact fields consumed by the pinned caller: top-level `response.output`, scalar reward, reward components, verifier metrics, completion accounting, and `instance_config.mask_sample`. `agent_ref` is injected before dispatch for current NeMo RL and echoed where current result consumers expect it. New rollout and terminal identifiers remain internal until the caller understands them. The adapter maps `EpisodeResult(status="failed"|"cancelled")` to the current failure sentinels and sidecar behavior rather than exposing a new transport contract.
+
+This adapter accepts only one participant and one full trainable trajectory. It does not expose multi-participant episodes to old callers. It also preserves the version-pinned token behavior instead of assuming that NeMo RL consumes `_ng_rollout_id` or `terminal_response_id`.
 
 ## Baseline reliability restarts unfinished episodes
 
@@ -1628,25 +1638,22 @@ A turn-capable episode has a processor-visible boundary after `/apply_turn` comm
 
 A resources server may expose save and restore hooks even when a particular harness is restart-only. Capability negotiation determines whether the complete episode can continue or must restart from input. A sandbox descriptor used for cross-process access is not checkpoint state.
 
-## NeMo RL observes the same training contract
+## NeMo RL has a bounded compatibility path before native integration
 
-Source task data does not contain `agent_ref`. Run configuration supplies `execution_name` and selects the primary harness. While NeMo RL consumes the existing shape, the collector derives `agent_ref.name` from `execution_name` before dispatch and the processor echoes it in the compatibility result. `_ng_rollout_id` remains the primary token-capture identity.
+The current NeMo RL integration is not natively compatible with the target episode contract. It reads `agent_ref.name` from input rows before dispatch. It does not consume the proposed rollout or terminal response identifiers. Its low-level `run_examples` path leaves token-capture finalization to the caller, and current masking reads `instance_config.mask_sample`.
 
-NeMo RL continues to receive:
+The compatibility shell therefore preserves the old contract rather than asking old NeMo RL code to interpret the new one:
 
-- a synchronously derived compatibility `agent_ref`;
-- `response.output`;
-- `terminal_response_id`;
-- scalar `reward`;
-- optional `reward_components`;
-- `instance_config.mask_sample`;
-- completion accounting.
+1. Canonical task data may be agent-agnostic, but a legacy training materialization injects `agent_ref` before NeMo RL sees each row.
+2. The existing named agent deployment remains the route and hosts the processor internally.
+3. A legacy request becomes one internal policy participant with `ScheduleSpec(kind="single")`.
+4. The compatibility result contains the complete primary trainable trajectory in top-level `response.output`, retains existing token data and completion accounting, and places `mask_sample` under `instance_config`.
+5. New attempt, terminal-attribution, and failure details remain internal or are translated to existing sentinels.
+6. Multi-participant episodes require the native integration and are rejected on the compatibility route.
 
-When reward components are present, scalar reward equals their sum.
+Native NeMo RL integration must then add explicit execution routing, unique rollout identity, terminal model-call attribution, capture finalization ownership, retryable failure transport, masking, and primary-trajectory projection. For a turn-scheduled episode, projection includes every primary activation in chronological order with intervening visible context and action masks; selecting only the final `ParticipantOutcome.response` would lose trainable policy actions. Non-primary participants use separate capture identifiers and never contribute policy action tokens.
 
-In a multi-participant episode, only the primary participant uses `_ng_rollout_id`. Every non-primary participant receives a separate capture identifier recorded in `ParticipantOutcome`. This keeps simulated-user or critic calls out of the primary receipt manifest without requiring a NeMo RL manifest-format change.
-
-Token-capture enablement is resolved before dispatch from the execution profile and primary model binding, not by looking up the processor endpoint as an agent. Target metric aggregation groups by `execution_name` for reporting and calls the selected `ResourcesServerRef` directly. During migration, an existing named processor compatibility deployment may continue exposing `/aggregate_metrics` as a proxy so current collectors remain unchanged.
+When reward components are present, scalar reward equals their sum. Token-capture enablement is resolved before dispatch from the execution profile and primary model binding, not by looking up the processor endpoint as an agent. Target metric aggregation groups by `execution_name` for reporting and calls the selected `ResourcesServerRef` directly. During migration, the named compatibility deployment may continue exposing `/aggregate_metrics` as a proxy so current collectors remain unchanged.
 
 ## Configuration selects processor, harness, and sandbox ownership separately
 
@@ -1885,7 +1892,8 @@ Deterministic contract tests cover:
 - local-process and sandboxed Gym-native agents producing equivalent response contracts;
 - guest construction disabling recursive sandbox placement;
 - primary versus non-primary token capture;
-- NeMo RL result compatibility.
+- legacy NeMo RL input materialization, result shape, masking, token data, and failure sentinels;
+- native NeMo RL rollout identity, terminal attribution, capture finalization, and multi-turn primary projection.
 
 Targeted real rollouts cover:
 
@@ -1906,7 +1914,7 @@ Full benchmark baselines gate making processor routing the default and retiring 
 
 ## Work starts according to dependencies
 
-1. Make new source datasets agent-agnostic. Continue selecting existing agent endpoints through `agent_name` or `agent_map`, and preserve the current materialized request.
+1. Make new canonical source datasets agent-agnostic. Continue selecting existing agent endpoints through `agent_name` or `agent_map`, preserve the current materialized request for Gym collection, and generate a view with `agent_ref` before unmodified NeMo RL consumes it.
 2. Extract common harness behavior behind `AgentHarness`, as demonstrated by PR #3199. Keep every existing server, endpoint, worker count, and concurrency limit.
 3. Consolidate common `/run` lifecycle code behind `StandardEpisodeProcessor` inside existing named deployments. Preserve current collector routing and result schemas.
 4. Add a supervised local-process executor. Compare it with the current in-server behavior under identical load.
@@ -1921,9 +1929,10 @@ Full benchmark baselines gate making processor routing the default and retiring 
 13. Migrate Terminal Bench 2.1 and prove live-state verification in the original task sandbox.
 14. Fix authentication, authorization, revocation, persistence, destination validation, borrower fencing, and required guest operations in PR #2085. Add it as the fallback for non-connectable providers.
 15. Add `EpisodeProcessorRef` and the `episode_processors` server type behind opt-in collector routing. Existing named compatibility deployments remain valid.
-16. Add the turn protocol and one policy-plus-simulated-user episode.
-17. Qualify optional #3024 parking and resources save/restore independently of the base processor rollout.
-18. Run topology canaries, scaling tests, benchmark baselines, and NeMo RL qualification before changing routing defaults or consolidating processor deployments.
+16. Update NeMo RL for native execution routing, rollout and terminal identity, capture finalization, masking, failure transport, and complete primary-trajectory projection.
+17. Add the turn protocol and one policy-plus-simulated-user episode after the native training projection is defined.
+18. Qualify optional #3024 parking and resources save/restore independently of the base processor rollout.
+19. Run topology canaries, scaling tests, benchmark baselines, and NeMo RL qualification before changing routing defaults or consolidating processor deployments.
 
 Harness extraction, source-dataset cleanup, prepared guest images, characterization tests, and NeMo RL contract tests can proceed before processor routing or sandbox handoff changes.
 
@@ -1944,6 +1953,7 @@ Harness extraction, source-dataset cleanup, prepared guest images, characterizat
 - Gym-native agents use the same behavior implementation for local and sandbox placement.
 - A compatible command-line harness runs inside the environment task workspace by default.
 - OpenCode returns its response, observations, diagnostics, and exported artifacts through `HarnessResult` instead of process-local agent-server maps.
+- `HarnessResult` represents a completed invocation; `EpisodeFailure` carries failure classification.
 - A separate harness sandbox is created only when requirements force separation.
 - `/seed_session` explicitly declares who creates the task workspace and returns operate-only access.
 - Native `ConnectableProvider` access bypasses the sandbox server.
@@ -1955,6 +1965,7 @@ Harness extraction, source-dataset cleanup, prepared guest images, characterizat
 - Terminal Bench 2.1 retains verification in the same live task sandbox.
 - `EpisodeProcessor` remains an implementation-free behavior protocol.
 - `StandardEpisodeProcessor` owns the concrete standard lifecycle.
+- Existing NeMo RL jobs use a single-participant compatibility route with pre-dispatch `agent_ref` materialization and the legacy result shape until native integration lands.
 - `AgentHarness` owns a complete behavior loop.
 - `TurnAgent` exists only for externally scheduled visible participants.
 - Submission extraction and metric aggregation remain with the resources server.

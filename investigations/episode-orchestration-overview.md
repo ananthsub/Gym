@@ -36,13 +36,13 @@ This branch holds the public RFC, the target architecture, and a concrete analys
 - Where the harness runs. The RFC runs it inside the processor interpreter and accepts the loss of fault isolation. The design runs trusted Python in a supervised worker and untrusted CLIs in a sandbox guest, and keeps the processor's event loop free of harness code.
 - What the harness receives. The RFC hands it the live `AsyncSandbox`. The design hands it a working directory and endpoints, and keeps every descriptor in trusted host code.
 - Who owns sandboxes. The RFC assigns all of them to the processor. The design assigns each to its creator, which is what pooled tool sandboxes and benchmark-created workspaces already require.
-- The routing key. The RFC moves it to the processor. The design keeps source task rows agent-agnostic, selects the processor and harness from run configuration, and emits compatibility `agent_ref.name` only in materialized requests and results while NeMo RL requires it.
+- The routing key. The RFC moves it to the processor. The design keeps canonical task rows agent-agnostic and selects the processor and harness from run configuration. Unmodified NeMo RL receives a legacy materialized view with `agent_ref` before dispatch and the existing result shape until native integration lands.
 - The sandbox server. The RFC gates its Phase 3 on it. The design uses native reconnect for OpenSandbox and E2B and reserves the server for providers that cannot reconnect.
 - Multiple agents. The RFC defers them. The design models participants and turns from the first request.
 
 ## Reading order
 
-1. This guide, then `design-questions.md`, which answers each design question in a paragraph with the decision, the reason, and the evidence.
+1. This guide, then `design-questions.md`, which records supported decisions, pushes back on incorrect premises, and identifies the choices that remain open.
 2. Read `opencode-sandboxed-pairings.md` for the current execution path and the differences among SWE-bench, DeepSWE, SWE-bench Pro, and Terminal Bench 2.1.
 3. In the design: "One episode in plain terms", "The current OpenCode benchmark stack is the migration baseline", and "Contract summary". These sections explain the proposal and its concrete migration target.
 4. In the design: "The agent execution decision changes one boundary" compares the agent-server and pure-harness paths. Its expandable call reference contains the complete rollout sequence. Every named type is defined in the "Complete definitions" sections and can be read on demand.
@@ -57,4 +57,4 @@ This branch holds the public RFC, the target architecture, and a concrete analys
 | `investigations/episode-orchestration-design.html` | Rendered page of the design with SVG diagrams | Generated from the Markdown |
 | `investigations/opencode-sandboxed-pairings.md` | Current OpenCode and resources-server execution analysis | This branch; analysis |
 | `investigations/episode-orchestration-overview.md` | This guide | This branch |
-| `investigations/design-questions.md` | Direct answers to the design questions | This branch |
+| `investigations/design-questions.md` | Design decisions, pushback, and open questions | This branch; reference |

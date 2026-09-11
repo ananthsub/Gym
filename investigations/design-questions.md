@@ -1,91 +1,122 @@
-# Episode orchestration design questions, answered
+# Episode orchestration design decisions and open questions
 
-Status: reference, 2026-09-10. Each answer states the decision, the reason, and where the evidence is. The full contracts are in `episode-orchestration-design.md`; the code facts are in `opencode-sandboxed-pairings.md`.
+Status: reference, 2026-09-10. This page answers questions where the code and proposal support a decision, pushes back on incorrect premises, and leaves implementation-critical choices open. `episode-orchestration-design.md` is the normative proposal; `opencode-sandboxed-pairings.md` records current behavior.
 
 ## How is a sandbox represented when it crosses from one server to another
 
-As one small JSON record. It holds the provider's name as written in the config, the pointer the provider returns from `serialize()`, the working directory, who created the sandbox, and what the sandbox can do. It never holds the live `AsyncSandbox` object and never a bare id string.
+Decision: use one small `SandboxWorkspace` JSON record. It names the configured provider, carries the provider's reconnect descriptor and working directory, records lifecycle ownership, and describes attested capabilities. It never carries a live `AsyncSandbox` object and is never just a bare sandbox id.
 
-Reason: today swebench and terminal_bench_2_1 return a bare id, deepswe returns an id plus a full descriptor, swebench_pro returns an id plus a terminal session id, and the OpenCode agent reads only the id. Reconnecting from a bare id loses the working directory and works only for providers that can rebuild a handle from an id. deepswe's descriptor already carries what the record needs.
+Pushback: `owner` records who must clean up; it is not an authorization grant. The descriptor is sensitive operate authority, and the host-side borrowed `AsyncSandbox` enforces `owns_lifecycle=False`. Owner reconnection uses a separate owner descriptor held in trusted state. Native provider descriptors do not all enforce `scope`, so the design must not rely on a caller honoring the `owner` string.
+
+Current evidence is narrower than the original answer implied. SWE-bench and Terminal Bench 2.1 return a bare id. DeepSWE returns an id plus a reconnect descriptor that is typically `{sandbox_id, workdir}`, not a complete `SandboxWorkspace`. SWE-bench Pro also returns a PTY session id. OpenCode consumes only the bare id.
 
 ## Who creates a sandbox, and who destroys it
 
-Whoever calls `start()` owns it and is the only one who calls `stop()`. Every other server connects, works, and disconnects. Creation follows who knows the image:
+Decision: whoever calls `start()` is the sole lifecycle owner and the only component that calls `stop()`. A borrower connects with operate authority and disconnects without ending the physical sandbox.
 
-- The resources server creates the task sandbox when the benchmark supplies the image. This is swebench, deepswe, terminal_bench_2_1, and swebench_pro today, and it stays that way.
-- The processor creates a sandbox for the agent when the benchmark has none and the agent still needs isolation, for example a CLI agent on a math benchmark.
-- The resources server creates and keeps sandboxes its own tools use, as litmus and ns_tools do, and the agent never sees them.
-- The verifier creates a fresh sandbox for grading when the benchmark grades a patch, and destroys it itself.
+Image selection does not determine ownership. The resources server can create task sandbox B and return an operate descriptor. Alternatively, it can return a `SandboxSpec` so the processor creates B and seed borrows it. A dedicated harness sandbox A is processor-owned. Sandboxes used only by resources-server tools remain resources-server-owned. When patch verification requires fresh sandbox V, the resources server creates, uses, and destroys V.
 
-Reason: every current pairing stops the agent's sandbox twice, once in verify and once in the agent. It only works because OpenSandbox ignores a stop for a sandbox that is already gone.
+For the first OpenCode migration, SWE-bench, DeepSWE, SWE-bench Pro, and Terminal Bench 2.1 continue creating B in their resources servers. On the normal successful path today, both the resources server and OpenCode attempt to stop B. OpenSandbox and E2B tolerate a repeated close. Several exceptional paths instead skip agent-side cleanup entirely. The target removes both the double-stop and the leak.
 
 ## What does the agent program receive, and what must it never receive
 
-It receives a working directory, the addresses it may call, and credential files with rollout-scoped access. It never receives the sandbox record, a provider credential, verifier data, or another participant's input.
+Decision: a sandbox guest receives its working directory, approved endpoint addresses, and only rollout-scoped credential files needed to call those endpoints. It does not receive a provider credential, a reconnect descriptor, verifier-only data, or another participant's private input.
 
-Reason: a program running inside a sandbox is the untrusted part of the system. If it holds the record it can reconnect as the owner and destroy the box, or reach the provider's control plane. The placement branch on `upstream/ffrujeri/sandboxes` shows the risk: its worker payload is the whole agent config, including provider API keys.
+Pushback: possessing `SandboxWorkspace.owner` would not itself let a guest reconnect as owner. The real boundary is that the guest has no need for provider control-plane authority at all. The trusted executor retains the operate descriptor and invokes sandbox operations on the guest's behalf.
 
 ## Do Gym's own Python agents need a sandbox
 
-No. simple_agent and its copies run a Python loop and call tools over HTTP. The dangerous work happens inside environment tools, which run in a sandbox the resources server owns. The agent itself runs in a helper process outside the orchestrator's event loop, so a crash or a blocking call in one agent cannot stall every rollout on that server.
+Pushback: ownership by Gym and implementation language are not security boundaries. A trusted Python harness such as `simple_agent` that only calls approved HTTP tools can run in a supervised local worker. A Python harness that executes model-directed shell commands, loads untrusted plugins, or otherwise requires isolation must use a sandbox. `HarnessRequirements` and deployment trust policy decide placement.
+
+The helper process is target behavior, not current behavior. It isolates crashes and blocking calls from the processor event loop without implying that all Python agents are safe.
 
 ## Where does a CLI agent run
 
-Inside a sandbox, always, in production. The preferred place is the task sandbox the benchmark created, because the task files are already there and the verifier grades that box. If the benchmark has no sandbox, the processor creates one from the agent's provider and image. A missing sandbox fails before any model call. There is no fallback to running the CLI on the host.
+Decision: a CLI agent runs inside a sandbox in production. There is no host-execution fallback.
 
-Reason: OpenCode, Claude Code, Codex, Pi, and OpenClaw run third-party programs that read files, spawn processes, and reach the network. Today `opencode_sandboxed_agent` already runs OpenCode inside the benchmark's sandbox, so the placement is proven; only the ownership around it is wrong.
+For the referenced SWE-style benchmarks, the preferred placement is compatible task sandbox B because the repository is already there and verification extracts or grades its state. If B cannot satisfy the harness runtime requirements, the processor must either use a compatible dedicated sandbox A with environment-mediated tools or reject the pairing during preflight. If the benchmark has no task sandbox, the processor can create A. Missing or incompatible isolation fails before any model call.
 
 ## Agent as an HTTP server versus a Python class: what changes
 
-Nothing outside an agent calls its `/v1/responses` today. The only callers are the agent calling itself and `remote_agent`, which calls a user's own service. So the agent's server is a private hop, and the question is what the process boundary buys.
+Pushback: `/v1/responses` is not exclusively private. Normal rollout orchestration calls `/run`, and many agents then self-call `/v1/responses`, but repository client utilities also call that route directly. OpenCode's `/run` currently calls its `responses()` method directly rather than taking an internal HTTP hop.
 
-Keeping the server gives each agent its own Python environment, crash isolation, and the existing start-up and health machinery, at the cost of a network hop, a queue, and a timeout layer per rollout, plus routes that exist only so a rollout id survives the agent calling itself. It also cannot reach into a sandbox, which is why every sandboxed agent became a second directory.
+An agent server can reach a sandbox; `opencode_sandboxed_agent` proves that by reconnecting, executing, exporting, and downloading through `AsyncSandbox`. The problem is that the generic agent contract has no workspace handoff or ownership contract, so specialized agents duplicate benchmark lifecycle state and cleanup.
 
-Making the agent a Python class lets the processor decide where it runs. For a CLI agent, the sandbox is the process boundary and a stronger one. The processor writes a request file into the sandbox, starts the agent program there as a normal user, and reads a result file back. There is no HTTP server inside the sandbox. The agent still calls the model server directly, so token capture is unchanged. For a Python agent, the helper process replaces the server as the isolation boundary. A user's own HTTP service stays supported through one executor that calls its `/v1/responses` and keeps seeding and grading in the processor.
+Decision: the default Gym-native boundary is a Python `AgentHarness` executed by the processor through a supervised local worker or sandbox executor. A CLI guest uses the sandbox as its isolation boundary and does not require an HTTP server inside the sandbox. Existing independently deployed agents remain supported through `RemoteAgentHarnessExecutor`. Direct `/v1/responses` clients remain a compatibility surface rather than evidence that every harness must be an episode-owning server.
 
-## Where does the resources server keep the sandbox between seed and verify
+## Where does the resources server keep state between seed and verify
 
-In a table keyed by rollout id and attempt, not by session cookie. A resources server that creates sandboxes either runs with one worker, or stores its own reconnect descriptor so any worker can find the sandbox again. The base class owns this table; a server that creates a sandbox calls one helper in seed and returns the record.
+Open question: changing the key from a session cookie to `(rollout_id, attempt)` does not make process-local state available to another worker or replica. A reconnect descriptor recovers sandbox access but not benchmark state, PTYs, attempt ownership, cleanup records, or other session data.
 
-Reason: all four servers keep a dictionary in one process keyed by the session cookie. None of them sets `num_workers`, and that is the only reason the dictionary works. swebench and terminal_bench_2_1 crash with a key error if verify lands on a different worker; deepswe returns reward zero; swebench_pro reports an extraction error.
+The initial migration requires one resources-server worker, or an explicitly guaranteed affinity mechanism, and keeps the authenticated session cookie as the state selector. `rollout_id` and `attempt` fence operations within that selected session. Supporting several workers or replicas requires a process-shared session and attempt store for the complete resources-server state. The proposal does not claim that a new base-class dictionary solves this.
 
 ## What happens when the same rollout is seeded twice
 
-Seed for an existing rollout and attempt stops or reuses the previous sandbox before creating a new one. deepswe and swebench_pro already do this. swebench and terminal_bench_2_1 overwrite their entry and leak the old sandbox until its time limit.
+Decision: seed is idempotent per `(rollout_id, attempt)`. A duplicate with the same validated input returns the committed seed response and workspace. A conflicting duplicate is rejected. An older attempt is rejected before side effects. A newer attempt atomically fences the older attempt before replacing its state, then retires the older resources without allowing stale verify or cleanup to affect the new attempt.
+
+Open question: the process-shared claim, compare-and-swap, in-progress duplicate behavior, and committed-response storage still need an implementation contract. “Stop or reuse” is not sufficient because concurrent duplicate requests could stop an active sandbox or create two different sessions.
 
 ## How does the verifier get the agent's work
 
-The resources server extracts it, before the owner destroys the sandbox, in one of two shapes that stay exactly as they are per benchmark:
+Decision: the resources server extracts the work before its owner destroys task sandbox B:
 
-- Copy a patch out and grade it in a fresh sandbox: swebench, deepswe, swebench_pro. Each keeps its own extraction rule. swebench must add `git add -N` so new files count and must handle binary changes; deepswe requires committed work; swebench_pro filters files that were untracked in the pristine image.
-- Grade the live sandbox: terminal_bench_2_1 uploads the tests into the agent's sandbox and runs them there. A fresh sandbox would discard the state being graded.
+- SWE-bench, DeepSWE, and SWE-bench Pro copy a benchmark-specific patch from B and grade it in fresh sandbox V. SWE-bench must be fixed to include new files and canonical binary changes. DeepSWE keeps its commit-aware extraction. SWE-bench Pro keeps its pristine-untracked filtering.
+- Terminal Bench 2.1 uploads tests and grades the live B because a fresh sandbox would discard the machine state under test.
 
-Whatever is graded leaves the sandbox as a bounded payload or a durable reference, never as a path, because the sandbox may be gone when the caller reads the result.
+Anything returned beyond the sandbox boundary is a bounded payload or durable artifact reference, not a path that becomes invalid after cleanup.
 
 ## Who installs the CLI, and where does the binary come from
 
-The harness owns the command that runs the tool. The executor owns getting the tool into the sandbox: from the image when it is prebuilt, from a digest-verified bundle when it must vary independently of the image, or from a downloaded installer in development only. Production rollouts do not download OpenCode per task. Today the agent's one shell command does the install and the run together; splitting them is what makes a prebuilt image possible.
+Decision: the harness defines the versioned behavior and entrypoint. The executor materializes the approved runtime into the sandbox. Production should use a prepared image or an immutable digest-verified bundle. Downloaded installers remain a development-only transition.
+
+Pushback: current OpenCode defaults download and install OpenCode on every invocation. “Production does not download per task” is a target policy, not current behavior. The bundle manifest, extraction layout, operating-system and architecture constraints, authenticated retrieval, and cache behavior remain to be specified before immutable bundles are a complete executable contract.
 
 ## What happens when the harness fails for reasons that are not the model's fault
 
-The result carries a failure class, and the rollout goes to the failure sidecar instead of counting as reward zero. An install failure, a model server the sandbox could not reach, or a lost transcript are infrastructure failures. Today none of these set a class; they come back as a well-formed rollout with reward zero, and the only sign is a diagnostic field nothing reads.
+Pushback: `HarnessResult` does not carry a failure class. It represents a completed harness invocation with a response, observations, diagnostics, and artifacts. If an executor cannot produce that result, the processor classifies the failure as `EpisodeFailure` and chooses terminal result or retryable transport behavior.
+
+Execution failure, invalid harness output, observation loss, and verification failure are distinct. A lost optional transcript is an `ObservationGap`, not automatically an infrastructure failure or reward zero. If a deployment declares a transcript mandatory, failure to preserve it can invalidate the invocation. Installation or endpoint reachability failures can be infrastructure failures, while invalid deployment configuration is terminal.
+
+Current behavior is mixed: OpenCode converts some execution and export failures into degraded responses and still verifies the sandbox, while uncaught `/run` failures can already receive collector failure classes and enter the optional sidecar. The new contract must preserve that evidence while making retryability explicit.
 
 ## Is a sandbox server needed
 
-Not for any benchmark in the repository. OpenSandbox and E2B can rebuild a handle in another process from the descriptor. Docker, Apptainer, and the local provider can be given same-host reconnect by id, name, or path, which is a small provider change. The sandbox server from PR 2085 is the adapter for sharing a host-local provider across hosts, which nothing in the repository does today. Configuration selects it explicitly; it is never inserted in front of a provider that can reconnect on its own.
+Decision: select this from provider capability and deployment topology, not from benchmark name. OpenSandbox and E2B currently implement Gym's cross-process reconnect contract. Docker, Apptainer, and local do not; the existing `ConnectableProvider` contract says such providers require a sandbox server when another process must operate them.
 
-## How does routing work, and what do NeMo RL and verl still see
+Pushback: calling host-local reconnect “a small provider change” is unsupported. Reconnection, owner/borrower authority, client cleanup, process death, and host affinity require provider-specific design. PR #2085 remains the conditional adapter for a non-connectable provider or an enforced cross-process lease. It is not inserted in front of providers that already satisfy the required contract.
 
-Source datasets carry no agent. Run configuration selects the processor deployment, the resources server, the participants and their harnesses, and the models. The collector materializes that into the request. For as long as trainers read `agent_ref.name`, the collector derives it from the execution name before dispatch and the processor echoes it on the result. NeMo RL main reads the resolved `agent_ref` after `run_examples` and keys token capture by `_ng_rollout_id`; the verl recipe raises if a dataset row lacks `agent_ref`. Both keep working, and upstream's collate change that strips `agent_ref` from rows is the one break that needs a repair independent of this design.
+The referenced OpenCode pairings can begin with directly connectable OpenSandbox or E2B. That does not prove that no repository benchmark needs a sandbox server under another provider or topology.
+
+## How does routing work, and what does NeMo RL see during migration
+
+Decision: new canonical task datasets are agent-agnostic. Run configuration selects the processor, resources server, participants, harnesses, and models.
+
+Pushback: current NeMo RL cannot consume such a row directly. It reads `agent_ref.name` before calling low-level `run_examples`, and that path does not apply rollout-collection routing. NeMo RL also does not currently consume the proposal's `_ng_rollout_id` or `terminal_response_id` contracts.
+
+The backward-compatible path is therefore explicit and single-participant:
+
+1. Materialize a legacy training view that injects `agent_ref` before NeMo RL receives the row.
+2. Host `StandardEpisodeProcessor` behind the existing named agent deployment and `/run` configuration shape while old Gym clients do not know the new server type.
+3. Translate the legacy request into one internal participant and project the result back to the exact legacy response, reward, token, completion, and `instance_config.mask_sample` shape.
+4. Preserve current token-capture behavior rather than requiring new identifiers from old NeMo RL.
+5. Do not expose multi-participant episodes through this adapter.
+
+Native NeMo RL support is follow-up work. It must define rollout identity, terminal model-call attribution, capture finalization ownership, failure transport, masking, and primary-trajectory projection before the legacy view can be removed.
 
 ## Is the processor base class an interface
 
-Yes. `EpisodeProcessor` is a protocol with one `process` method and no inherited body. `StandardEpisodeProcessor` is the concrete lifecycle, and a benchmark that owns its whole interaction implements the protocol directly. The public RFC gives the base class a concrete `run()` with no hooks; this design does not.
+Decision: `EpisodeProcessor` is a protocol with one `process()` method and no inherited lifecycle body. `StandardEpisodeProcessor` is the concrete standard lifecycle.
+
+Open question: a custom implementation cannot be accepted merely because it satisfies one method signature. Registration must be deployment-selected and trusted, and construction, injected services, shared fencing state, validation, verification ordering, and cleanup conformance must be specified. Until that plugin contract exists, the first implementation uses `StandardEpisodeProcessor`.
 
 ## Does the design support more than one agent in an episode
 
-Yes, from the first request. Every request carries participants, each with a role, a harness, and its own model bindings, plus a primary participant and a schedule. A single-agent episode is one participant. A policy plus a simulated user is two. The primary participant's trajectory is what NeMo RL trains on; the others keep separate capture identifiers so their tokens stay out of the policy update.
+Decision: the request, schedule, and verification contracts represent multiple participants from the start. Each participant has a role, harness, model bindings, and capture identity.
+
+Open question: representation is not yet a complete NeMo RL training projection. Selecting only the final primary response would drop earlier primary actions. Native integration must order every primary activation, include the intervening visible context, assign response and model-call identities, and construct action masks without admitting non-primary tokens into the policy update.
 
 ## What can start now
 
-Making new datasets agent-agnostic, extracting harness behavior behind the Python contract, moving the shared `/run` lifecycle into the standard processor inside existing deployments, adding the supervised helper process, extending seed with the optional workspace record, and giving `AsyncSandbox` a borrowed connection that cannot stop the sandbox. None of these change routing, and the first real target is OpenCode with swebench, then deepswe, swebench_pro, and terminal_bench_2_1.
+Work can begin on changes that preserve the legacy wire contract: extract harness behavior behind the Python interface, move shared `/run` lifecycle into `StandardEpisodeProcessor` inside existing named agent deployments, add supervised local workers, extend seed with optional workspace fields, and add borrowed `AsyncSandbox` connections that cannot stop the physical sandbox.
+
+The first real target remains OpenCode with SWE-bench, followed by DeepSWE, SWE-bench Pro, and Terminal Bench 2.1. Agent-agnostic canonical data can be introduced at the same time only if existing NeMo RL jobs receive a legacy materialized view with `agent_ref`. Multi-worker resources state, immutable bundle packaging, custom processors, native NeMo RL identity and capture, and multi-participant training projection remain separate qualification work.
