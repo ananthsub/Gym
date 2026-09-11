@@ -119,13 +119,12 @@ An episode is the complete interaction for one task attempt. It can contain one 
 
 The distinction is easy to miss in the initial single-agent protocol because one episode produces one primary-agent rollout. It matters for user simulation: the episode contains both assistant and simulated-user activity, while the trainable rollout contains only the configured trainable participant's model calls with the visible context that preceded them. A compatibility adapter must not pretend a multi-participant episode is one legacy rollout if doing so would discard actions or mix another participant's tokens into training.
 
-Identity also has several scopes:
+Several identifiers have distinct scopes:
 
-- `rollout_id` correlates the logical sample across services.
-- `attempt` distinguishes physical retries of that sample.
-- the resources session identifies benchmark state held between seed, tools, verify, and cleanup;
-- sandbox identity identifies one physical runtime;
-- future participant and capture identities distinguish model-call streams inside a multi-participant episode.
+- `EpisodeKey` keeps the logical sample's `rollout_id` together with the physical retry number in `attempt`.
+- the resources session id selects benchmark state held between seed, tools, verify, and cleanup;
+- the sandbox id selects one physical runtime;
+- future participant roles and capture ids distinguish model-call streams inside a multi-participant episode.
 
 Correlation is not authority. A rollout id does not authorize a resources mutation, and an owner label does not grant lifecycle credentials. Authentication, session binding, and provider capabilities enforce those boundaries.
 
@@ -233,7 +232,7 @@ The base class is intentionally narrower than `SingleAgentEpisodeProcessor`. Use
 
 ### 4.2 Episode data model
 
-The foundation introduces three serialized episode models and one in-memory context. The aliases and support records used by those models are defined here so the contract can be read without searching later sections.
+The foundation introduces serialized episode contracts and one in-memory context. Their aliases and support records are defined here so the contract can be read without searching later sections.
 
 ```python
 type JsonValue = (
@@ -253,9 +252,13 @@ class TaskIdentity(BaseModel):
     revision: str | None = None
 
 
-class EpisodeRequest(BaseModel):
+class EpisodeKey(BaseModel):
     rollout_id: str
-    attempt: NonNegativeInt = 0
+    attempt: NonNegativeInt
+
+
+class EpisodeRequest(BaseModel):
+    episode_key: EpisodeKey
     task: TaskIdentity
     responses_create_params: NeMoGymResponseCreateParamsNonStreaming
     resources_data: dict[str, JsonValue]
@@ -294,8 +297,7 @@ class EpisodeDiagnostic(BaseModel):
 
 
 class EpisodeResponse(BaseModel):
-    rollout_id: str
-    attempt: NonNegativeInt
+    episode_key: EpisodeKey
     task: TaskIdentity
     status: Literal["completed", "failed"]
     response: NeMoGymResponse | None = None
@@ -356,8 +358,7 @@ class EpisodeObservationCollectorFactory(Protocol):
     def open(
         self,
         *,
-        rollout_id: str,
-        attempt: NonNegativeInt,
+        episode_key: EpisodeKey,
     ) -> EpisodeObservationCollector: ...
 
 
@@ -374,14 +375,16 @@ class EpisodeContext:
 
 All proposal Pydantic models use strict validation and reject unknown fields unless a field is explicitly defined as benchmark- or provider-owned JSON. Wire compatibility is versioned by the configured processor and harness-server protocol versions rather than by accepting undeclared fields.
 
+`EpisodeKey` keeps `rollout_id` and `attempt` together everywhere one physical execution is referenced. Its `attempt` field is required; compatibility translation supplies zero when a legacy caller does not provide one.
+
 `EpisodeRequest` and `EpisodeResponse` are complete concrete wire contracts, not classes that clients extend. The `Base` prefix would imply that a processor accepts arbitrary subclasses and their additional fields, which conflicts with strict request validation and makes the server contract depend on client-side Python inheritance. If a future protocol cannot be represented by these contracts, Gym must introduce a versioned replacement or an explicit discriminated union at the server boundary. It must not accept unknown fields through client subclassing. `BaseEpisodeProcessor` keeps the prefix because processor implementations are expected to subclass it.
 
 `EpisodeExecutionResult` and `ProjectedHTTPResponse` are processor-internal records, not wire models. The first carries compatibility-only verifier data until projection; the second makes HTTP status and headers part of the route implementation rather than prose around a dictionary that FastAPI would return as 200.
 
 `EpisodeRequest` carries one routed task. It does not contain model or participant deployment, participant graphs, sandbox owner handles, or checkpoint state.
 
-- `rollout_id` is stable across retries of the same logical sample.
-- `attempt` identifies the physical execution. The compatibility path uses zero unless the existing caller supplies an attempt field.
+- `episode_key.rollout_id` is stable across retries of the same logical sample.
+- `episode_key.attempt` identifies the physical execution. The compatibility path uses zero unless the existing caller supplies an attempt field.
 - `task.source` records the current trusted task source or a compatibility source name; `task_id` identifies the task within that source; `revision` is present only when the source provides a stable content revision.
 - `responses_create_params` is the complete agent-visible Responses request, including input, tools, tool choice, and generation options after allowed run-level overrides.
 - `resources_data` contains benchmark-owned seed and verification JSON. The selected resources server validates its benchmark-specific schema before seed side effects.
@@ -390,7 +393,7 @@ All proposal Pydantic models use strict validation and reject unknown fields unl
 
 `EpisodeFailure.kind` identifies the boundary that failed. `invalid_request` is never retryable. `infrastructure` covers unavailable services or runtimes. `harness` means the configured behavior could not produce a valid result. `verification` means no trustworthy reward was produced. `deadline` means the episode exhausted its time budget. `internal` hides an unexpected implementation error behind a non-sensitive message. The component that has enough evidence to classify the failure sets `retryable`; callers do not infer retryability from the text.
 
-`CleanupFailure` reports which owner failed to release which resource. Its message is bounded and safe for the caller. Internal exception details remain in structured logs keyed by rollout and attempt.
+`CleanupFailure` reports which owner failed to release which resource. Its message is bounded and safe for the caller. Internal exception details remain in structured logs keyed by `EpisodeKey`.
 
 `EpisodeMetrics` keeps processor and harness timing separate from verifier metrics so equal keys cannot silently overwrite one another. Harness-specific trajectory data remains in Gym's observability records rather than a parallel metrics payload. The compatibility projector places known verifier and completion metrics back in their legacy locations.
 
@@ -398,7 +401,7 @@ When `reward_components` is non-empty, `reward` equals the finite sum of those c
 
 `AgentObservationBundle` remains Gym's typed observation contract. `EpisodeDiagnostic` contains a severity, stable code, and caller-safe message. Neither can contain a live object, unbounded transcript, credential, or sandbox-local path that becomes invalid during cleanup.
 
-`EpisodeRequest` and `EpisodeResponse` are the matching wire models for the processor's `/run` route. `EpisodeResponse` carries identity and one terminal status. A completed response requires `response` and `reward` and forbids `failure`. A failed response requires `failure`; response and reward may be absent. `finalize_response` enforces those conditions and runs Gym's existing token-capture delivery step before serialization. `mask_sample` survives in the native response and is projected to `instance_config.mask_sample` for current NeMo RL. Cleanup failures remain visible even when protocol work completed successfully because failure to destroy a sandbox is operationally important but does not retroactively change a valid reward.
+`EpisodeRequest` and `EpisodeResponse` are the matching wire models for the processor's `/run` route. `EpisodeResponse` carries the same episode key and one terminal status. A completed response requires `response` and `reward` and forbids `failure`. A failed response requires `failure`; response and reward may be absent. `finalize_response` enforces those conditions and runs Gym's existing token-capture delivery step before serialization. `mask_sample` survives in the native response and is projected to `instance_config.mask_sample` for current NeMo RL. Cleanup failures remain visible even when protocol work completed successfully because failure to destroy a sandbox is operationally important but does not retroactively change a valid reward.
 
 Rollout ids, failure messages, observation kinds, diagnostic codes, and metric keys are non-empty and bounded. Reward and numeric metric values must be finite. These validation limits are constants of the processor protocol version, not per-request knobs.
 
@@ -407,7 +410,7 @@ Rollout ids, failure messages, observation kinds, diagnostic codes, and metric k
 - `deadline` is the caller deadline after server-side clamping.
 - `cancellation` lets downstream work observe shutdown, timeout, or caller cancellation.
 - `resources` owns the processor's resources-session authority and exposes seed, delegation, verify, and cleanup operations for that session.
-- `observations` allocates role-scoped capture identities and assembles the existing `AgentObservationBundle`.
+- `observations` allocates role-scoped capture ids and assembles the existing `AgentObservationBundle`.
 - `cleanup` registers named asynchronous cleanup operations and executes them in reverse acquisition order.
 
 `EpisodeCleanupRegistry` is backed by an `AsyncExitStack`, but it wraps each callback so one cleanup failure does not prevent later callbacks from running. Each failure becomes a `CleanupFailure` with an owner and operation. Protocol code registers cleanup when it acquires a resource; it does not manually unwind the whole episode.
@@ -530,7 +533,7 @@ It performs no network calls, sandbox creation, session mutation, or logging sid
 - rejects immediately when shutdown has begun;
 - releases the slot in `finally`.
 
-Admission is local capacity control. It is not a distributed claim on `(rollout_id, attempt)` and does not make retries restart-safe.
+Admission is local capacity control. It is not a distributed claim on an `EpisodeKey` and does not make retries restart-safe.
 
 Its public interface is intentionally one operation:
 
@@ -564,8 +567,7 @@ async def episode_scope(
             request.deadline,
         )
         resources = await self._resources_sessions.open(
-            rollout_id=request.rollout_id,
-            attempt=request.attempt,
+            episode_key=request.episode_key,
             initial_cookies=initial_cookies,
         )
         cleanup.add(
@@ -578,8 +580,7 @@ async def episode_scope(
             cancellation=cancellation,
             resources=resources,
             observations=self._observation_collectors.open(
-                rollout_id=request.rollout_id,
-                attempt=request.attempt,
+                episode_key=request.episode_key,
             ),
             cleanup=cleanup,
         )
@@ -592,7 +593,7 @@ async def episode_scope(
 
 The processor remains the `/run` server and receives the caller's request cookies. It copies them into `ResourcesSessionClient` before calling seed. A native resources server then delegates role-scoped access to each harness session. A compatibility adapter may pass a cookie snapshot and merge updates serially, but raw caller cookies are not the target multi-agent authority.
 
-Cleanup callbacks added later by `process` run before the resources session closes. Every callback runs even if another callback fails. Cleanup failures are logged with rollout and attempt identity and attached to the response. If a cleanup failure means the returned response or reward cannot be trusted, `finalize_response` changes the terminal status to `failed`; otherwise it preserves the completed response and reports the cleanup failure separately.
+Cleanup callbacks added later by `process` run before the resources session closes. Every callback runs even if another callback fails. Cleanup failures are logged with the episode key and attached to the response. If a cleanup failure means the returned response or reward cannot be trusted, `finalize_response` changes the terminal status to `failed`; otherwise it preserves the completed response and reports the cleanup failure separately.
 
 If scope setup fails after acquiring any resource, `finally` closes its partially built registry before re-raising. `BaseEpisodeProcessor.run()` classifies exceptions from scope entry, protocol execution, and scope exit through the same `failure_response` path. Python cancellation continues to propagate after the scope performs cleanup.
 
@@ -619,7 +620,7 @@ def finalize_response(
     ...
 ```
 
-- validates that result identity matches the request;
+- validates that the result episode key matches the request;
 - enforces the completed-versus-failed field conditions;
 - normalizes failure and metrics fields;
 - attaches framework timing and termination metadata;
@@ -779,8 +780,7 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor):
     ) -> EpisodeExecutionResult:
         seed = await context.resources.seed_session(
             EpisodeSeedSessionRequest(
-                rollout_id=request.rollout_id,
-                attempt=request.attempt,
+                episode_key=request.episode_key,
                 task_data=request.resources_data,
             )
         )
@@ -792,8 +792,7 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor):
         harness = await self._harness_sessions.open(
             server=self.config.agent,
             request=HarnessSessionOpenRequest(
-                rollout_id=request.rollout_id,
-                attempt=request.attempt,
+                episode_key=request.episode_key,
                 role="agent",
                 capture_id=capture_id,
                 deadline=request.deadline,
@@ -824,8 +823,7 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor):
         else:
             verification = await context.resources.verify(
                 EpisodeVerifyRequest(
-                    rollout_id=request.rollout_id,
-                    attempt=request.attempt,
+                    episode_key=request.episode_key,
                     responses_create_params=request.responses_create_params,
                     resources_data=request.resources_data,
                     response=agent_response,
@@ -834,8 +832,7 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor):
 
         return EpisodeExecutionResult(
             response=EpisodeResponse(
-                rollout_id=request.rollout_id,
-                attempt=request.attempt,
+                episode_key=request.episode_key,
                 task=request.task,
                 status="completed",
                 response=agent_response,
@@ -910,8 +907,7 @@ The Responses API body cannot carry episode authority, resources credentials, or
 
 ```python
 class HarnessSessionOpenRequest(BaseModel):
-    rollout_id: str
-    attempt: NonNegativeInt
+    episode_key: EpisodeKey
     role: str
     capture_id: str
     deadline: datetime | None
@@ -949,7 +945,7 @@ class HarnessSessionFactory(Protocol):
 
 A Gym-hosted harness server exposes `POST /v1/harness_sessions`, accepts the returned capability in an internal authenticated header on `POST /v1/responses`, and exposes idempotent `DELETE /v1/harness_sessions/{session_id}`. The session token is never placed in the Responses body, logs, observations, or caller-visible result. The `/v1/responses` request and response remain the existing Gym models; session context travels through authenticated service metadata rather than a wrapper around the Responses body.
 
-The processor allocates `capture_id` through Gym's existing rollout observability path. Model calls and bounded harness or sandbox observations are emitted under that identity and retrieved after `/v1/responses`; they are not wrapped in a second Responses result type. The processor publishes the resulting `AgentObservationBundle` in `EpisodeResponse.ng_agent_observations`.
+The processor allocates `capture_id` through Gym's existing rollout observability path. Model calls and bounded harness or sandbox observations are emitted under that id and retrieved after `/v1/responses`; they are not wrapped in a second Responses result type. The processor publishes the resulting `AgentObservationBundle` in `EpisodeResponse.ng_agent_observations`.
 
 `HarnessSessionClient.close()` means “finish this harness session.” If the harness server created a sandbox or managed session, it releases that state. If resources supplied `sandbox_access`, close disconnects the harness's borrower connection but cannot destroy the task sandbox. The processor registers close immediately after opening each session and invokes it on success, failure, timeout, and cancellation.
 
@@ -997,8 +993,7 @@ class SandboxAccess(BaseModel):
 
 
 class EpisodeSeedSessionRequest(BaseModel):
-    rollout_id: str
-    attempt: NonNegativeInt
+    episode_key: EpisodeKey
     task_data: dict[str, JsonValue]
 
 
@@ -1090,8 +1085,7 @@ The native target is a scoped service capability:
 ```python
 class ResourcesSessionAccess(BaseModel):
     resources_server: ResourcesServerRef
-    rollout_id: str
-    attempt: NonNegativeInt
+    episode_key: EpisodeKey
     role: str
     allowed_tools: frozenset[str]
     access_token: str
@@ -1103,8 +1097,7 @@ The processor-facing session preserves typed seed, verification, and cleanup ope
 
 ```python
 class EpisodeVerifyRequest(BaseModel):
-    rollout_id: str
-    attempt: NonNegativeInt
+    episode_key: EpisodeKey
     responses_create_params: NeMoGymResponseCreateParamsNonStreaming
     resources_data: dict[str, JsonValue]
     response: NeMoGymResponse
@@ -1154,8 +1147,7 @@ class ResourcesSessionFactory(Protocol):
     async def open(
         self,
         *,
-        rollout_id: str,
-        attempt: NonNegativeInt,
+        episode_key: EpisodeKey,
         initial_cookies: dict[str, str],
     ) -> ResourcesSessionClient:
         ...
@@ -1163,7 +1155,7 @@ class ResourcesSessionFactory(Protocol):
 
 During compatibility migration, a harness adapter may receive the current resources cookies and return every `Set-Cookie` update from `/v1/responses`. `ResourcesSessionClient` merges updates under a lock before the next tool or verification call. That path preserves current agents but is not the multi-agent concurrency contract.
 
-Model-server cookies remain harness-local. A Gym harness server uses its configured `ModelServerRef` and the rollout-prefixed `/v1/responses` path derived from the harness session's capture identity.
+Model-server cookies remain harness-local. A Gym harness server uses its configured `ModelServerRef` and the rollout-prefixed `/v1/responses` path derived from the harness session's capture id.
 
 ### 5.7 A multi-agent processor binds roles to harness servers
 
@@ -1582,7 +1574,7 @@ GDPVal is in the last category and confirms why task-sandbox ownership belongs t
 
 GDPVal can migrate without a public artifact contract:
 
-1. GDPVal resources seed creates the task sandbox with its required image, materializes reference inputs, records rollout and attempt identity, and returns `harness_sandbox_access`.
+1. GDPVal resources seed creates the task sandbox with its required image, materializes reference inputs, records the `EpisodeKey`, and returns `harness_sandbox_access`.
 2. The processor passes that access while opening the Stirrup harness-server session. Harness behavior produces the assistant response and task files but does not choose a host persistence directory.
 3. GDPVal resources verification harvests benchmark-defined deliverables while the owned sandbox is alive, persists them in its private cache when configured, and passes the resulting resources-local directory to its existing rubric or comparison implementation.
 4. Resources cleanup stops the task sandbox after harvesting and verification. The private directory path never appears in `EpisodeResponse`.
@@ -1610,7 +1602,7 @@ The only task-data requirements imposed here are:
 - the compatibility translator preserves the complete current row needed by the environment's concrete seed and verify models;
 - harness-visible input is explicitly separated from verifier-only data before behavior executes;
 - task data cannot select a Python implementation, sandbox provider credentials, or another processor after the trusted agent-server route has been resolved;
-- rollout and attempt identity survive translation and projection.
+- the `EpisodeKey` survives translation and projection.
 
 
 
@@ -1651,13 +1643,13 @@ The migration proceeds without a flag day:
 
 Until step 7, NeMo RL does not need to understand processor internals or `SandboxAccess`. It continues to call the route selected by `agent_ref` and receives its existing response projection.
 
-An existing named agent deployment can host the compatibility processor while retaining its configuration category, host, port, worker count, and collector route. This is a temporary deployment identity, not a second episode owner. The processor opens a session on the extracted behavior-only harness server and calls `/v1/responses`; it never calls the old agent's `/run`, because that method would seed and verify a second episode.
+An existing named agent deployment can host the compatibility processor while retaining its configuration category, host, port, worker count, and collector route. This is a temporary deployment name, not a second episode owner. The processor opens a session on the extracted behavior-only harness server and calls `/v1/responses`; it never calls the old agent's `/run`, because that method would seed and verify a second episode.
 
 The request translator performs a deterministic mapping:
 
 1. Parse the existing `BaseRunRequest`.
 2. Require `agent_ref.name` to match `LegacyCompatibilityConfig.expected_agent_name`.
-3. Obtain `rollout_id` and `attempt` from established internal fields when present, or derive the documented compatibility identity.
+3. Build an `EpisodeKey` from established internal fields, using `attempt=0` when the legacy request does not provide an attempt.
 4. Copy the complete Responses request into `EpisodeRequest.responses_create_params`.
 5. Apply the registered benchmark compatibility adapter to separate `resources_data` from agent-visible data and assign a compatibility `TaskIdentity`.
 6. Use the resources and agent bindings from `SingleAgentEpisodeProcessorConfig`.
@@ -1693,174 +1685,15 @@ The adapter preserves current behavior; it does not add distributed guarantees. 
 
 These limits must be documented in deployment configuration and tests so the compatibility layer is not mistaken for the final reliability model.
 
-Native NeMo RL integration is a separate consumer change. It must define processor routing, unique rollout identity, terminal model-call attribution, capture finalization ownership, retryable failure transport, masking, and projection of every trainable-participant activation in chronological context. Only after that path is deployed can Gym remove the legacy materialized row and result projection.
+Native NeMo RL integration is a separate consumer change. It must define processor routing, unique `EpisodeKey` creation, terminal model-call attribution, capture finalization ownership, retryable failure transport, masking, and projection of every trainable-participant activation in chronological context. Only after that path is deployed can Gym remove the legacy materialized row and result projection.
 
-## 8. Delivery sequence
+Delivery order, implementation workstreams, and integration gates are maintained separately in [`episode-orchestration-milestones.md`](episode-orchestration-milestones.md).
 
-The contracts for both foundations should be reviewed together, but implementation should land in an order that leaves a working compatibility path after each stage.
-
-### Stage 0: freeze current observable behavior
-
-Add characterization tests before moving ownership. Cover `RolloutCollectionHelper`, current `/run` bodies, the simple-agent HTTP self-call, cookie propagation and replacement, resource calls, result projection, token capture, NeMo RL consumption, and aggregate metrics. Record successful and failed paths for `simple_agent` plus `example_single_tool_call` and OpenCode plus each of the four sandbox resources servers.
-
-This stage defines compatibility evidence. It does not freeze known bugs such as missing-sandbox fallback, double stop, leaked sandboxes, lost workdirs, incomplete SWE-bench patch collection, or Terminal Bench's incorrect stateless reverification declaration. It also records the current cookie transcript so the proposed separation of model and resources cookies is reviewed as an intentional contract change rather than hidden inside the in-process refactor.
-
-### Stage 1: episode processor foundation
-
-Implement `EpisodeRequest`, `EpisodeResponse`, `BaseEpisodeProcessor`, `EpisodeContext`, `SingleAgentEpisodeProcessor`, and `LegacyAgentRunProcessor` under the existing `responses_api_agents` deployment category. Add `SimpleServer` lifespan support, pure legacy translation and projection, and explicit HTTP status mapping. Add worker-local resources-session registration, identity checking, idempotent cleanup, and the single-worker restriction for stateful resources servers. The passthrough processor delegates to current behavior; a migrated `SingleAgentEpisodeProcessor` invokes extracted behavior rather than another `/run`.
-
-The stage gate is an episode framework that:
-
-- validates before side effects;
-- applies admission, deadline, and cancellation consistently;
-- runs protocol-specific `process()`;
-- closes every registered resource on all exit paths;
-- preserves cookie updates, verifier extras, masking, scalar metrics, and token-capture routing;
-- returns the same legacy result for the characterization cases.
-
-
-
-### Stage 2: agent harness and sandbox foundation
-
-Keep the simple model/tool loop in a behavior-only `simple_agent_harness` server and move its `/run` ordering into the processor. Split OpenCode into a behavior-only harness server and a compatibility processor deployment. Add harness-session open and close, scoped resources-session delegation, the lifecycle-limited `HarnessSandbox` facade, and direct or sandbox-server connection from the harness deployment. Prove both OpenCode branches: harness-created sandbox when seed returns no access and resources-owned access when resources returns `harness_sandbox_access`.
-
-First migrate OpenCode plus SWE-bench, then DeepSWE, SWE-bench Pro, and Terminal Bench 2.1. Preserve the benchmark-specific verification shapes described in section 5. The stage gate requires both worked examples to pass behavior-parity and cleanup tests.
-
-This stage also establishes trusted harness-server binding. Task data cannot select a harness server, model endpoint, provider credentials, sandbox configuration, or installation source.
-
-### Stage 3: turn API and user simulation
-
-Introduce a separate turn contract:
-
-```python
-class InteractionEvent(BaseModel):
-    sequence: NonNegativeInt
-    participant: str
-    items: list[ResponseInputItem]
-
-
-class AgentTurnRequest(BaseModel):
-    visible_events: list[InteractionEvent]
-
-
-class AgentTurnResponse(BaseModel):
-    items: list[ResponseOutputItem]
-    terminated: bool = False
-    metrics: dict[str, int | float | str | bool] = Field(default_factory=dict)
-    diagnostics: list[EpisodeDiagnostic] = Field(default_factory=list)
-```
-
-`ResponseOutputItem` is the existing Responses API output-item model. Role, deadline, resources authority, sandbox access, and capture identity already belong to the opened harness session and are not repeated in every turn request. The processor assigns monotonically increasing `InteractionEvent.sequence` values when it commits results to the episode log. A harness receives only the events visible to its role and cannot assign or rewrite canonical sequence numbers. `terminated=True` means the harness ended instead of producing another participant-visible reply. Observations are collected under the session's capture identity rather than duplicated in every turn response.
-
-These models describe the semantics required by user simulation. A harness session may reconstruct state from `visible_events`, retain private state between turn calls, or support both. Any continuation handle remains inside the harness server; the processor stores only the session capability and canonical interaction events.
-
-The first concrete requirement is an assistant interacting with a simulated user:
-
-```python
-class UserSimulationEpisodeProcessorConfig(BaseEpisodeProcessorConfig):
-    assistant: AgentServerRef
-    simulated_user: AgentServerRef
-    max_turns: PositiveInt
-```
-
-`UserSimulationEpisodeProcessor.process()` owns ordering:
-
-1. give the assistant only events visible to the assistant;
-2. append the assistant result to the canonical interaction log;
-3. give the simulated user only events visible to that role;
-4. append the user result;
-5. stop on task completion, termination rules, deadline, or `max_turns`;
-6. ask resources to verify the completed interaction.
-
-This example proves why concrete processors, rather than a configurable umbrella loop, are required. The base class supplies execution scaffolding; the user-simulation processor defines role visibility and turn order.
-
-`responses()` and `turn()` implementations may share private model or tool helpers. They do not share a request struct with mutually exclusive nullable fields.
-
-The two roles also need separate model-call capture identities. Simulated-user tokens are context for the assistant but are not assistant actions. The processor configuration identifies which roles are trainable. Its chronological event log is the source for native rollout projection; taking only the final assistant response would lose earlier trainable turns.
-
-User simulation is the first extension because it is already an imminent request. Its deployed processor config binds both roles directly; current task routing still selects that one trusted agent-server deployment.
-
-### Stage 4: additional multi-agent protocols
-
-Add a new concrete processor only when a use case defines:
-
-- participant roles;
-- visibility rules;
-- ordering or concurrency;
-- termination;
-- verification input;
-- failure semantics.
-
-Examples might include collaboration, debate, or supervisor-worker execution, but this proposal does not standardize those protocols without requirements.
-
-Reward judges remain part of resources verification. An interactive judge participant would be a different protocol and should be added only when needed.
-
-### Stage 5: additional sandbox connectivity
-
-Implement the sandbox-server connection path when provider connection scope and deployment topology prevent direct access to a resources-owned sandbox. Resources must declare the server as a dependency before allocation, and the selected harness server must support `connection.kind="sandbox_server"`. The server retains the physical provider handle and issues separate owner and operate capabilities. It is not a fallback for a failed direct connection.
-
-This stage does not add processor-owned environment state. Environments that require filesystem or machine-state verification create their sandbox directly or request creation through the sandbox service while retaining logical lifecycle authority.
-
-### Stage 6: restart-safe attempts
-
-Add a shared attempt store with:
-
-- atomic claim of `(rollout_id, attempt)`;
-- leases and renewal;
-- monotonic ownership epochs;
-- stale-writer fencing;
-- idempotent finalization.
-
-Only in this milestone does an `admitted` execution become distinct from a `fenced` execution:
-
-- admitted means a local worker capacity slot was acquired;
-- fenced means a shared store rejected work from an obsolete attempt owner.
-
-The initial processor needs admission; it does not claim fencing until this shared store exists.
-
-Cookie affinity and `(rollout_id, attempt)` dictionary keys are insufficient. A retry can arrive with a new cookie or on another worker, and a process-local dictionary disappears with its worker. Restart safety requires atomic compare-and-swap in a process-shared store before seed causes side effects. The claim must bind an input digest, ownership epoch, committed seed response, cleanup records, and lease expiry. Seed, tools, verify, and cleanup must reject stale epochs.
-
-A newer attempt may retire an older attempt only after atomically fencing it. It must not stop a sandbox that an unfenced worker can still mutate. Orphan cleanup follows expired ownership records rather than scanning provider resources by naming convention.
-
-### Stage 7: checkpoint parking and restoration
-
-Checkpointing requires coordinated snapshots across owners:
-
-- processor protocol state and event position;
-- resources-server state;
-- participant or harness state when serializable;
-- runtime snapshot references;
-- model-side continuation data where supported;
-- ownership epoch.
-
-A checkpoint is restorable only if all required components commit one logical checkpoint. CLI subprocess memory is not inherently serializable; early support may checkpoint only at clean invocation or turn boundaries. Workspace snapshots alone do not restore an episode.
-
-Checkpointing needs an external coordinator:
-
-1. Stop admitting new work for the checkpoint generation.
-2. Ask active processors to park at a declared safe boundary.
-3. Ask resources, model-call capture, harness servers, and runtime providers to prepare their state.
-4. Commit the global checkpoint only when every required owner reports a compatible prepared generation.
-5. Restore all owners under a newer attempt epoch before resuming.
-
-The effective capability is the weakest required component:
-
-- restart-only abandons the attempt and recreates it from immutable input;
-- turn-boundary restoration resumes after one committed interaction event;
-- white-box harness restoration includes harness and model-call continuation;
-- runtime-snapshot restoration additionally captures coherent process, filesystem, PTY, and in-flight-effect state.
-
-A reconnect descriptor is only access to a runtime that may still exist. It does not prove that runtime state, resources state, processor position, and model-call lineage form one committed checkpoint.
-
-### Stage 8: retained artifacts
-
-Add a retained-artifact subsystem only when a concrete caller requirement exists. Define storage ownership, opaque identifiers, authorization, retention, garbage collection, size limits, and deletion behavior before adding artifact references to episode results.
-
-## 9. Performance implications
+## 8. Performance implications
 
 The architecture should be evaluated by steady-state cost and failure isolation, not by counting processes alone.
 
-### 9.1 Processor-to-harness service hop
+### 8.1 Processor-to-harness service hop
 
 Keeping the episode processor as a server preserves:
 
@@ -1872,11 +1705,11 @@ Keeping the episode processor as a server preserves:
 
 Keeping the harness as a long-lived server adds one internal session-open call and one `/v1/responses` call, but it preserves per-server dependency isolation and lets expensive clients, installations, and connection pools be reused across episodes. CLI sandbox I/O, model latency, and cold sandbox allocation are expected to dominate this hop, but the qualification plan measures that assumption.
 
-### 9.2 Avoid per-episode control-plane startup
+### 8.2 Avoid per-episode control-plane startup
 
 HTTP pools, admission state, and harness-server clients are worker-scoped. Harness sessions, benchmark state, sandbox connections, and invocation-scoped CLI processes are episode-scoped. Harness servers are started once by Gym's existing deployment machinery, not once per episode.
 
-### 9.3 Backpressure
+### 8.3 Backpressure
 
 Admission should reflect the scarce resource:
 
@@ -1887,7 +1720,7 @@ Admission should reflect the scarce resource:
 
 The initial processor uses per-worker admission. Later global quotas can be added without changing `process()`.
 
-### 9.4 Agent server decision
+### 8.4 Agent server decision
 
 The foundational contract keeps every harness behind a server boundary:
 
@@ -1906,7 +1739,7 @@ Environment selection remains per harness:
 
 Co-locating a compatible harness implementation with a processor can be considered later as a measured deployment optimization. It must preserve the same session, `/v1/responses`, capability, cancellation, observation, and cleanup behavior; it does not change the architecture or become a requirement for new users.
 
-### 9.5 Performance qualification isolates one boundary
+### 8.5 Performance qualification isolates one boundary
 
 Compare the current agent-owned `/run` path with the compatibility processor under identical task, model, resources server, provider, worker count, admission, keep-alive, and retry settings. Then vary only harness placement.
 
@@ -1938,106 +1771,7 @@ Record:
 
 Cold allocation, reconnect-only, and warm execution must be reported separately. Per-invocation installer downloads belong in legacy characterization, not in the intended production result. A prepared image or immutable reviewed bundle is required before drawing conclusions about steady-state sandbox overhead.
 
-## 10. Implementation workstreams and gates
-
-The two foundations establish dependency order, but they do not require one team to finish every implementation before another starts. Work proceeds against reviewed contracts with explicit integration gates.
-
-### Workstream A: processor foundation
-
-- add `SimpleServer` lifespan support and implement the base processor lifecycle scopes;
-- define native request and response models;
-- implement pure compatibility translation, legacy projection, and HTTP status mapping;
-- implement the dedicated legacy passthrough processor;
-- add worker-local resources-session registration and idempotent cleanup;
-- test admission, cancellation, session identity, and cleanup.
-
-
-
-### Workstream B: harness-server extraction
-
-- retain the simple-agent `responses()` loop behind a behavior-only server;
-- implement harness-session open, `/v1/responses`, and idempotent close;
-- preserve model cookies and add scoped resources-session access;
-- preserve trajectory capture, usage accumulation, max-step, and skipped-verification behavior.
-
-
-
-### Workstream C: OpenCode harness and sandbox bridge
-
-- implement the behavior-only OpenCode harness server and typed configuration;
-- implement the lifecycle-limited `AsyncSandbox` facade;
-- add optional `SandboxAccess` to one resources seed response;
-- preserve OpenCode's harness-specific sandbox configuration for the no-access path;
-- implement direct connection and sandbox-server lease redemption;
-- enforce connect/disconnect versus owner stop;
-- preserve install, configuration, CLI run, transcript export, conversion, and diagnostics.
-
-
-
-### Workstream D: remaining migration classes
-
-- inventory direct-`responses()`, run-only remote, step-based, and locally graded agents;
-- add behavior endpoints only where a remote integration must remain a service;
-- implement a separate concrete processor for step-based environment protocols;
-- move local grading and benchmark-defined submission harvesting into resources servers;
-- migrate GDPVal's ordinary run through resources-owned harvesting, then add its concrete cached-judging processor branch and separate preparation operation before retiring legacy control modes.
-
-
-
-### Workstream E: compatibility characterization
-
-- add golden tests for `/run` and NeMo RL consumption;
-- capture representative resource calls and failure behavior;
-- run existing and migrated simple-agent and OpenCode paths against the same tasks.
-
-Integration gates are:
-
-1. episode models and compatibility goldens are agreed;
-2. the simple-agent model/tool loop runs through `SingleAgentEpisodeProcessor`;
-3. harness-created OpenCode plus Reasoning Gym and resources-provided OpenCode plus SWE-bench both run end to end;
-4. all four OpenCode pairings preserve their verification behavior;
-5. GDPVal demonstrates that a deliverable-producing agent can move harvesting into its environment without adding public artifact payloads;
-6. cancellation and injected failures leave no owned sandbox running;
-7. measured latency and throughput regressions are within an agreed budget.
-
-Turn execution, additional sandbox topology, restart safety, and checkpointing remain separate workstreams behind later contract gates.
-
-The workstreams are parallel but not independent. A owns the episode request, response, resources session, and cleanup contracts consumed by B and C. B owns the harness-session contract. E freezes the legacy projection A must implement. B and C can test harness servers against the existing Responses API models before the full processor exists. D applies those contracts to agents whose current `/run` does more than the simple and OpenCode reference paths. Integration branches combine them only at the listed gates.
-
-Work can begin without native task routing:
-
-- extract OpenCode command construction and response parsing behind its harness server's `responses()` method;
-- extract the simple-agent model/tool loop behind the same behavior contract;
-- implement borrower-only sandbox reconnection and `disconnect()`;
-- add optional `harness_sandbox_access` to one resources seed response;
-- move current one-agent ordering into `SingleAgentEpisodeProcessor`;
-- deploy that processor under the existing OpenCode agent name;
-- compare old and new paths with the same tasks and model stubs.
-
-The first implementation must include tests at the actual failure boundaries:
-
-- malformed native and legacy requests fail before admission;
-- queue timeout creates no resources session;
-- scope-entry failure cleans partially acquired state;
-- seed failure never invokes the harness;
-- resources fails seed rather than returning no access when verification requires a shared task sandbox;
-- incompatible returned sandbox access fails before a model call;
-- resources-provided context exit disconnects and cannot stop the resources-owned sandbox;
-- harness-session close stops a harness-owned sandbox on success, failure, timeout, and cancellation;
-- the simple-agent harness server rejects returned sandbox access before inference;
-- cancellation during reconnect, guest startup, harness execution, verification, and cleanup runs all registered cleanup;
-- harness output limits reject oversized or malformed responses;
-- SWE-bench extraction failure is not verified as an empty patch;
-- supported new files are included in the SWE-bench submission;
-- Terminal Bench verifies the original live task sandbox;
-- repeated resources cleanup is idempotent;
-- cleanup failure appears in `EpisodeResponse.cleanup_failures`;
-- legacy result projection preserves response, reward, metrics, tokens, completion accounting, and mask location;
-- one real OpenCode plus SWE-bench rollout leaves no sandbox running after completion.
-
-Tests for shared attempt claims, owner leases, turn ordering, user-simulation visibility, and checkpoint restoration belong to their later stages. Green tests for an abstraction that has no backing implementation would give false confidence.
-
-## 11. Review position relative to the RFC
+## 9. Review position relative to the RFC
 
 This proposal supports the RFC's goal of separating environment concerns from agent execution, but recommends a narrower foundation:
 
@@ -2053,7 +1787,7 @@ This proposal supports the RFC's goal of separating environment concerns from ag
 
 The architecture remains extensible because the stable seams are small: `EpisodeRequest`, `EpisodeResponse`, `BaseEpisodeProcessor.process`, the existing Responses API behavior contract, and serialized sandbox access. It does not need to pre-model every future protocol to preserve those seams.
 
-## 12. Acceptance criteria
+## 10. Acceptance criteria
 
 The foundational design is validated when:
 

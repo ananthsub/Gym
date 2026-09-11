@@ -30,7 +30,7 @@ A multi-agent processor opens one harness-server session per role or agent insta
 
 ## Contracts defined by the proposal
 
-- episode identity, request, context, result, failure, metrics, diagnostics, and cleanup;
+- episode key, request, context, result, failure, metrics, diagnostics, and cleanup;
 - processor setup within the existing agent-server category and the single-agent protocol;
 - the existing `/v1/responses` behavior endpoint and a separate future turn endpoint;
 - harness-session open, behavior invocation, and idempotent close;
@@ -38,7 +38,7 @@ A multi-agent processor opens one harness-server session per role or agent insta
 - optional resources-provided sandbox access, harness-created sandboxes, direct and sandbox-server connections, and borrower enforcement;
 - typed simple-agent and OpenCode harness-server configuration with three complete deployment examples;
 - exact current-to-target behavior mappings for OpenCode and `simple_agent`;
-- role-scoped resources-session access, cookie compatibility, identity checks, and idempotent cleanup;
+- role-scoped resources-session access, cookie compatibility, episode-key checks, and idempotent cleanup;
 - legacy JSONL, `agent_ref`, `/run`, HTTP behavior, and NeMo RL projection;
 - migration classes for existing agents, GDPVal's ordinary path, and its separate control-mode requirements.
 
@@ -66,28 +66,22 @@ A generic participant scheduler, a combined run/turn request, generic CLI instal
 - Current task-data and routing conventions remain in place until a separate proposal addresses them.
 - Reliability, checkpoint, and retained-artifact contracts arrive with their required backing systems.
 
-## Parallel implementation work
+## Delivery plan
 
-Five workstreams can progress against reviewed contracts:
-
-1. processor lifecycle, resources sessions, compatibility projection, and legacy passthrough;
-2. simple-agent harness-server extraction, session lifecycle, and scoped resources access;
-3. OpenCode harness server, harness-created sandbox, direct sandbox access, and sandbox-server access;
-4. migration of step-based and locally graded agents, including GDPVal's preparation and cached-judging flows;
-5. compatibility characterization for Gym and NeMo RL.
-
-The integration gates first prove `simple_agent` through a behavior-only harness server, then harness-created OpenCode with a response-only verifier, then resources-provided access with OpenCode plus SWE-bench and Terminal Bench, and finally GDPVal's resources-owned deliverable harvesting and separate control modes.
+Implementation order, workstreams, integration gates, and required tests are maintained in `episode-orchestration-milestones.md`.
 
 ## Reading order
 
 1. `episode-orchestration-design.md` for the normative proposal and worked episode flows.
-2. `episode-orchestration-design.html` for the interactive diagram companion.
-3. `rfcs/gym-architecture.md` for the public RFC being reviewed.
+2. `episode-orchestration-milestones.md` for implementation order and gates.
+3. `episode-orchestration-design.html` for the interactive diagram companion.
+4. `rfcs/gym-architecture.md` for the public RFC being reviewed.
 
 ## File map
 
 - `rfcs/gym-architecture.md`: sanitized public RFC snapshot at revision `6c57b803`.
 - `investigations/episode-orchestration-design.md`: normative architecture proposal.
+- `investigations/episode-orchestration-milestones.md`: implementation sequence and integration gates.
 - `investigations/episode-orchestration-design.html`: standalone interactive render.
 - `investigations/episode-orchestration-overview.md`: this guide.
 - `investigations/episode-orchestration-design-review.md`: audit of the proposal against Gym and NeMo RL upstream main, with the change needed for each finding.
