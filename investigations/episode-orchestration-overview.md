@@ -1,67 +1,100 @@
-# Episode orchestration branch guide
+# Episode architecture branch guide
 
 Status: orientation, 2026-09-10.
 
-This branch holds the public RFC, the target architecture, and a concrete analysis of the current sandboxed OpenCode benchmark stack. `rfcs/gym-architecture.md` is the public RFC (sanitized snapshot at revision `6c57b803`). `investigations/episode-orchestration-design.md` defines the target architecture and its contracts. `investigations/opencode-sandboxed-pairings.md` traces the current OpenCode integration with four resources servers. This guide states the design in one page, maps the vocabulary, lists the disagreements, and gives a reading order.
+This branch contains the public Gym architecture RFC, a minimal alternative proposal, and a concrete analysis of the current sandboxed OpenCode integrations.
 
-## The design in eight decisions
+## The design in ten decisions
 
-1. A Gym environment is a composition. `TaskSet` supplies immutable tasks, the resources server owns task state and verification, and a concrete processor owns the interaction protocol. Agent harnesses and models are bound separately by a run.
-2. Every concrete processor is directly deployable. `SingleAgentEpisodeProcessor`, user simulation, environment loops, best-of-N, solver/judge, and other multi-agent processors are peers. None extends a supposedly standard single-agent lifecycle.
-3. The framework still supplies mandatory scaffolding. `BaseEpisodeProcessor.run()` establishes admission, attempt fencing, cancellation, participant capture, cleanup registration, failure classification, and result sealing around protocol-specific `process()`. It does not prescribe seed or verification order.
-4. The agent is a behavior contract, not necessarily a server. `AgentHarness.responses(params, context)` runs a complete loop; `TurnAgent.act(turn, context)` runs one scheduled activation. Existing independently deployed agents remain supported through a behavior-only remote executor.
-5. Placement is configuration. A supervised local worker, task workspace, dedicated sandbox, or remote service can execute the same harness contract. Command-line harnesses run in a sandbox in production; missing isolation is a preflight error.
-6. Sandbox ownership is explicit. The creator alone calls `stop()`. Borrowers connect with `owns_lifecycle=False` and disconnect. The guest receives a workdir and scoped endpoints, never provider credentials or a reconnect descriptor.
-7. Verification stays with the resources server. Each sandbox survives through its final required operation: SWE-bench, DeepSWE, and SWE-bench Pro can destroy the task sandbox after durable patch extraction while fresh verifier sandboxes continue grading; Terminal Bench 2.1 keeps the live task sandbox through grading.
-8. Compatibility is an exact projection. Existing NeMo RL sees its current route, complete primary `response.output`, token or receipt lineage, scalar and component rewards, mask location, failure sentinels, and aggregation behavior. Multi-participant episodes wait for native chronological projection.
+1. A Gym environment is a composition: task source, resources semantics, episode protocol, participant behavior, and runtime bindings have separate owners.
+2. Every concrete episode processor is directly deployable as a server. There is no umbrella server that imports a selected processor implementation.
+3. `BaseEpisodeProcessor.run()` supplies validation, admission, cancellation, cleanup, result finalization, and compatibility projection. A concrete processor supplies `process()`.
+4. `SingleAgentEpisodeProcessor` is the first protocol, not a superclass or “standard” processor for user simulation and multi-agent work.
+5. The MVP preserves current JSONL, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior.
+6. `AgentHarness` is a behavior contract. A trusted factory and executor decide whether the behavior runs locally, in a sandbox, or remotely.
+7. The MVP defines only `FullLoopHarnessCall`. A separate `TurnHarnessCall` arrives with user simulation.
+8. The first sandbox path keeps task sandbox B resources-server-owned. The executor borrows B and disconnects; only resources stops it.
+9. Verifier submission transfer remains resources-server-internal. Bounded observations are response data. Caller-retained artifacts are deferred.
+10. Task routing, turn execution, multi-agent protocols, restart safety, checkpointing, and artifact retention are staged extensions rather than foundation types.
 
-## The vocabulary map
+## MVP control flow
 
-| Concept | Design | Public RFC | Today's code |
-| --- | --- | --- | --- |
-| Environment | `TaskSet` + resources semantics + required processor protocol + runtime requirements | Primarily resources server plus processor configuration | Resources and agent server pairing |
-| Framework episode wrapper | `BaseEpisodeProcessor.run()` opens a fenced `EpisodeContext`, calls protocol-specific `process()`, seals, and cleans | `SimpleEpisodeProcessor.run()` implements one seed → harness → verify flow | Repeated agent-specific `/run` implementations |
-| Episode owner | A directly deployed `SingleAgentEpisodeProcessor`, `UserSimulationEpisodeProcessor`, or other concrete processor server | Episode processor: the agent server renamed, with a concrete `SimpleEpisodeProcessor.run()` | Agent server `/run` |
-| Processor contract | `BaseEpisodeProcessor(SimpleServer)` with common transport behavior and abstract protocol-specific `process()` | `BaseEpisodeProcessor` with concrete `run()` and no hooks | None |
-| Agent behavior | `AgentHarness.responses(params, HarnessContext)` and `TurnAgent.act(turn, HarnessContext)` | `AgentHarness.responses(params, EpisodeContext)` | `SimpleResponsesAPIAgent.responses()` |
-| Where the harness runs | `HarnessExecutor`: local worker, sandbox guest in the task workspace or a dedicated sandbox, or remote endpoint | Inside the processor process, in a venv keyed by the harness; `RemoteAgentHarness` otherwise | Inside the agent server process; a second `_sandboxed_agent` directory for sandboxes |
-| What crosses to the harness | `HarnessContext`: rollout and participant identity, reachable server URLs, credential files, workdir, deadline | `EpisodeContext`: rollout id, resources client, the live `AsyncSandbox` | Env vars and a rollout-prefixed model URL |
-| Task workspace handoff | `SandboxWorkspace` with provider name, serialized descriptor, owner, operate access, attested capabilities | Serialized descriptor to the verifier; live object to the harness | `sandbox_handle: str` on the seed response |
-| Who owns a sandbox | Its creator: resources server or processor, recorded in `WorkspaceRequest.mode` | The processor, always | Whoever created it, unrecorded |
-| Sandbox server (PR #2085) | Conditional adapter for docker, apptainer, enroot | Dependency of Phase 3 | Unmerged |
-| Routing key on rows | `EpisodeProcessorRef` in run configuration; `execution_name` projects to a compatibility `agent_ref` | The processor, which names the harness; author note proposes removing `agent_ref.name` | `agent_ref.name` or `task_source` |
-| More than one agent | Peer user-simulation, environment-loop, solver/judge, best-of-N, or other processors over `participants`, `TurnAgent`, and `/apply_turn` | Not modeled; tau2 handled by a custom processor | tau2 drives both seats internally |
-| Task discovery | Versioned `TaskSet` yields immutable `TaskRecord` values with `EnvironmentRef` | Unresolved | JSONL paths configured on servers |
-| Task data | `task_data` validated by the resources server's `TaskData`; never a deployment route | `EpisodeContext` declared on base request models | Flat row extras with `extra="allow"` |
-| Migration | Nineteen dependency-ordered steps; parallel characterization and extraction precede routing changes | Legacy processor first, then releases 0.7.0, 0.8.0, 0.9.0 | None |
+```mermaid
+flowchart LR
+    Caller -->|legacy or native /run| Processor[SingleAgentEpisodeProcessor]
+    Processor -->|seed| Resources[Resources server]
+    Resources -->|create and own| B[Task sandbox B]
+    Resources -->|operate-only workspace| Processor
+    Processor --> Executor[SandboxHarnessExecutor]
+    Executor -->|run full loop| Harness[OpenCode harness in B]
+    Processor -->|verify| Resources
+    Resources -->|stop B| B
+    Processor -->|legacy or native result| Caller
+```
 
-## Where the two documents disagree
+The resources server chooses and prepares B. The seed response returns only a serialized `SandboxWorkspace`, not a live runtime or harness configuration. The processor chooses the harness deployment. The executor connects as a borrower, runs the full loop, and disconnects. Resources extracts or inspects final state, verifies, and destroys B.
 
-- The processor hierarchy. The RFC gives the base class a concrete protocol lifecycle. The design gives `BaseEpisodeProcessor` only common server behavior and uses peer concrete servers for distinct interaction protocols. `SingleAgentEpisodeProcessor` is not a superclass for user simulation or multi-agent behavior.
-- The framework envelope. The design requires common fencing, cancellation, capture, cleanup, and sealing around every protocol but does not force one seed, one harness call, or one verification.
-- Environment and task routing. The design introduces immutable `TaskSet` identity and an environment profile that binds resources semantics to a required processor protocol while leaving agent and deployment selection to the run.
-- Where the harness runs. The RFC runs it inside the processor interpreter and accepts the loss of fault isolation. The design runs trusted Python in a supervised worker and untrusted CLIs in a sandbox guest, and keeps the processor's event loop free of harness code.
-- What the harness receives. The RFC hands it the live `AsyncSandbox`. The design hands it a working directory and endpoints, and keeps every descriptor in trusted host code.
-- Who owns sandboxes. The RFC assigns all of them to the processor. The design assigns each to its creator, which is what pooled tool sandboxes and benchmark-created workspaces already require.
-- The routing key. The RFC moves it to the processor. The design keeps canonical task rows agent-agnostic and selects the processor and harness from run configuration. Unmodified NeMo RL receives a legacy materialized view with `agent_ref` before dispatch and the existing result shape until native integration lands.
-- The sandbox server. The RFC gates its Phase 3 on it. The design uses native reconnect for OpenSandbox and E2B and reserves the server for providers that cannot reconnect.
-- Multiple agents. The RFC defers them. The design models participants, turns, and a chronological event log from the first request.
+## What is defined now
+
+- `EpisodeRequest`
+- minimal in-memory `EpisodeContext`
+- `EpisodeResult`
+- `BaseEpisodeProcessor`
+- `SingleAgentEpisodeProcessor`
+- `AgentHarness`
+- `FullLoopHarnessCall`
+- `HarnessResult`
+- trusted harness factory registry
+- `SandboxHarnessExecutor`
+- resources-owned `SandboxWorkspace`
+- exact legacy translation and result projection
+
+## What is deliberately later
+
+1. Remaining sandbox benchmark migrations.
+2. Processor-owned B and `/sandbox_spec`.
+3. Evolution of `EnvironmentManifest`, then `TaskSet` and native routing.
+4. `TurnHarnessCall`, chronological visibility records, and a policy-plus-simulated-user processor.
+5. Additional multi-agent protocols based on concrete requirements.
+6. Shared attempt claims and stale-writer fencing.
+7. Coordinated checkpoint parking and restoration.
+8. Caller-retained artifact storage.
+
+`EnvironmentProfile`, a generic participant scheduler, a combined turn/full-loop call, and generic artifact payloads are not required to stand up the MVP.
+
+## Differences from the public RFC
+
+- The proposal makes every concrete processor a server rather than using one configurable processor host.
+- The framework owns a neutral execution envelope but not a universal seed → harness → verify protocol.
+- Participant bindings live on concrete processor configuration.
+- Harness behavior is separate from deployment and runtime.
+- Sandbox ownership follows creation; it is not always assigned to the processor.
+- Full-loop and turn APIs are distinct.
+- The existing `EnvironmentManifest` evolves before a new metadata system is considered.
+- Reliability and checkpoint contracts are added only with the backing shared systems.
+
+## Implementation workstreams
+
+Three teams can proceed after the foundation contracts are accepted:
+
+1. Processor server and lifecycle scopes.
+2. Harness factory, executor, and sandbox bridge.
+3. Legacy behavior and NeMo RL compatibility characterization.
+
+Their first shared gate is one real OpenCode plus SWE-bench rollout with equivalent output and reward behavior, correct cancellation, and no leaked or double-stopped task sandbox.
 
 ## Reading order
 
-1. This guide, then `design-questions.md`, which records supported decisions, pushes back on incorrect premises, and identifies the choices that remain open.
-2. Read `opencode-sandboxed-pairings.md` for the current execution path and the differences among SWE-bench, DeepSWE, SWE-bench Pro, and Terminal Bench 2.1.
-3. In the design: "One episode in plain terms", "The current OpenCode benchmark stack is the migration baseline", and "Contract summary". These sections explain the proposal and its concrete migration target.
-4. In the design: "The agent execution decision changes one boundary" compares the agent-server and pure-harness paths. Its expandable call reference contains the complete rollout sequence. Every named type is defined in the "Complete definitions" sections and can be read on demand.
-5. In the RFC: "Problem statement" and "Personas and Use Cases" for the motivation, then "Proposed solution" to see the alternative the design departs from. The RFC's appendix is evidence about today's code and does not need to be read to understand either proposal.
+1. `episode-orchestration-design.md` for the normative proposal. Read sections 1–6 for the MVP, then section 7 for staged extensions.
+2. `design-questions.md` for rationale, pushback, and unresolved implementation choices.
+3. `opencode-sandboxed-pairings.md` for the current behavior of OpenCode with SWE-bench, DeepSWE, SWE-bench Pro, and Terminal Bench 2.1.
+4. `rfcs/gym-architecture.md` for the public RFC being reviewed.
 
-## What each file is
+## File map
 
-| File | What it is | Author and status |
-| --- | --- | --- |
-| `rfcs/gym-architecture.md` | Public RFC, sanitized snapshot | Gym architecture working group; in review |
-| `investigations/episode-orchestration-design.md` | Target architecture with complete contracts | This branch; proposal |
-| `investigations/episode-orchestration-design.html` | Rendered page of the design with SVG diagrams | Generated from the Markdown |
-| `investigations/opencode-sandboxed-pairings.md` | Current OpenCode and resources-server execution analysis | This branch; analysis |
-| `investigations/episode-orchestration-overview.md` | This guide | This branch |
-| `investigations/design-questions.md` | Design decisions, pushback, and open questions | This branch; reference |
+- `rfcs/gym-architecture.md`: sanitized public RFC snapshot at revision `6c57b803`.
+- `investigations/episode-orchestration-design.md`: normative minimal architecture proposal.
+- `investigations/episode-orchestration-design.html`: rendered standalone view of the proposal.
+- `investigations/design-questions.md`: reviewer decisions, objections, and open questions.
+- `investigations/opencode-sandboxed-pairings.md`: current implementation evidence.
+- `investigations/episode-orchestration-overview.md`: this guide.
