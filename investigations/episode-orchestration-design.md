@@ -8,7 +8,7 @@ This creates several problems:
 
 - Episode orchestration is embedded in each agent server's `/run`: resources-session setup, agent invocation, verification, and cleanup.
 - Gym has no framework-owned intervention point for this sequence, so changing the episode protocol requires changing agent-server code.
-- Shared behavior such as sandbox setup, resources access, deadlines, cancellation, cookies, and cleanup is implemented repeatedly and inconsistently across agent servers.
+- Shared behavior such as sandbox setup, resources access, timeouts, cancellation, cookies, and cleanup is implemented repeatedly and inconsistently across agent servers.
 - Agent and resources-server code can both believe they own the same sandbox.
 - A bare sandbox ID does not describe how another server connects, where commands run, or which operations are allowed.
 
@@ -23,7 +23,7 @@ An agent's `/v1/responses` implementation remains responsible for agent behavior
 - **Episode processor**
   - Exposes `/run` and owns the episode protocol and final result.
   - Composes agent and resources servers when those boundaries fit, or implements a self-contained external protocol.
-  - Applies deadlines and cancellation and coordinates cleanup on every handled exit path.
+  - Applies configured timeouts and cancellation and coordinates cleanup on every handled exit path.
   - Asks participating servers to clean up the state they own. A self-contained processor cleans up state created within its own protocol.
   - Preserves existing Gym dataset, evaluation, and NeMo RL interfaces during migration.
   - Uses Gym's configuration, startup, addressing, readiness, and telemetry mechanisms.
@@ -40,7 +40,7 @@ An agent's `/v1/responses` implementation remains responsible for agent behavior
 
 ### Episode, rollout, task, and session
 
-- A **task** is dataset content identified by `TaskIdentity`.
+- A **task** is dataset content identified by `TaskId`.
 - A **rollout** is one logical sample produced for that task.
 - An **attempt** is one physical execution of a rollout. A retry increments the attempt.
 - An **episode** is the complete lifecycle for one attempt, including all interaction turns, verification, and cleanup.
@@ -56,7 +56,7 @@ An exported rollout is a training or evaluation projection of an episode. The in
 ### Responsibilities
 
 - **Resources server:** When used, owns task setup, benchmark state, tools, verification, and every sandbox or service it creates.
-- **Episode processor:** Owns `/run`, protocol ordering, deadline enforcement, and final result publication. A resources-backed processor asks participating servers to clean up their own state; a self-contained processor cleans up the state it creates.
+- **Episode processor:** Owns `/run`, protocol ordering, timeout enforcement, and final result publication. A resources-backed processor asks participating servers to clean up their own state; a self-contained processor cleans up the state it creates.
 - **Agent server:** When used, owns the agent implementation, its dependencies, its agent session, local subprocesses, and any fallback sandbox it creates.
 - **Model server:** Exposes Gym's model API and proxies inference requests to the configured inference endpoint.
 - **Sandbox server:** Optionally holds sandbox-provider state that cannot be reconstructed in another process.
@@ -151,7 +151,7 @@ sequenceDiagram
     participant AS as Agent-owned fallback sandbox
 
     C->>P: POST /run with EpisodeRequest
-    P->>P: Validate, admit, and apply deadline
+    P->>P: Validate, admit, and apply configured timeout
     P->>R: POST /seed_session
     R->>R: Create resources session and agent-visible tool access
 
@@ -220,21 +220,21 @@ sequenceDiagram
 
 ### Self-contained processor
 
-A processor does not have to use a resources server or agent server. It may validate `resources_data`, run an external framework, call model servers, produce a concrete `BaseVerifyResponse`, and clean up its own state entirely inside `process()`.
+A processor does not have to use a resources server or agent server. It may validate `task_data`, run an external framework, call model servers, produce a concrete `BaseVerifyResponse`, and clean up its own state entirely inside `process()`.
 
 This path is appropriate when the external framework's state, participants, tools, and verifier form one protocol that does not map cleanly onto Gym's existing server boundaries. The processor deployment supplies that framework's dependency and isolation boundary. It can later delegate individual responsibilities to Gym servers without changing the caller-facing episode contract.
 
 ### Task contract dependency
 
-This RFC consumes three fields from the materialized task contract defined by the [Gym Tasks RFC](https://rfc.frontier-evals.nvidia.com/m/frontier-eval-rfcs/r/gym-tasks):
+This RFC requires the materialized task contract in the [Gym Tasks RFC](https://rfc.frontier-evals.nvidia.com/m/frontier-eval-rfcs/r/gym-tasks) to provide three fields:
 
-- `TaskIdentity` identifies the taskset, task, and taskset revision.
+- `TaskId` identifies the taskset, task, and taskset revision.
 - `responses_create_params` is the agent-visible input.
-- `resources_data` is benchmark-specific task-setup and verification input.
+- `task_data` is benchmark-specific task-setup and verification input.
 
-The task layer owns task preparation, provenance, identity generation, collation, and validation against the resources server's task schema. Rollout materialization adds `EpisodeId`, dispatch adds the optional deadline, and the collector sends the fields in `EpisodeRequest`.
+The task layer owns task preparation, provenance, ID generation, collation, and validation against the resources server's task schema. Rollout materialization adds `EpisodeId`, and the collector sends the fields in `EpisodeRequest`.
 
-The episode processor preserves `TaskIdentity`, passes `responses_create_params` to the agent server, and passes `responses_create_params` with unchanged `resources_data` to the resources server. It does not interpret either payload. A self-contained processor validates and interprets `resources_data` because it owns task setup itself.
+The episode processor preserves `TaskId`, passes `responses_create_params` to the agent server, and passes `responses_create_params` with unchanged `task_data` to the resources server. It does not interpret either payload. A self-contained processor validates and interprets `task_data` because it owns task setup itself.
 
 This RFC does not define generic `agent_data`. Agent-visible task content belongs in `responses_create_params`; typed session capabilities belong in `AgentSessionCreateRequest`.
 
@@ -274,7 +274,7 @@ class EpisodeId(BaseModel):
 - The three group fields are present only when the episode belongs to a group.
 - `group_id`, `member_index`, and `group_size` remain stable when `attempt` increments.
 
-`TaskIdentity` is defined by the Tasks RFC and remains separate because it identifies dataset content rather than an execution.
+`TaskId` belongs to the Tasks RFC and remains separate because it identifies dataset content rather than an execution.
 
 Current Gym constructs rollout correlation from `_ng_task_index`, `_ng_rollout_index`, and optional `_ng_attempt_index`. Compatibility translation uses the task and rollout indices for the stable `rollout_id` and keeps `_ng_attempt_index` in `attempt`.
 
@@ -298,10 +298,9 @@ class EpisodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     episode_id: EpisodeId
-    task_identity: TaskIdentity
+    task_id: TaskId
     responses_create_params: NeMoGymResponseCreateParamsNonStreaming
-    resources_data: dict[str, JsonValue]
-    deadline: datetime | None = None
+    task_data: dict[str, JsonValue]
 
 
 class EpisodeFailure(BaseModel):
@@ -312,7 +311,7 @@ class EpisodeFailure(BaseModel):
         "unavailable",
         "agent",
         "verification",
-        "deadline",
+        "timeout",
         "internal",
     ]
     message: str
@@ -324,7 +323,7 @@ class EpisodeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     episode_id: EpisodeId
-    task_identity: TaskIdentity
+    task_id: TaskId
     verification: BaseVerifyResponse | None = None
     agent_observations: AgentObservationBundle | None = None
     failure: EpisodeFailure | None = None
@@ -343,7 +342,7 @@ Validation enforces:
 - The processor validates the common `BaseVerifyResponse` fields without discarding those additional fields.
 - Concrete subclasses may define `reward_components`, `mask_sample`, and other benchmark-specific fields. When present, `mask_sample` may be true when the verifier accepts a result affected by partial infrastructure failure.
 - An unverified episode may retain a valid agent response in `failure.partial_response`.
-- The response `episode_id` and `task_identity` match the request.
+- The response `episode_id` and `task_id` match the request.
 - `verification.reward` and every value in `reward_components`, when present, are finite. The concrete verifier defines how component values produce the scalar reward.
 - Failure messages are bounded and contain no credentials or internal paths.
 
@@ -365,12 +364,12 @@ Users do not add agent-session fields to datasets.
 
 The flow is:
 
-1. The task layer supplies `TaskIdentity`, `responses_create_params`, and `resources_data`.
+1. The task layer supplies `TaskId`, `responses_create_params`, and `task_data`.
 2. Rollout materialization assigns rollout, attempt, and optional group fields in `EpisodeId`.
 3. Compatibility translation constructs the same fields from a legacy flat row.
 4. Rollout collection sends `EpisodeRequest` to the selected episode processor.
 5. The processor validates common fields before performing network calls.
-6. `SingleAgentEpisodeProcessor` passes `responses_create_params` and unchanged `resources_data` to the resources server, which validates its benchmark-specific model. A self-contained processor validates its own resources-data model.
+6. `SingleAgentEpisodeProcessor` passes `responses_create_params` and unchanged `task_data` to the resources server, which validates its benchmark-specific model. A self-contained processor validates its own task-data model.
 7. The processor runs its protocol. A resources-backed single-agent processor passes exactly `responses_create_params` as the agent's `/v1/responses` body.
 8. The processor returns `EpisodeResponse`, and compatibility layer restores the existing result shape when required for backward compatibility.
 
@@ -389,13 +388,13 @@ class EpisodeSeedRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     episode_id: EpisodeId
-    task_identity: TaskIdentity
+    task_id: TaskId
     responses_create_params: NeMoGymResponseCreateParamsNonStreaming
-    resources_data: dict[str, JsonValue]
+    task_data: dict[str, JsonValue]
 
 
 class SWEBenchSeedRequest(EpisodeSeedRequest):
-    resources_data: SWEBenchTaskData
+    task_data: SWEBenchTaskData
 
 
 class MCPServerMetadata(BaseModel):
@@ -413,7 +412,7 @@ class EpisodeSeedResponse(BaseModel):
     sandbox_access: SandboxAccess | None = None
 ```
 
-`EpisodeSeedRequest` validates the common envelope. Each resources server binds `/seed_session` to a concrete subclass that narrows `resources_data` to its benchmark-specific Pydantic model, as illustrated by `SWEBenchSeedRequest`. FastAPI performs that validation before `seed_session()` runs. The processor posts the same JSON without importing or interpreting the benchmark model.
+`EpisodeSeedRequest` validates the common envelope. Each resources server binds `/seed_session` to a concrete subclass that narrows `task_data` to its benchmark-specific Pydantic model, as illustrated by `SWEBenchSeedRequest`. FastAPI performs that validation before `seed_session()` runs. The processor posts the same JSON without importing or interpreting the benchmark model.
 
 The processor retains the resources-server reference, session ID, and private transport state established by seed. It uses that state for verification and cleanup. It passes only agent-visible tool access and optional sandbox access to the agent server.
 
@@ -454,7 +453,7 @@ class ResourcesSessionCloseResponse(BaseModel):
 
 The processor uses three resources-server operations:
 
-- `POST /seed_session`: validates `resources_data`, creates resources-server state, and returns `EpisodeSeedResponse`.
+- `POST /seed_session`: validates `task_data`, creates resources-server state, and returns `EpisodeSeedResponse`.
 - `POST /verify`: accepts `EpisodeVerifyRequest` in the resources session established by seed and returns the resources server's concrete `BaseVerifyResponse` subclass.
 - `POST /close_session`: accepts `ResourcesSessionCloseRequest`, releases resources-server state, and returns `ResourcesSessionCloseResponse`.
 
@@ -556,7 +555,6 @@ class AgentSessionCreateRequest(BaseModel):
     episode_id: EpisodeId
     resources_tools: MCPServerMetadata | None = None
     sandbox_access: SandboxAccess | None = None
-    deadline: datetime | None = None
 
 
 class AgentSessionCreateResponse(BaseModel):
@@ -586,7 +584,7 @@ The processor sends `AgentSessionCreateRequest` to the configured `AgentServerRe
 
 The agent server:
 
-1. Validates the episode, deadline, tool access, and sandbox access.
+1. Validates the episode, tool access, and sandbox access.
 2. Configures resources tools and either connects the borrowed sandbox or creates its configured fallback sandbox.
 3. Starts agent-local state and, when supported, observation capture correlated with `EpisodeId`.
 4. Registers cleanup for objects it owns and returns `AgentSessionCreateResponse`.
@@ -644,7 +642,7 @@ class Tau2EpisodeProcessorConfig(BaseEpisodeProcessorConfig):
     user_model_server: ModelServerRef
 ```
 
-Each concrete processor declares the servers it uses. `resources_data` cannot select executable code, credentials, another processor, or a sandbox provider.
+Each concrete processor declares the servers it uses. `task_data` cannot select executable code, credentials, another processor, or a sandbox provider.
 
 For `SingleAgentEpisodeProcessor`, agent configuration owns model selection and behavior-specific options, while resources-server configuration owns verification options. A self-contained processor owns its external framework's configuration.
 
@@ -666,7 +664,7 @@ This path is valid only when verification does not need the live contents of the
 
 #### Each server cleans up the objects it owns
 
-The processor applies the same unwind order after success, failure, deadline expiry, or caller cancellation. It invokes each server's lifecycle endpoint, and each server releases the objects it owns.
+The processor applies the same unwind order after success, failure, configured timeout, or caller cancellation. It invokes each server's lifecycle endpoint, and each server releases the objects it owns.
 
 The protocol requires:
 
@@ -682,9 +680,9 @@ async def process(
     seed = await context.resources_server.seed(
         EpisodeSeedRequest(
             episode_id=request.episode_id,
-            task_identity=request.task_identity,
+            task_id=request.task_id,
             responses_create_params=request.responses_create_params,
-            resources_data=request.resources_data,
+            task_data=request.task_data,
         )
     )
 
@@ -694,7 +692,6 @@ async def process(
                 episode_id=request.episode_id,
                 resources_tools=seed.resources_tools,
                 sandbox_access=seed.sandbox_access,
-                deadline=request.deadline,
             )
         )
 
@@ -721,7 +718,7 @@ async def process(
 
         return EpisodeResponse(
             episode_id=request.episode_id,
-            task_identity=request.task_identity,
+            task_id=request.task_id,
             verification=verification,
             agent_observations=close_response.agent_observations,
         )
@@ -736,7 +733,7 @@ async def process(
 This pseudocode shows order, not error-handling implementation. `BaseEpisodeProcessor.run()` provides:
 
 - native or compatibility request validation;
-- deadline clamping;
+- configured timeout enforcement;
 - worker-local admission;
 - exception classification;
 - response validation;
@@ -760,7 +757,7 @@ No failure path invents a successful native reward.
 ### `/run` HTTP mapping
 
 - HTTP 200 means the processor produced a valid `EpisodeResponse`. The response may contain either verification or `EpisodeFailure`.
-- A handled agent, resources, verification, deadline, or admission failure returns HTTP 200 with `EpisodeResponse.failure`.
+- A handled agent, resources, verification, timeout, or admission failure returns HTTP 200 with `EpisodeResponse.failure`.
 - HTTP 4xx applies when the request is rejected before the processor can identify and handle an episode, such as malformed input or failed authorization.
 - HTTP 5xx applies when the server cannot produce a valid `EpisodeResponse`, such as an uncaught processor error or response-validation failure.
 - A connection or process failure may produce no HTTP response.
@@ -974,7 +971,7 @@ tau2:
         jsonl_fpath: episode_processors/tau2/data/example.jsonl
 ```
 
-The processor validates the Tau2 `resources_data`, runs the complete simulation, converts the trajectory to `NeMoGymResponse`, and returns a concrete `BaseVerifyResponse`. A later Tau2 integration may delegate participants or state to Gym servers without changing `EpisodeRequest` or `EpisodeResponse`.
+The processor validates the Tau2 `task_data`, runs the complete simulation, converts the trajectory to `NeMoGymResponse`, and returns a concrete `BaseVerifyResponse`. A later Tau2 integration may delegate participants or state to Gym servers without changing `EpisodeRequest` or `EpisodeResponse`.
 
 ## Verification remains benchmark-defined
 
