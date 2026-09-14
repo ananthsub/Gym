@@ -2,69 +2,55 @@
 
 Status: orientation, 2026-09-11.
 
-This branch contains the public Gym architecture RFC and a concrete proposal for episode processing, harness-server sessions, and sandbox ownership.
+This branch contains the public Gym architecture RFC and a concrete proposal for episode processing, agent-server sessions, and sandbox ownership.
 
-## The two foundations
+## Core design
 
 1. **Episode processor.** Each `episode_processors` deployment hosts one concrete processor. `BaseEpisodeProcessor.run()` supplies validation, admission, cancellation, cleanup, finalization, HTTP status, and compatibility projection. A concrete `process()` method owns its interaction protocol.
-2. **Agent harness servers.** Each harness remains an independently deployed `responses_api_agents` server with its own package, virtual environment, process, and `POST /v1/responses` behavior endpoint. The processor opens role-scoped sessions and transports resources and optional sandbox access; it does not import harness implementations or their dependencies.
+2. **Composed Gym services.** A processor may use independently deployed agent and resources servers when those boundaries fit its protocol. It may instead run a self-contained external integration such as Tau2. Agent servers retain their existing `POST /v1/responses` request and response models.
 
-Gym adds `episode_processors` as a fourth server type and `sandbox_servers` as an optional fifth type. A sandbox server is configured only when a provider handle cannot be reconstructed across the resources and harness processes. Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available during migration. Native callers use `EpisodeProcessorRef`. TaskSet and broader routing redesign remain follow-on work.
+Gym adds `episode_processors` as a fourth server type and `sandbox_servers` as an optional fifth type. A sandbox server is configured only when provider state cannot be reconstructed across the resources-server and agent-server processes. Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available during migration. Native callers use `EpisodeProcessorRef`. Broader routing redesign remains follow-on work.
 
-## Four representative deployment paths
+## Representative deployment paths
 
-The proposal includes complete configuration for four deployment paths:
+1. A Gym-native `simple_agent` server uses the existing model server and scoped resources tools. It supports no sandbox.
+2. OpenCode paired with `reasoning_gym` receives no sandbox access, so the OpenCode agent server creates and owns its configured sandbox.
+3. OpenCode paired with SWE-bench or Terminal Bench receives `sandbox_access` because verification requires the CLI to modify the same task sandbox. Resources retains ownership and destroys that sandbox after verification.
+4. Terminus-2 keeps its Python loop and Harbor dependencies in its agent-server virtual environment. Its terminal commands use resources-provided `SandboxAccess` when present and otherwise use its configured local workspace.
+5. Tau2 runs as a self-contained episode processor that calls policy and simulated-user model servers without a Gym agent or resources server.
 
-1. A Gym-native `simple_agent` harness server uses the existing model server and scoped resources tools. Its implementation supports no sandbox.
-2. OpenCode paired with `reasoning_gym` receives no sandbox access, so the OpenCode harness server creates and owns its configured sandbox.
-3. OpenCode paired with SWE-bench or Terminal Bench receives `harness_sandbox_access` because verification requires the CLI to modify the same task sandbox. Resources retains ownership and destroys that sandbox during session cleanup.
-4. Terminus-2 keeps its Python loop and Harbor dependencies in its harness-server virtualenv. Its terminal commands use resources-provided `SandboxAccess` when present and otherwise use its configured server-local workspace.
+The processor config contains service references and protocol limits. Agent-specific configuration contains behavior settings and any sandbox the agent may create when resources returns no access. Most users select a shipped resources-and-agent preset; the expanded configuration is for authors, operators, and reviewers.
 
-The processor config contains service references and protocol limits. Harness-specific configuration contains behavior settings and any sandbox it may create when resources returns no access. Most users select a shipped environment-and-agent preset; the expanded configuration is for authors, operators, and reviewers.
+The proposal also contains complete step-by-step episode flows. Its HTML companion provides interactive walkthroughs for the representative deployments and the optional sandbox-server path.
 
-The proposal also contains complete step-by-step episode flows. Its HTML render provides interactive walkthroughs for the OpenCode and simple-agent paths.
+When used, the resources server owns benchmark state, tools, verification, and task sandboxes. `sandbox_access` exposes only a sandbox that an agent must operate; it does not list every object owned by the resources server or say where agent-server code runs. Resources cannot implicitly inspect a separate sandbox created by the agent.
 
-The resources server is the environment. Its state may be public internet, remote services, process-local data, or private sandboxes. `harness_sandbox_access` exposes only a sandbox that a harness may or must operate; it does not list every environment resource or say where harness code runs. Resources cannot implicitly inspect a separate sandbox created by the harness.
-
-A multi-agent processor opens one harness-server session per role or agent instance. If seed returns one access, the protocol may share it through independent borrower connections. If seed returns no access, each harness follows its own configuration. Agents can communicate through shared task state, resources tools, remote services, or the public internet. A protocol requiring several distinct resources-owned sandboxes defines an extended seed contract because their names and sharing rules are protocol semantics.
+Agent sessions are process-local. The initial deployment uses one Uvicorn worker per agent-server replica, admits several asynchronous sessions in that worker, and scales through replicas or NeMo RL shards. A future routed pool must keep create, `/v1/responses`, and close on the replica that owns the session.
 
 ## Contracts defined by the proposal
 
-- episode key, request, context, result, failure, metrics, diagnostics, and cleanup;
+- `EpisodeId`, `EpisodeRequest`, `EpisodeResponse`, `EpisodeVerification`, failure, and cleanup;
 - the `episode_processors` server category, `EpisodeProcessorRef`, and the single-agent protocol;
-- the existing `/v1/responses` behavior endpoint and a separate future turn endpoint;
-- harness-session open, behavior invocation, and idempotent close;
-- trusted harness-server bindings and implementation-owned capability validation;
-- the optional `sandbox_servers` category, `SandboxServerRef`, resources-provided sandbox access, harness-created sandboxes, direct connections, operate leases, and borrower enforcement;
-- typed simple-agent and OpenCode harness-server configuration with three complete deployment examples;
+- the unchanged `/v1/responses` behavior endpoint;
+- `POST /v1/agent_sessions`, behavior invocation, and `POST /v1/agent_sessions/close`;
+- resources-session seed, verification, and `POST /close_session`;
+- agent-server bindings validated by each concrete processor;
+- the optional `sandbox_servers` category, `SandboxServerRef`, resources-provided sandbox access, agent-created sandboxes, direct connections, borrower tokens, and borrower enforcement;
+- typed Simple Agent, OpenCode, and Terminus-2 agent-server configuration with four deployment examples;
 - exact current-to-target behavior mappings for OpenCode and `simple_agent`;
-- role-scoped resources-session access, cookie compatibility, episode-key checks, and idempotent cleanup;
+- scoped resources-tool and sandbox access, `EpisodeId` checks, and bounded cleanup;
 - legacy JSONL, `agent_ref`, `/run`, HTTP behavior, and NeMo RL projection;
-- migration classes for existing agents, GDPVal's ordinary path, and its separate control-mode requirements.
+- horizontal agent-server scaling through one-worker replicas and session-affine routed pools.
 
 ## Capabilities added after the foundations
 
-1. User simulation adds `turn()`, `assistant` and `simulated_user` roles, role visibility, and chronological trainable-role attribution.
+1. User simulation adds repeated `/v1/responses` activations, `assistant` and `simulated_user` roles, role visibility, and chronological trainable-role attribution.
 2. Other multi-agent processors add protocol-specific ordering, concurrency, and termination.
 3. Restart-safe attempts add shared claims, leases, ownership epochs, and stale-writer fencing.
 4. Checkpoint restoration adds coordinated snapshots across every state owner.
 5. Caller-retained artifacts add durable storage and lifecycle policy.
 
-A generic participant scheduler, a combined run/turn request, generic CLI installation plans, and generic artifact payloads are not needed for these foundations.
-
-## Review position
-
-- A concrete processor runs as a first-class `episode_processors` deployment; the proposal adds no umbrella processor host.
-- A `sandbox_servers` deployment is an optional infrastructure dependency, not an episode owner or a required hop for directly reconnectable providers.
-- The framework supplies a neutral execution envelope, not a universal single-agent loop.
-- `SingleAgentEpisodeProcessor` is a peer of user-simulation and future multi-agent processors, not their superclass.
-- Harness behavior remains behind a dependency-isolated server. The OpenCode control loop runs in that service while its CLI operates either a harness-owned or resources-owned sandbox.
-- `HarnessSandbox` is the bounded, operate-only subset of `AsyncSandbox` used by CLI harnesses; it is not a generic command-session protocol.
-- Resources owns every sandbox it creates. A sandbox service may hold a physical provider handle, but resources decides when its task sandbox is destroyed. A harness server owns and stops only a sandbox it creates.
-- `responses()` and `turn()` are separate behavior contracts.
-- Wire compatibility around a migrated processor is distinct from `LegacyAgentRunProcessor`, which temporarily forwards to an unmigrated agent's episode-level `/run`.
-- Current task-data and routing conventions remain in place until a separate proposal addresses them.
-- Reliability, checkpoint, and retained-artifact contracts arrive with their required backing systems.
+A generic participant scheduler, a separate turn API, generic CLI installation plans, and generic artifact payloads are not needed for the initial design.
 
 ## Delivery plan
 

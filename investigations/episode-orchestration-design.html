@@ -3,13 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gym Episode Execution Walkthroughs</title>
+<title>Gym Episode Orchestration Walkthroughs</title>
 <style>
 :root { --bg:#f4f6f8; --panel:#fff; --ink:#172029; --muted:#62707c; --line:#d5dce2; --accent:#0f6e8c; --soft:#dceef3; }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.45 system-ui,sans-serif; }
 main { max-width:1280px; margin:auto; padding:36px 22px 72px; }
-h1,h2,h3,p { margin-top:0; } h1 { margin-bottom:8px; } .intro { color:var(--muted); max-width:780px; }
+h1,h2,h3,p { margin-top:0; }
+h1 { margin-bottom:8px; }
+.intro { color:var(--muted); max-width:900px; }
 a { color:var(--accent); }
 .flow-tabs,.phase-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:22px 0; }
 button { border:1px solid var(--line); background:var(--panel); color:var(--ink); border-radius:7px; padding:8px 11px; cursor:pointer; }
@@ -18,136 +20,240 @@ button:hover,button:focus-visible { border-color:var(--accent); }
 .flow-panel { border:1px solid var(--line); background:var(--panel); border-radius:12px; overflow:hidden; }
 .flow-panel>header { display:flex; justify-content:space-between; gap:20px; align-items:center; padding:20px; border-bottom:1px solid var(--line); }
 .flow-panel>header p { color:var(--muted); margin-bottom:0; max-width:760px; }
-.step-nav { display:flex; align-items:center; gap:8px; flex:none; } .counter { min-width:70px; text-align:center; color:var(--muted); }
+.step-nav { display:flex; align-items:center; gap:8px; flex:none; }
+.counter { min-width:70px; text-align:center; color:var(--muted); }
 .phase-tabs { margin:0; padding:12px 20px; border-bottom:1px solid var(--line); }
 .layout { display:grid; grid-template-columns:minmax(330px,.85fr) minmax(430px,1.15fr); min-height:600px; }
 .steps { max-height:700px; overflow:auto; border-right:1px solid var(--line); padding:8px; }
 .step { display:grid; grid-template-columns:32px 1fr; width:100%; border:0; border-bottom:1px solid var(--line); border-radius:0; text-align:left; background:transparent; }
-.step>span { grid-row:1/3; color:var(--accent); font-weight:700; } .step b { font-size:14px; } .step small { color:var(--muted); margin-top:3px; }
-.step[aria-selected="true"] { background:var(--soft); box-shadow:inset 3px 0 var(--accent); } .step[hidden] { display:none; }
-.diagram { padding:22px; } .actors { display:flex; flex-wrap:wrap; gap:8px; }
+.step>span { grid-row:1/3; color:var(--accent); font-weight:700; }
+.step b { font-size:14px; }
+.step small { color:var(--muted); margin-top:3px; }
+.step[aria-selected="true"] { background:var(--soft); box-shadow:inset 3px 0 var(--accent); }
+.step[hidden],.flow-panel[hidden] { display:none; }
+.diagram { padding:22px; }
+.actors { display:flex; flex-wrap:wrap; gap:8px; }
 .actor { border:1px solid var(--line); border-radius:8px; padding:9px 11px; color:var(--muted); transition:.15s; }
 .actor.source { border-color:var(--accent); color:var(--ink); background:var(--soft); box-shadow:inset 0 -3px var(--accent); }
 .actor.target { border-color:var(--accent); color:white; background:var(--accent); }
 .active-route { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:12px; margin:28px 0; padding:18px; border:1px solid var(--line); border-radius:10px; text-align:center; }
-.active-route span { color:var(--accent); font-size:24px; } article { border-top:1px solid var(--line); padding-top:20px; }
+.active-route span { color:var(--accent); font-size:24px; }
+article { border-top:1px solid var(--line); padding-top:20px; }
 .phase { color:var(--accent); font-size:12px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
-article h3 { margin-top:6px; font-size:22px; } .detail { background:var(--bg); border-radius:8px; padding:14px; }
-.detail label { display:block; color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; } .detail p { margin:5px 0 0; }
-@media(max-width:850px) { .layout { grid-template-columns:1fr; } .steps { max-height:360px; border-right:0; border-bottom:1px solid var(--line); } .flow-panel>header { align-items:flex-start; flex-direction:column; } }
+article h3 { margin-top:6px; font-size:22px; }
+.detail { background:var(--bg); border-radius:8px; padding:14px; }
+.detail label { display:block; color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; }
+.detail p { margin:5px 0 0; }
+@media(max-width:850px) {
+  .layout { grid-template-columns:1fr; }
+  .steps { max-height:360px; border-right:0; border-bottom:1px solid var(--line); }
+  .flow-panel>header { align-items:flex-start; flex-direction:column; }
+}
 </style>
 </head>
 <body>
 <main>
-<h1>Gym episode execution walkthroughs</h1>
-<p class="intro">This companion contains only the interactive execution diagrams. Episode processors are a fourth server type; the sandbox-server walkthrough shows the optional fifth type. Every <code>POST /run</code> carries one <code>EpisodeKey</code>, which keeps <code>rollout_id</code> and <code>attempt</code> together. The <a href="episode-orchestration-design.md">Markdown proposal</a> defines the architecture, and the <a href="episode-orchestration-milestones.md">milestones</a> define delivery order and gates.</p>
-<nav class="flow-tabs" aria-label="Execution paths"><button class="flow-tab" type="button" data-flow="simple" aria-selected="false">Simple agent · harness server</button><button class="flow-tab" type="button" data-flow="opencode-owned" aria-selected="false">OpenCode · harness-created sandbox</button><button class="flow-tab" type="button" data-flow="opencode-borrowed" aria-selected="false">OpenCode · direct sandbox access</button><button class="flow-tab" type="button" data-flow="opencode-leased" aria-selected="false">OpenCode · sandbox-server lease</button><button class="flow-tab" type="button" data-flow="terminus" aria-selected="false">Terminus-2 · local or borrowed terminal</button></nav>
-<section class="flow-panel" id="walkthrough-simple" data-flow="simple" hidden><header><div><h2>Simple agent · harness server</h2><p>The harness server runs the model-and-tool loop in its own virtualenv. No sandbox is involved.</p></div><div class="step-nav"><button type="button" data-nav="prev">Previous</button><span class="counter"></span><button type="button" data-nav="next">Next</button></div></header><div class="phase-tabs"><button class="phase-tab" type="button" data-phase="All" aria-pressed="true">All</button><button class="phase-tab" type="button" data-phase="Admission" aria-pressed="false">Admission</button><button class="phase-tab" type="button" data-phase="Seed" aria-pressed="false">Seed</button><button class="phase-tab" type="button" data-phase="Execute" aria-pressed="false">Execute</button><button class="phase-tab" type="button" data-phase="Cleanup" aria-pressed="false">Cleanup</button><button class="phase-tab" type="button" data-phase="Verify" aria-pressed="false">Verify</button></div><div class="layout"><div class="steps"><button class="step" type="button" data-index="0" data-phase="Admission" aria-selected="false"><span>01</span><b>POST /run</b><small>Rollout caller → Episode processor</small></button><button class="step" type="button" data-index="1" data-phase="Seed" aria-selected="false"><span>02</span><b>seed session; no SandboxAccess</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="2" data-phase="Execute" aria-selected="false"><span>03</span><b>delegate role-scoped tool access</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="3" data-phase="Execute" aria-selected="false"><span>04</span><b>open harness session</b><small>Episode processor → Simple-agent harness</small></button><button class="step" type="button" data-index="4" data-phase="Execute" aria-selected="false"><span>05</span><b>POST /v1/responses</b><small>Episode processor → Simple-agent harness</small></button><button class="step" type="button" data-index="5" data-phase="Execute" aria-selected="false"><span>06</span><b>model request</b><small>Simple-agent harness → Model server</small></button><button class="step" type="button" data-index="6" data-phase="Execute" aria-selected="false"><span>07</span><b>resource tool call</b><small>Simple-agent harness → Resources server</small></button><button class="step" type="button" data-index="7" data-phase="Execute" aria-selected="false"><span>08</span><b>NeMoGymResponse</b><small>Simple-agent harness → Episode processor</small></button><button class="step" type="button" data-index="8" data-phase="Cleanup" aria-selected="false"><span>09</span><b>close harness session</b><small>Episode processor → Simple-agent harness</small></button><button class="step" type="button" data-index="9" data-phase="Verify" aria-selected="false"><span>10</span><b>verify response</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="10" data-phase="Cleanup" aria-selected="false"><span>11</span><b>close resources session</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="11" data-phase="Execute" aria-selected="false"><span>12</span><b>publish native or compatibility response</b><small>Episode processor → Rollout caller</small></button></div><div class="diagram"><div class="actors"><div class="actor" data-actor="Rollout caller">Rollout caller</div><div class="actor" data-actor="Episode processor">Episode processor</div><div class="actor" data-actor="Resources server">Resources server</div><div class="actor" data-actor="Simple-agent harness">Simple-agent harness</div><div class="actor" data-actor="Model server">Model server</div></div><div class="active-route"><strong data-detail="source"></strong><span>→</span><strong data-detail="target"></strong></div><article><span class="phase" data-detail="phase"></span><h3 data-detail="action"></h3><div class="detail"><label>Ownership and cleanup</label><p data-detail="ownership"></p></div></article></div></div></section><section class="flow-panel" id="walkthrough-opencode-owned" data-flow="opencode-owned" hidden><header><div><h2>OpenCode · harness-created sandbox</h2><p>Resources returns no sandbox access. The OpenCode harness creates and later stops its configured sandbox.</p></div><div class="step-nav"><button type="button" data-nav="prev">Previous</button><span class="counter"></span><button type="button" data-nav="next">Next</button></div></header><div class="phase-tabs"><button class="phase-tab" type="button" data-phase="All" aria-pressed="true">All</button><button class="phase-tab" type="button" data-phase="Admission" aria-pressed="false">Admission</button><button class="phase-tab" type="button" data-phase="Seed" aria-pressed="false">Seed</button><button class="phase-tab" type="button" data-phase="Execute" aria-pressed="false">Execute</button><button class="phase-tab" type="button" data-phase="Cleanup" aria-pressed="false">Cleanup</button><button class="phase-tab" type="button" data-phase="Verify" aria-pressed="false">Verify</button></div><div class="layout"><div class="steps"><button class="step" type="button" data-index="0" data-phase="Admission" aria-selected="false"><span>01</span><b>POST /run</b><small>Rollout caller → Episode processor</small></button><button class="step" type="button" data-index="1" data-phase="Seed" aria-selected="false"><span>02</span><b>seed session; no SandboxAccess</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="2" data-phase="Execute" aria-selected="false"><span>03</span><b>delegate role-scoped tool access</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="3" data-phase="Execute" aria-selected="false"><span>04</span><b>open harness session</b><small>Episode processor → OpenCode harness</small></button><button class="step" type="button" data-index="4" data-phase="Execute" aria-selected="false"><span>05</span><b>create configured sandbox</b><small>OpenCode harness → Harness sandbox</small></button><button class="step" type="button" data-index="5" data-phase="Execute" aria-selected="false"><span>06</span><b>POST /v1/responses</b><small>Episode processor → OpenCode harness</small></button><button class="step" type="button" data-index="6" data-phase="Execute" aria-selected="false"><span>07</span><b>install or locate OpenCode and run CLI</b><small>OpenCode harness → Harness sandbox</small></button><button class="step" type="button" data-index="7" data-phase="Execute" aria-selected="false"><span>08</span><b>model requests</b><small>Harness sandbox → Model server</small></button><button class="step" type="button" data-index="8" data-phase="Execute" aria-selected="false"><span>09</span><b>NeMoGymResponse</b><small>OpenCode harness → Episode processor</small></button><button class="step" type="button" data-index="9" data-phase="Cleanup" aria-selected="false"><span>10</span><b>close session and stop harness sandbox</b><small>Episode processor → OpenCode harness</small></button><button class="step" type="button" data-index="10" data-phase="Verify" aria-selected="false"><span>11</span><b>verify response</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="11" data-phase="Cleanup" aria-selected="false"><span>12</span><b>close resources session</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="12" data-phase="Execute" aria-selected="false"><span>13</span><b>publish native or compatibility response</b><small>Episode processor → Rollout caller</small></button></div><div class="diagram"><div class="actors"><div class="actor" data-actor="Rollout caller">Rollout caller</div><div class="actor" data-actor="Episode processor">Episode processor</div><div class="actor" data-actor="Resources server">Resources server</div><div class="actor" data-actor="OpenCode harness">OpenCode harness</div><div class="actor" data-actor="Harness sandbox">Harness sandbox</div><div class="actor" data-actor="Model server">Model server</div></div><div class="active-route"><strong data-detail="source"></strong><span>→</span><strong data-detail="target"></strong></div><article><span class="phase" data-detail="phase"></span><h3 data-detail="action"></h3><div class="detail"><label>Ownership and cleanup</label><p data-detail="ownership"></p></div></article></div></div></section><section class="flow-panel" id="walkthrough-opencode-borrowed" data-flow="opencode-borrowed" hidden><header><div><h2>OpenCode · resources-owned sandbox</h2><p>Resources returns operate-only SandboxAccess because verification needs the task sandbox OpenCode modifies.</p></div><div class="step-nav"><button type="button" data-nav="prev">Previous</button><span class="counter"></span><button type="button" data-nav="next">Next</button></div></header><div class="phase-tabs"><button class="phase-tab" type="button" data-phase="All" aria-pressed="true">All</button><button class="phase-tab" type="button" data-phase="Admission" aria-pressed="false">Admission</button><button class="phase-tab" type="button" data-phase="Seed" aria-pressed="false">Seed</button><button class="phase-tab" type="button" data-phase="Execute" aria-pressed="false">Execute</button><button class="phase-tab" type="button" data-phase="Cleanup" aria-pressed="false">Cleanup</button><button class="phase-tab" type="button" data-phase="Verify" aria-pressed="false">Verify</button></div><div class="layout"><div class="steps"><button class="step" type="button" data-index="0" data-phase="Admission" aria-selected="false"><span>01</span><b>POST /run</b><small>Rollout caller → Episode processor</small></button><button class="step" type="button" data-index="1" data-phase="Seed" aria-selected="false"><span>02</span><b>seed session</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="2" data-phase="Seed" aria-selected="false"><span>03</span><b>create task sandbox</b><small>Resources server → Task sandbox</small></button><button class="step" type="button" data-index="3" data-phase="Execute" aria-selected="false"><span>04</span><b>return SandboxAccess</b><small>Resources server → Episode processor</small></button><button class="step" type="button" data-index="4" data-phase="Execute" aria-selected="false"><span>05</span><b>delegate role-scoped tool access</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="5" data-phase="Execute" aria-selected="false"><span>06</span><b>open harness session with SandboxAccess</b><small>Episode processor → OpenCode harness</small></button><button class="step" type="button" data-index="6" data-phase="Execute" aria-selected="false"><span>07</span><b>connect as borrower</b><small>OpenCode harness → Task sandbox</small></button><button class="step" type="button" data-index="7" data-phase="Execute" aria-selected="false"><span>08</span><b>POST /v1/responses</b><small>Episode processor → OpenCode harness</small></button><button class="step" type="button" data-index="8" data-phase="Execute" aria-selected="false"><span>09</span><b>run OpenCode</b><small>OpenCode harness → Task sandbox</small></button><button class="step" type="button" data-index="9" data-phase="Execute" aria-selected="false"><span>10</span><b>model requests</b><small>Task sandbox → Model server</small></button><button class="step" type="button" data-index="10" data-phase="Execute" aria-selected="false"><span>11</span><b>NeMoGymResponse</b><small>OpenCode harness → Episode processor</small></button><button class="step" type="button" data-index="11" data-phase="Cleanup" aria-selected="false"><span>12</span><b>close session and disconnect borrower</b><small>Episode processor → OpenCode harness</small></button><button class="step" type="button" data-index="12" data-phase="Verify" aria-selected="false"><span>13</span><b>verify task sandbox</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="13" data-phase="Execute" aria-selected="false"><span>14</span><b>run benchmark verification when required</b><small>Resources server → Verifier sandbox</small></button><button class="step" type="button" data-index="14" data-phase="Verify" aria-selected="false"><span>15</span><b>reward and verifier metrics</b><small>Resources server → Episode processor</small></button><button class="step" type="button" data-index="15" data-phase="Cleanup" aria-selected="false"><span>16</span><b>close resources session and stop task sandbox</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="16" data-phase="Execute" aria-selected="false"><span>17</span><b>publish native or compatibility response</b><small>Episode processor → Rollout caller</small></button></div><div class="diagram"><div class="actors"><div class="actor" data-actor="Rollout caller">Rollout caller</div><div class="actor" data-actor="Episode processor">Episode processor</div><div class="actor" data-actor="Resources server">Resources server</div><div class="actor" data-actor="OpenCode harness">OpenCode harness</div><div class="actor" data-actor="Task sandbox">Task sandbox</div><div class="actor" data-actor="Model server">Model server</div><div class="actor" data-actor="Verifier sandbox">Verifier sandbox</div></div><div class="active-route"><strong data-detail="source"></strong><span>→</span><strong data-detail="target"></strong></div><article><span class="phase" data-detail="phase"></span><h3 data-detail="action"></h3><div class="detail"><label>Ownership and cleanup</label><p data-detail="ownership"></p></div></article></div></div></section><section class="flow-panel" id="walkthrough-terminus" data-flow="terminus" hidden><header><div><h2>Terminus-2 · local or borrowed terminal</h2><p>The Python loop stays in the harness server. Terminal commands run locally or through resources-provided SandboxAccess.</p></div><div class="step-nav"><button type="button" data-nav="prev">Previous</button><span class="counter"></span><button type="button" data-nav="next">Next</button></div></header><div class="phase-tabs"><button class="phase-tab" type="button" data-phase="All" aria-pressed="true">All</button><button class="phase-tab" type="button" data-phase="Admission" aria-pressed="false">Admission</button><button class="phase-tab" type="button" data-phase="Seed" aria-pressed="false">Seed</button><button class="phase-tab" type="button" data-phase="Execute" aria-pressed="false">Execute</button><button class="phase-tab" type="button" data-phase="Cleanup" aria-pressed="false">Cleanup</button><button class="phase-tab" type="button" data-phase="Verify" aria-pressed="false">Verify</button></div><div class="layout"><div class="steps"><button class="step" type="button" data-index="0" data-phase="Admission" aria-selected="false"><span>01</span><b>POST /run</b><small>Rollout caller → Episode processor</small></button><button class="step" type="button" data-index="1" data-phase="Seed" aria-selected="false"><span>02</span><b>seed session; SandboxAccess is optional</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="2" data-phase="Execute" aria-selected="false"><span>03</span><b>delegate role-scoped tool access</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="3" data-phase="Execute" aria-selected="false"><span>04</span><b>open harness session with optional SandboxAccess</b><small>Episode processor → Terminus-2 harness</small></button><button class="step" type="button" data-index="4" data-phase="Execute" aria-selected="false"><span>05</span><b>select local commands or connect as borrower</b><small>Terminus-2 harness → Local workspace or task sandbox</small></button><button class="step" type="button" data-index="5" data-phase="Execute" aria-selected="false"><span>06</span><b>POST /v1/responses</b><small>Episode processor → Terminus-2 harness</small></button><button class="step" type="button" data-index="6" data-phase="Execute" aria-selected="false"><span>07</span><b>model requests from Python loop</b><small>Terminus-2 harness → Model server</small></button><button class="step" type="button" data-index="7" data-phase="Execute" aria-selected="false"><span>08</span><b>execute terminal commands</b><small>Terminus-2 harness → Local workspace or task sandbox</small></button><button class="step" type="button" data-index="8" data-phase="Execute" aria-selected="false"><span>09</span><b>NeMoGymResponse</b><small>Terminus-2 harness → Episode processor</small></button><button class="step" type="button" data-index="9" data-phase="Cleanup" aria-selected="false"><span>10</span><b>close harness session and disconnect if borrowed</b><small>Episode processor → Terminus-2 harness</small></button><button class="step" type="button" data-index="10" data-phase="Verify" aria-selected="false"><span>11</span><b>verify response or task sandbox</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="11" data-phase="Cleanup" aria-selected="false"><span>12</span><b>close resources session</b><small>Episode processor → Resources server</small></button><button class="step" type="button" data-index="12" data-phase="Execute" aria-selected="false"><span>13</span><b>publish native or compatibility response</b><small>Episode processor → Rollout caller</small></button></div><div class="diagram"><div class="actors"><div class="actor" data-actor="Rollout caller">Rollout caller</div><div class="actor" data-actor="Episode processor">Episode processor</div><div class="actor" data-actor="Resources server">Resources server</div><div class="actor" data-actor="Terminus-2 harness">Terminus-2 harness</div><div class="actor" data-actor="Local workspace or task sandbox">Local workspace or task sandbox</div><div class="actor" data-actor="Model server">Model server</div></div><div class="active-route"><strong data-detail="source"></strong><span>→</span><strong data-detail="target"></strong></div><article><span class="phase" data-detail="phase"></span><h3 data-detail="action"></h3><div class="detail"><label>Ownership and cleanup</label><p data-detail="ownership"></p></div></article></div></div></section>
-<section class="flow-panel" id="walkthrough-opencode-leased" data-flow="opencode-leased" hidden>
-  <header>
-    <div>
-      <h2>OpenCode · sandbox-server lease</h2>
-      <p>A process-bound provider runs behind an optional sandbox server. Resources holds owner authority; the harness receives only an operate lease.</p>
-    </div>
-    <div class="step-nav"><button type="button" data-nav="prev">Previous</button><span class="counter"></span><button type="button" data-nav="next">Next</button></div>
-  </header>
-  <div class="phase-tabs"><button class="phase-tab" type="button" data-phase="All" aria-pressed="true">All</button><button class="phase-tab" type="button" data-phase="Admission" aria-pressed="false">Admission</button><button class="phase-tab" type="button" data-phase="Seed" aria-pressed="false">Seed</button><button class="phase-tab" type="button" data-phase="Execute" aria-pressed="false">Execute</button><button class="phase-tab" type="button" data-phase="Cleanup" aria-pressed="false">Cleanup</button><button class="phase-tab" type="button" data-phase="Verify" aria-pressed="false">Verify</button></div>
-  <div class="layout">
-    <div class="steps">
-      <button class="step" type="button" data-index="0" data-phase="Admission" aria-selected="false"><span>01</span><b>POST /run</b><small>Rollout caller → Episode processor</small></button>
-      <button class="step" type="button" data-index="1" data-phase="Seed" aria-selected="false"><span>02</span><b>seed session</b><small>Episode processor → Resources server</small></button>
-      <button class="step" type="button" data-index="2" data-phase="Seed" aria-selected="false"><span>03</span><b>allocate with SandboxSpec</b><small>Resources server → Sandbox server</small></button>
-      <button class="step" type="button" data-index="3" data-phase="Seed" aria-selected="false"><span>04</span><b>return owner capability and operate lease</b><small>Sandbox server → Resources server</small></button>
-      <button class="step" type="button" data-index="4" data-phase="Execute" aria-selected="false"><span>05</span><b>return SandboxAccess</b><small>Resources server → Episode processor</small></button>
-      <button class="step" type="button" data-index="5" data-phase="Execute" aria-selected="false"><span>06</span><b>open harness session with operate lease</b><small>Episode processor → OpenCode harness</small></button>
-      <button class="step" type="button" data-index="6" data-phase="Execute" aria-selected="false"><span>07</span><b>redeem operate lease</b><small>OpenCode harness → Sandbox server</small></button>
-      <button class="step" type="button" data-index="7" data-phase="Execute" aria-selected="false"><span>08</span><b>POST /v1/responses</b><small>Episode processor → OpenCode harness</small></button>
-      <button class="step" type="button" data-index="8" data-phase="Execute" aria-selected="false"><span>09</span><b>execute OpenCode operations</b><small>OpenCode harness → Sandbox server</small></button>
-      <button class="step" type="button" data-index="9" data-phase="Execute" aria-selected="false"><span>10</span><b>operate provider sandbox</b><small>Sandbox server → Task sandbox</small></button>
-      <button class="step" type="button" data-index="10" data-phase="Execute" aria-selected="false"><span>11</span><b>NeMoGymResponse</b><small>OpenCode harness → Episode processor</small></button>
-      <button class="step" type="button" data-index="11" data-phase="Cleanup" aria-selected="false"><span>12</span><b>close session and revoke borrower lease</b><small>Episode processor → OpenCode harness</small></button>
-      <button class="step" type="button" data-index="12" data-phase="Verify" aria-selected="false"><span>13</span><b>verify task state</b><small>Episode processor → Resources server</small></button>
-      <button class="step" type="button" data-index="13" data-phase="Verify" aria-selected="false"><span>14</span><b>operate for extraction and verification</b><small>Resources server → Sandbox server</small></button>
-      <button class="step" type="button" data-index="14" data-phase="Cleanup" aria-selected="false"><span>15</span><b>close resources session</b><small>Episode processor → Resources server</small></button>
-      <button class="step" type="button" data-index="15" data-phase="Cleanup" aria-selected="false"><span>16</span><b>destroy with owner capability</b><small>Resources server → Sandbox server</small></button>
-      <button class="step" type="button" data-index="16" data-phase="Execute" aria-selected="false"><span>17</span><b>publish native or compatibility response</b><small>Episode processor → Rollout caller</small></button>
-    </div>
-    <div class="diagram">
-      <div class="actors"><div class="actor" data-actor="Rollout caller">Rollout caller</div><div class="actor" data-actor="Episode processor">Episode processor</div><div class="actor" data-actor="Resources server">Resources server</div><div class="actor" data-actor="Sandbox server">Sandbox server</div><div class="actor" data-actor="OpenCode harness">OpenCode harness</div><div class="actor" data-actor="Task sandbox">Task sandbox</div></div>
-      <div class="active-route"><strong data-detail="source"></strong><span>→</span><strong data-detail="target"></strong></div>
-      <article><span class="phase" data-detail="phase"></span><h3 data-detail="action"></h3><div class="detail"><label>Ownership and cleanup</label><p data-detail="ownership"></p></div></article>
-    </div>
-  </div>
-</section>
+<h1>Gym episode orchestration walkthroughs</h1>
+<p class="intro">These interactive flows show how an episode processor composes Gym services or runs a self-contained integration. Each <code>POST /run</code> carries one <code>EpisodeId</code>. See the <a href="episode-orchestration-design.md">design</a> for the contracts and the <a href="episode-orchestration-milestones.md">milestones</a> for delivery order.</p>
+<nav class="flow-tabs" aria-label="Episode flows"></nav>
+<div id="walkthroughs"></div>
 </main>
 <script>
-const flows = [{"id": "simple", "title": "Simple agent \u00b7 harness server", "summary": "The harness server runs the model-and-tool loop in its own virtualenv. No sandbox is involved.", "actors": ["Rollout caller", "Episode processor", "Resources server", "Simple-agent harness", "Model server"], "steps": [{"source": "Rollout caller", "target": "Episode processor", "action": "POST /run", "phase": "Admission", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Resources server", "action": "seed session; no SandboxAccess", "phase": "Seed", "ownership": "Resources retains ownership; the harness receives operate-only access."}, {"source": "Episode processor", "target": "Resources server", "action": "delegate role-scoped tool access", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Simple-agent harness", "action": "open harness session", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Simple-agent harness", "action": "POST /v1/responses", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Simple-agent harness", "target": "Model server", "action": "model request", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Simple-agent harness", "target": "Resources server", "action": "resource tool call", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Simple-agent harness", "target": "Episode processor", "action": "NeMoGymResponse", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Simple-agent harness", "action": "close harness session", "phase": "Cleanup", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Resources server", "action": "verify response", "phase": "Verify", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Resources server", "action": "close resources session", "phase": "Cleanup", "ownership": "Resources releases its session state."}, {"source": "Episode processor", "target": "Rollout caller", "action": "publish native or compatibility response", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}]}, {"id": "opencode-owned", "title": "OpenCode \u00b7 harness-created sandbox", "summary": "Resources returns no sandbox access. The OpenCode harness creates and later stops its configured sandbox.", "actors": ["Rollout caller", "Episode processor", "Resources server", "OpenCode harness", "Harness sandbox", "Model server"], "steps": [{"source": "Rollout caller", "target": "Episode processor", "action": "POST /run", "phase": "Admission", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Resources server", "action": "seed session; no SandboxAccess", "phase": "Seed", "ownership": "Resources retains ownership; the harness receives operate-only access."}, {"source": "Episode processor", "target": "Resources server", "action": "delegate role-scoped tool access", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "OpenCode harness", "action": "open harness session", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "OpenCode harness", "target": "Harness sandbox", "action": "create configured sandbox", "phase": "Execute", "ownership": "The harness server owns this sandbox and must stop it."}, {"source": "Episode processor", "target": "OpenCode harness", "action": "POST /v1/responses", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "OpenCode harness", "target": "Harness sandbox", "action": "install or locate OpenCode and run CLI", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Harness sandbox", "target": "Model server", "action": "model requests", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "OpenCode harness", "target": "Episode processor", "action": "NeMoGymResponse", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "OpenCode harness", "action": "close session and stop harness sandbox", "phase": "Cleanup", "ownership": "The harness server stops the sandbox it created."}, {"source": "Episode processor", "target": "Resources server", "action": "verify response", "phase": "Verify", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Resources server", "action": "close resources session", "phase": "Cleanup", "ownership": "Resources releases its session state."}, {"source": "Episode processor", "target": "Rollout caller", "action": "publish native or compatibility response", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}]}, {"id": "opencode-borrowed", "title": "OpenCode \u00b7 resources-owned sandbox", "summary": "Resources returns operate-only SandboxAccess because verification needs the task sandbox OpenCode modifies.", "actors": ["Rollout caller", "Episode processor", "Resources server", "OpenCode harness", "Task sandbox", "Model server", "Verifier sandbox"], "steps": [{"source": "Rollout caller", "target": "Episode processor", "action": "POST /run", "phase": "Admission", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Resources server", "action": "seed session", "phase": "Seed", "ownership": "No lifecycle ownership transfers."}, {"source": "Resources server", "target": "Task sandbox", "action": "create task sandbox", "phase": "Seed", "ownership": "Resources owns the task sandbox."}, {"source": "Resources server", "target": "Episode processor", "action": "return SandboxAccess", "phase": "Execute", "ownership": "Resources retains ownership; the harness receives operate-only access."}, {"source": "Episode processor", "target": "Resources server", "action": "delegate role-scoped tool access", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "OpenCode harness", "action": "open harness session with SandboxAccess", "phase": "Execute", "ownership": "Resources retains ownership; the harness receives operate-only access."}, {"source": "OpenCode harness", "target": "Task sandbox", "action": "connect as borrower", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "OpenCode harness", "action": "POST /v1/responses", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "OpenCode harness", "target": "Task sandbox", "action": "run OpenCode", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Task sandbox", "target": "Model server", "action": "model requests", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "OpenCode harness", "target": "Episode processor", "action": "NeMoGymResponse", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "OpenCode harness", "action": "close session and disconnect borrower", "phase": "Cleanup", "ownership": "The harness closes only its borrower connection; resources still owns the sandbox."}, {"source": "Episode processor", "target": "Resources server", "action": "verify task sandbox", "phase": "Verify", "ownership": "No lifecycle ownership transfers."}, {"source": "Resources server", "target": "Verifier sandbox", "action": "run benchmark verification when required", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Resources server", "target": "Episode processor", "action": "reward and verifier metrics", "phase": "Verify", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Resources server", "action": "close resources session and stop task sandbox", "phase": "Cleanup", "ownership": "Resources stops the task sandbox it created."}, {"source": "Episode processor", "target": "Rollout caller", "action": "publish native or compatibility response", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}]}, {"id": "terminus", "title": "Terminus-2 \u00b7 local or borrowed terminal", "summary": "The Python loop stays in the harness server. Terminal commands run locally or through resources-provided SandboxAccess.", "actors": ["Rollout caller", "Episode processor", "Resources server", "Terminus-2 harness", "Local workspace or task sandbox", "Model server"], "steps": [{"source": "Rollout caller", "target": "Episode processor", "action": "POST /run", "phase": "Admission", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Resources server", "action": "seed session; SandboxAccess is optional", "phase": "Seed", "ownership": "Resources retains ownership; the harness receives operate-only access."}, {"source": "Episode processor", "target": "Resources server", "action": "delegate role-scoped tool access", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Terminus-2 harness", "action": "open harness session with optional SandboxAccess", "phase": "Execute", "ownership": "Resources retains ownership; the harness receives operate-only access."}, {"source": "Terminus-2 harness", "target": "Local workspace or task sandbox", "action": "select local commands or connect as borrower", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Terminus-2 harness", "action": "POST /v1/responses", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Terminus-2 harness", "target": "Model server", "action": "model requests from Python loop", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Terminus-2 harness", "target": "Local workspace or task sandbox", "action": "execute terminal commands", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Terminus-2 harness", "target": "Episode processor", "action": "NeMoGymResponse", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Terminus-2 harness", "action": "close harness session and disconnect if borrowed", "phase": "Cleanup", "ownership": "The harness closes only its borrower connection; resources still owns the sandbox."}, {"source": "Episode processor", "target": "Resources server", "action": "verify response or task sandbox", "phase": "Verify", "ownership": "No lifecycle ownership transfers."}, {"source": "Episode processor", "target": "Resources server", "action": "close resources session", "phase": "Cleanup", "ownership": "Resources releases its session state."}, {"source": "Episode processor", "target": "Rollout caller", "action": "publish native or compatibility response", "phase": "Execute", "ownership": "No lifecycle ownership transfers."}]}];
-flows.push({
-  id: 'opencode-leased',
-  title: 'OpenCode · sandbox-server lease',
-  summary: 'A process-bound provider runs behind an optional sandbox server. Resources holds owner authority; the harness receives only an operate lease.',
-  actors: ['Rollout caller', 'Episode processor', 'Resources server', 'Sandbox server', 'OpenCode harness', 'Task sandbox'],
-  steps: [
-    {source: 'Rollout caller', target: 'Episode processor', action: 'POST /run', phase: 'Admission', ownership: 'No lifecycle ownership transfers.'},
-    {source: 'Episode processor', target: 'Resources server', action: 'seed session', phase: 'Seed', ownership: 'Resources begins the task lifecycle.'},
-    {source: 'Resources server', target: 'Sandbox server', action: 'allocate with SandboxSpec', phase: 'Seed', ownership: 'Resources requests the sandbox; the sandbox server retains the process-bound provider handle.'},
-    {source: 'Sandbox server', target: 'Resources server', action: 'return owner capability and operate lease', phase: 'Seed', ownership: 'Resources receives destruction authority. The harness will receive only operate authority.'},
-    {source: 'Resources server', target: 'Episode processor', action: 'return SandboxAccess', phase: 'Execute', ownership: 'The processor transports the reference and operate lease without acquiring ownership.'},
-    {source: 'Episode processor', target: 'OpenCode harness', action: 'open harness session with operate lease', phase: 'Execute', ownership: 'Resources retains owner authority.'},
-    {source: 'OpenCode harness', target: 'Sandbox server', action: 'redeem operate lease', phase: 'Execute', ownership: 'The harness becomes a borrower and cannot destroy the task sandbox.'},
-    {source: 'Episode processor', target: 'OpenCode harness', action: 'POST /v1/responses', phase: 'Execute', ownership: 'No lifecycle ownership transfers.'},
-    {source: 'OpenCode harness', target: 'Sandbox server', action: 'execute OpenCode operations', phase: 'Execute', ownership: 'Every operation is authorized by the bounded borrower lease.'},
-    {source: 'Sandbox server', target: 'Task sandbox', action: 'operate provider sandbox', phase: 'Execute', ownership: 'The sandbox server retains the live provider handle.'},
-    {source: 'OpenCode harness', target: 'Episode processor', action: 'NeMoGymResponse', phase: 'Execute', ownership: 'No lifecycle ownership transfers.'},
-    {source: 'Episode processor', target: 'OpenCode harness', action: 'close session and revoke borrower lease', phase: 'Cleanup', ownership: 'Closing the harness session cannot destroy the resources-owned task sandbox.'},
-    {source: 'Episode processor', target: 'Resources server', action: 'verify task state', phase: 'Verify', ownership: 'Resources retains task-lifecycle authority through verification.'},
-    {source: 'Resources server', target: 'Sandbox server', action: 'operate for extraction and verification', phase: 'Verify', ownership: 'Resources uses owner-scoped authority while required task state remains alive.'},
-    {source: 'Episode processor', target: 'Resources server', action: 'close resources session', phase: 'Cleanup', ownership: 'Resources performs environment-specific cleanup.'},
-    {source: 'Resources server', target: 'Sandbox server', action: 'destroy with owner capability', phase: 'Cleanup', ownership: 'The sandbox server destroys the provider sandbox only on owner-authorized cleanup.'},
-    {source: 'Episode processor', target: 'Rollout caller', action: 'publish native or compatibility response', phase: 'Execute', ownership: 'No lifecycle ownership transfers.'}
-  ]
-});
-const tabs = [...document.querySelectorAll('.flow-tab')];
-const panels = [...document.querySelectorAll('.flow-panel')];
-function activateFlow(id) {
-  tabs.forEach(tab => tab.setAttribute('aria-selected', String(tab.dataset.flow === id)));
-  panels.forEach(panel => panel.hidden = panel.dataset.flow !== id);
-  const panel = panels.find(item => item.dataset.flow === id);
-  if (panel && !panel.dataset.ready) initialize(panel, flows.find(flow => flow.id === id));
+const flows = [
+  {
+    id: "simple",
+    title: "Simple Agent",
+    summary: "A resources-backed episode with tools and no sandbox.",
+    actors: ["Rollout caller", "Episode processor", "Resources server", "Simple Agent server", "Model server"],
+    steps: [
+      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol and final result."],
+      ["Episode processor", "Resources server", "POST /seed_session with EpisodeSeedRequest", "Seed", "The resources server creates and owns the resources session."],
+      ["Resources server", "Episode processor", "EpisodeSeedResponse with resources tools", "Seed", "The processor transports tool access but does not proxy tool calls."],
+      ["Episode processor", "Simple Agent server", "POST /v1/agent_sessions with AgentSessionCreateRequest", "Agent session", "The agent server creates and owns its agent session."],
+      ["Episode processor", "Simple Agent server", "POST /v1/responses with agent session ID", "Activation", "The Responses API body remains unchanged; the session ID is carried in an HTTP header."],
+      ["Simple Agent server", "Model server", "Model request", "Activation", "The agent server owns the model-and-tool loop."],
+      ["Simple Agent server", "Resources server", "Resources tool call", "Activation", "The resources server authorizes the call against its session."],
+      ["Simple Agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the agent response."],
+      ["Episode processor", "Simple Agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server stops agent-controlled activity and flushes observations."],
+      ["Episode processor", "Resources server", "POST /verify with EpisodeVerifyRequest", "Verify", "The resources server returns EpisodeVerification, including verifier_data."],
+      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server releases the objects it owns."],
+      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The final response contains the agent response, verification, observations, or failure."]
+    ]
+  },
+  {
+    id: "opencode-owned",
+    title: "OpenCode · agent-owned sandbox",
+    summary: "The resources server supplies no task sandbox, so the OpenCode agent server creates a fallback sandbox.",
+    actors: ["Rollout caller", "Episode processor", "Resources server", "OpenCode agent server", "Agent-owned sandbox", "Model server"],
+    steps: [
+      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol."],
+      ["Episode processor", "Resources server", "POST /seed_session", "Seed", "The resources server creates its session and returns no SandboxAccess."],
+      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions without SandboxAccess", "Agent session", "The agent server follows its fallback-sandbox configuration."],
+      ["OpenCode agent server", "Agent-owned sandbox", "Create fallback sandbox", "Agent session", "The agent server owns this sandbox."],
+      ["Episode processor", "OpenCode agent server", "POST /v1/responses", "Activation", "The processor starts one complete OpenCode activation."],
+      ["OpenCode agent server", "Agent-owned sandbox", "Run OpenCode", "Activation", "Commands execute in the agent-owned sandbox."],
+      ["OpenCode agent server", "Model server", "Model requests", "Activation", "The OpenCode integration calls the configured model server."],
+      ["OpenCode agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the response."],
+      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server destroys its fallback sandbox."],
+      ["Episode processor", "Resources server", "POST /verify", "Verify", "Verification can use the response and resources-server-owned state, but not the destroyed fallback sandbox."],
+      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server releases its session."],
+      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The processor publishes the final episode result."]
+    ]
+  },
+  {
+    id: "opencode-borrowed",
+    title: "OpenCode · direct sandbox access",
+    summary: "The resources server owns the task sandbox and returns a direct connection using a shared named provider configuration.",
+    actors: ["Rollout caller", "Episode processor", "Resources server", "OpenCode agent server", "Task sandbox", "Model server", "Verifier sandbox"],
+    steps: [
+      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol."],
+      ["Episode processor", "Resources server", "POST /seed_session", "Seed", "The resources server begins the task lifecycle."],
+      ["Resources server", "Task sandbox", "Create and seed task sandbox", "Seed", "The resources server owns the task sandbox."],
+      ["Resources server", "Episode processor", "EpisodeSeedResponse with DirectSandboxConnection", "Seed", "The connection carries the named sandbox_provider and serialized descriptor."],
+      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions with SandboxAccess", "Agent session", "The processor passes SandboxAccess unchanged."],
+      ["OpenCode agent server", "Task sandbox", "Resolve provider and connect as borrower", "Agent session", "The agent resolves the same top-level provider block and receives only the borrower interface."],
+      ["Episode processor", "OpenCode agent server", "POST /v1/responses", "Activation", "The processor starts one OpenCode activation."],
+      ["OpenCode agent server", "Task sandbox", "Run OpenCode", "Activation", "OpenCode modifies the task sandbox through borrower access."],
+      ["OpenCode agent server", "Model server", "Model requests", "Activation", "The agent server calls the configured model server."],
+      ["OpenCode agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the response."],
+      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server disconnects but does not destroy the task sandbox."],
+      ["Episode processor", "Resources server", "POST /verify", "Verify", "Verification runs only after agent-controlled activity has stopped."],
+      ["Resources server", "Verifier sandbox", "Optional benchmark verification", "Verify", "Any verifier sandbox remains private to the resources server."],
+      ["Resources server", "Episode processor", "EpisodeVerification", "Verify", "Common reward fields are typed; additional validated fields are in verifier_data."],
+      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server destroys the task sandbox and releases its session."],
+      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The processor publishes the full result."]
+    ]
+  },
+  {
+    id: "opencode-sandbox-server",
+    title: "OpenCode · sandbox server",
+    summary: "A sandbox server holds provider state when direct cross-process handoff is unavailable.",
+    actors: ["Rollout caller", "Episode processor", "Resources server", "Sandbox server", "OpenCode agent server", "Task sandbox"],
+    steps: [
+      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol."],
+      ["Episode processor", "Resources server", "POST /seed_session", "Seed", "The resources server begins the task lifecycle."],
+      ["Resources server", "Sandbox server", "Create task sandbox", "Seed", "The resources server remains the task-sandbox owner."],
+      ["Sandbox server", "Task sandbox", "Allocate provider sandbox", "Seed", "The sandbox server retains process-bound provider state."],
+      ["Resources server", "Episode processor", "EpisodeSeedResponse with SandboxServerConnection", "Seed", "The connection carries the sandbox server's operate-scoped SandboxRef."],
+      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions with SandboxAccess", "Agent session", "The processor transports access without using it."],
+      ["OpenCode agent server", "Sandbox server", "Connect as borrower", "Agent session", "The sandbox server enforces borrower restrictions."],
+      ["Episode processor", "OpenCode agent server", "POST /v1/responses", "Activation", "The processor starts one OpenCode activation."],
+      ["OpenCode agent server", "Sandbox server", "Execute OpenCode operations", "Activation", "Operations use the restricted sandbox connection."],
+      ["Sandbox server", "Task sandbox", "Operate provider sandbox", "Activation", "The live provider handle remains in the sandbox server."],
+      ["OpenCode agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the response."],
+      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server disconnects its borrower client."],
+      ["Episode processor", "Resources server", "POST /verify", "Verify", "The resources server retains access through verification."],
+      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server requests destruction of its task sandbox."],
+      ["Resources server", "Sandbox server", "Destroy task sandbox", "Cleanup", "Only the owner can request destruction."],
+      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The processor publishes the final result."]
+    ]
+  },
+  {
+    id: "terminus",
+    title: "Terminus-2",
+    summary: "The Terminus-2 Python loop stays in its agent server; commands run locally or in a borrowed task sandbox.",
+    actors: ["Rollout caller", "Episode processor", "Resources server", "Terminus-2 agent server", "Local workspace or task sandbox", "Model server"],
+    steps: [
+      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol."],
+      ["Episode processor", "Resources server", "POST /seed_session", "Seed", "SandboxAccess may be present or absent."],
+      ["Episode processor", "Terminus-2 agent server", "POST /v1/agent_sessions", "Agent session", "The agent server configures local execution or connects borrowed access."],
+      ["Terminus-2 agent server", "Local workspace or task sandbox", "Select command target", "Agent session", "The component that created a sandbox retains ownership."],
+      ["Episode processor", "Terminus-2 agent server", "POST /v1/responses", "Activation", "The Responses API starts one Terminus-2 activation."],
+      ["Terminus-2 agent server", "Model server", "Model requests", "Activation", "The Python loop calls the configured model server."],
+      ["Terminus-2 agent server", "Local workspace or task sandbox", "Execute terminal commands", "Activation", "Commands use the execution access selected at session creation."],
+      ["Terminus-2 agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the response."],
+      ["Episode processor", "Terminus-2 agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server stops owned activity and disconnects borrowed access."],
+      ["Episode processor", "Resources server", "POST /verify", "Verify", "The resources server returns EpisodeVerification."],
+      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server releases its session and owned objects."],
+      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The processor publishes the final result."]
+    ]
+  },
+  {
+    id: "tau2",
+    title: "Tau2 · self-contained processor",
+    summary: "Tau2 runs its interaction and verification inside the episode processor without an agent or resources server.",
+    actors: ["Rollout caller", "Tau2 episode processor", "Policy model server", "User model server"],
+    steps: [
+      ["Rollout caller", "Tau2 episode processor", "POST /run with EpisodeRequest", "Admission", "The Tau2 processor owns the complete external protocol."],
+      ["Tau2 episode processor", "Tau2 episode processor", "Validate Tau2 task_data", "Protocol", "The concrete processor validates its protocol-specific input."],
+      ["Tau2 episode processor", "Policy model server", "Policy model requests", "Protocol", "Tau2 schedules the policy participant."],
+      ["Tau2 episode processor", "User model server", "Simulated-user model requests", "Protocol", "Tau2 schedules the simulated user."],
+      ["Tau2 episode processor", "Tau2 episode processor", "Produce NeMoGymResponse and EpisodeVerification", "Verify", "Tau2 converts its typed result to the common episode contract."],
+      ["Tau2 episode processor", "Rollout caller", "EpisodeResponse", "Result", "No agent-server or resources-server session is required."]
+    ]
+  }
+];
+
+const tabsRoot = document.querySelector(".flow-tabs");
+const panelsRoot = document.querySelector("#walkthroughs");
+
+function panelMarkup(flow) {
+  const phases = ["All", ...new Set(flow.steps.map(step => step[3]))];
+  return `
+    <section class="flow-panel" data-flow="${flow.id}" hidden>
+      <header>
+        <div><h2>${flow.title}</h2><p>${flow.summary}</p></div>
+        <div class="step-nav"><button type="button" data-nav="prev">Previous</button><span class="counter"></span><button type="button" data-nav="next">Next</button></div>
+      </header>
+      <div class="phase-tabs">${phases.map((phase, index) => `<button class="phase-tab" type="button" data-phase="${phase}" aria-pressed="${index === 0}">${phase}</button>`).join("")}</div>
+      <div class="layout">
+        <div class="steps">${flow.steps.map((step, index) => `<button class="step" type="button" data-index="${index}" data-phase="${step[3]}" aria-selected="false"><span>${String(index + 1).padStart(2, "0")}</span><b>${step[2]}</b><small>${step[0]} → ${step[1]}</small></button>`).join("")}</div>
+        <div class="diagram">
+          <div class="actors">${flow.actors.map(actor => `<div class="actor" data-actor="${actor}">${actor}</div>`).join("")}</div>
+          <div class="active-route"><strong data-detail="source"></strong><span>→</span><strong data-detail="target"></strong></div>
+          <article><span class="phase" data-detail="phase"></span><h3 data-detail="action"></h3><div class="detail"><label>Responsibility</label><p data-detail="detail"></p></div></article>
+        </div>
+      </div>
+    </section>`;
 }
+
+tabsRoot.innerHTML = flows.map(flow => `<button class="flow-tab" type="button" data-flow="${flow.id}" aria-selected="false">${flow.title}</button>`).join("");
+panelsRoot.innerHTML = flows.map(panelMarkup).join("");
+
+const tabs = [...document.querySelectorAll(".flow-tab")];
+const panels = [...document.querySelectorAll(".flow-panel")];
+
 function initialize(panel, flow) {
-  panel.dataset.ready = 'true';
-  const allButtons = [...panel.querySelectorAll('.step')];
+  const allButtons = [...panel.querySelectorAll(".step")];
   let visible = allButtons;
   let selected = 0;
+
   function show(index) {
     if (!visible.length) return;
     selected = Math.max(0, Math.min(index, visible.length - 1));
     const button = visible[selected];
     const step = flow.steps[Number(button.dataset.index)];
-    allButtons.forEach(item => item.setAttribute('aria-selected', String(item === button)));
-    panel.querySelectorAll('.actor').forEach(actor => {
-      actor.classList.toggle('source', actor.dataset.actor === step.source);
-      actor.classList.toggle('target', actor.dataset.actor === step.target);
+    allButtons.forEach(item => item.setAttribute("aria-selected", String(item === button)));
+    panel.querySelectorAll(".actor").forEach(actor => {
+      actor.classList.toggle("source", actor.dataset.actor === step[0]);
+      actor.classList.toggle("target", actor.dataset.actor === step[1]);
     });
-    for (const key of ['source','target','phase','action','ownership']) panel.querySelector(`[data-detail="${key}"]`).textContent = step[key];
-    panel.querySelector('.counter').textContent = `${selected + 1} / ${visible.length}`;
-    button.scrollIntoView({block:'nearest'});
+    const details = {source: step[0], target: step[1], action: step[2], phase: step[3], detail: step[4]};
+    for (const [key, value] of Object.entries(details)) panel.querySelector(`[data-detail="${key}"]`).textContent = value;
+    panel.querySelector(".counter").textContent = `${selected + 1} / ${visible.length}`;
+    button.scrollIntoView({block:"nearest"});
   }
-  allButtons.forEach(button => button.addEventListener('click', () => show(visible.indexOf(button))));
-  panel.querySelectorAll('.phase-tab').forEach(tab => tab.addEventListener('click', () => {
-    panel.querySelectorAll('.phase-tab').forEach(item => item.setAttribute('aria-pressed', String(item === tab)));
-    visible = allButtons.filter(button => tab.dataset.phase === 'All' || button.dataset.phase === tab.dataset.phase);
+
+  allButtons.forEach(button => button.addEventListener("click", () => show(visible.indexOf(button))));
+  panel.querySelectorAll(".phase-tab").forEach(tab => tab.addEventListener("click", () => {
+    panel.querySelectorAll(".phase-tab").forEach(item => item.setAttribute("aria-pressed", String(item === tab)));
+    visible = allButtons.filter(button => tab.dataset.phase === "All" || button.dataset.phase === tab.dataset.phase);
     allButtons.forEach(button => button.hidden = !visible.includes(button));
     show(0);
   }));
-  panel.querySelector('[data-nav="prev"]').addEventListener('click', () => show(selected - 1));
-  panel.querySelector('[data-nav="next"]').addEventListener('click', () => show(selected + 1));
+  panel.querySelector('[data-nav="prev"]').addEventListener("click", () => show(selected - 1));
+  panel.querySelector('[data-nav="next"]').addEventListener("click", () => show(selected + 1));
   show(0);
 }
+
+function activateFlow(id) {
+  tabs.forEach(tab => tab.setAttribute("aria-selected", String(tab.dataset.flow === id)));
+  panels.forEach(panel => panel.hidden = panel.dataset.flow !== id);
+}
+
 panels.forEach(panel => initialize(panel, flows.find(flow => flow.id === panel.dataset.flow)));
-tabs.forEach(tab => tab.addEventListener('click', () => activateFlow(tab.dataset.flow)));
-activateFlow('simple');
+tabs.forEach(tab => tab.addEventListener("click", () => activateFlow(tab.dataset.flow)));
+activateFlow("simple");
 </script>
 </body>
 </html>
