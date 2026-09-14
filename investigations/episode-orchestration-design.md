@@ -21,9 +21,10 @@ An agent's `/v1/responses` implementation remains responsible for agent behavior
 ### Requirements
 
 - **Episode processor**
-  - Exposes `/run`, owns the episode protocol and final result, and releases any episode-scoped state it creates directly.
+  - Exposes `/run` and owns the episode protocol and final result.
   - Composes agent and resources servers when those boundaries fit, or implements a self-contained external protocol.
-  - Applies deadlines, cancellation, and cleanup on every handled exit path.
+  - Applies deadlines and cancellation and coordinates cleanup on every handled exit path.
+  - Asks participating servers to clean up the state they own. A self-contained processor cleans up state created within its own protocol.
   - Preserves existing Gym dataset, evaluation, and NeMo RL interfaces during migration.
   - Uses Gym's configuration, startup, addressing, readiness, and telemetry mechanisms.
 - **Agent server**
@@ -54,7 +55,7 @@ An exported rollout is a training or evaluation projection of an episode. The in
 ### Responsibilities
 
 - **Resources server:** When used, owns task setup, benchmark state, tools, verification, and every sandbox or service it creates.
-- **Episode processor:** Owns `/run`, protocol ordering, deadline enforcement, final result publication, and any episode-scoped state it creates directly.
+- **Episode processor:** Owns `/run`, protocol ordering, deadline enforcement, and final result publication. A resources-backed processor asks participating servers to clean up their own state; a self-contained processor cleans up the state it creates.
 - **Agent server:** When used, owns the agent implementation, its dependencies, its agent session, local subprocesses, and any fallback sandbox it creates.
 - **Model server:** Exposes Gym's model API and proxies inference requests to the configured inference endpoint.
 - **Sandbox server:** Optionally holds sandbox-provider state that cannot be reconstructed in another process.
