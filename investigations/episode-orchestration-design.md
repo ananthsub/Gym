@@ -6,14 +6,15 @@ Today, rollout collection sends `POST /run` to an agent server. That method comm
 
 This creates several problems:
 
-- Agent behavior and resources-server behavior are coupled inside `/run`, so they cannot be composed independently.
-- Gym has no framework-owned intervention point for shared episode behavior. Sandbox setup, resources access, verification, and cleanup are repeatedly implemented across agent implementations.
-- Agent implementations handle deadlines, cancellation, cookies, and cleanup differently.
+- Episode orchestration is embedded in each agent server's `/run`: resources-session setup, agent invocation, verification, and cleanup.
+- Gym has no framework-owned intervention point for this sequence, so changing the episode protocol requires changing agent-server code.
+- Shared behavior such as sandbox setup, resources access, deadlines, cancellation, cookies, and cleanup is implemented repeatedly and inconsistently across agent servers.
 - Agent and resources-server code can both believe they own the same sandbox.
-- A bare sandbox ID does not describe how another service connects, where commands run, or which operations are allowed.
-- Adding another interaction protocol requires changing an agent's episode-level `/run`.
+- A bare sandbox ID does not describe how another server connects, where commands run, or which operations are allowed.
 
-The proposed architecture moves episode-level ordering into an episode processor. A processor may compose Gym services or run a self-contained external framework whose components do not fit Gym's agent-server and resources-server boundaries.
+The proposed architecture moves episode-level ordering into an episode processor. A processor may compose Gym servers or run a self-contained external framework whose components do not fit Gym's agent-server and resources-server boundaries.
+
+An agent's `/v1/responses` implementation remains responsible for agent behavior, including calls to resources-server tools. The episode processor owns the surrounding episode sequence.
 
 ## Scope
 
@@ -74,14 +75,14 @@ flowchart TB
 
 
 
-The diagram shows the resources-backed single-agent deployment. A concrete processor may use a different subset of services.
+The diagram shows the resources-backed single-agent deployment. A concrete processor may use a different subset of servers.
 
 In the resources-backed deployment, ownership does not move with access:
 
 - The resources server stops a task sandbox it created.
 - An agent session disconnects from borrowed sandbox access.
 - An agent server stops a fallback sandbox it created.
-- The processor transports sandbox access between these services but does not use it.
+- The processor transports sandbox access between these servers but does not use it.
 
 ### Protocol, behavior, and hosting
 
@@ -123,7 +124,7 @@ class SandboxServerRef(BaseModel):
 
 ### Resources-backed single-agent flow
 
-The rollout caller sends one request to the episode processor and receives one final result. The concrete processor decides which services participate and owns the resulting protocol.
+The rollout caller sends one request to the episode processor and receives one final result. The concrete processor decides which servers participate and owns the resulting protocol.
 
 `SingleAgentEpisodeProcessor` uses the resources-backed flow below. The resources server prepares the task first. Seed creates a resources session and may return agent-visible tool access and `SandboxAccess`. The processor retains the resources session for verification and cleanup. The resources server remains the owner of its session state and task sandbox.
 
@@ -133,7 +134,7 @@ This processor creates an agent session before invoking the Responses API. `Agen
 - When resources supplied no sandbox access and the agent requires a sandbox, the agent session creates its configured fallback sandbox.
 - When the agent requires no sandbox, the agent session initializes only its tool configuration, observation state, and agent-local state.
 
-The processor closes its agent session before asking the resources server to verify. The resources server then verifies the response and any state it owns. Finally, the processor closes the resources session, and each service destroys only the objects it owns.
+The processor closes its agent session before asking the resources server to verify. The resources server then verifies the response and any state it owns. Finally, the processor closes the resources session, and each server destroys only the objects it owns.
 
 ```mermaid
 sequenceDiagram
@@ -218,7 +219,7 @@ sequenceDiagram
 
 A processor does not have to use a resources server or agent server. It may validate `task_data`, run an external framework, call model servers, produce `EpisodeVerification`, and clean up its own state entirely inside `process()`.
 
-This path is appropriate when the external framework's state, participants, tools, and verifier form one protocol that does not map cleanly onto Gym's existing service boundaries. The processor deployment supplies that framework's dependency and isolation boundary. It can later delegate individual responsibilities to Gym services without changing the caller-facing episode contract.
+This path is appropriate when the external framework's state, participants, tools, and verifier form one protocol that does not map cleanly onto Gym's existing server boundaries. The processor deployment supplies that framework's dependency and isolation boundary. It can later delegate individual responsibilities to Gym servers without changing the caller-facing episode contract.
 
 ### Identity
 
@@ -505,7 +506,7 @@ The processor passes `SandboxAccess` unchanged during agent-session creation.
 
 Direct handoff is valid when the provider can serialize and reconnect its sandbox across processes. Its access restrictions are limited to what that provider enforces; the agent server must expose only borrower operations and disconnect without destroying the sandbox.
 
-Providers that cannot reconnect directly, or deployments that require server-enforced borrower authorization, use a sandbox server such as the service proposed in [PR #2085](https://github.com/NVIDIA-NeMo/Gym/pull/2085). `SandboxServerConnection.sandbox_ref` carries that service's sandbox ID, operate lease, endpoint, and workdir. Exact lease, revocation, and provider configuration remain part of the sandbox-server design.
+Providers that cannot reconnect directly, or deployments that require server-enforced borrower authorization, use a sandbox server such as the server proposed in [PR #2085](https://github.com/NVIDIA-NeMo/Gym/pull/2085). `SandboxServerConnection.sandbox_ref` carries that server's sandbox ID, operate lease, endpoint, and workdir. Exact lease, revocation, and provider configuration remain part of the sandbox-server design.
 
 ## Agent-server session
 
@@ -630,7 +631,7 @@ class Tau2EpisodeProcessorConfig(BaseEpisodeProcessorConfig):
     user_model_server: ModelServerRef
 ```
 
-Each concrete processor declares the services it uses. Task data cannot select executable code, credentials, another processor, or a sandbox provider.
+Each concrete processor declares the servers it uses. Task data cannot select executable code, credentials, another processor, or a sandbox provider.
 
 For `SingleAgentEpisodeProcessor`, agent configuration owns model selection and behavior-specific options, while resources-server configuration owns verification options. A self-contained processor owns its external framework's configuration.
 
@@ -650,9 +651,9 @@ When seed returns no `sandbox_access`, the agent follows its own configuration. 
 
 This path is valid only when verification does not need the live contents of the agent-owned sandbox. If success depends on files, services, packages, permissions, or processes in that box, the resources server must provide the task sandbox during seed. The initial design deliberately has no generic artifact transfer from an agent-owned sandbox to a verifier.
 
-#### Each service cleans up the objects it owns
+#### Each server cleans up the objects it owns
 
-The processor applies the same unwind order after success, failure, deadline expiry, or caller cancellation. It invokes each service's lifecycle endpoint, and each service releases the objects it owns.
+The processor applies the same unwind order after success, failure, deadline expiry, or caller cancellation. It invokes each server's lifecycle endpoint, and each server releases the objects it owns.
 
 The protocol requires:
 
@@ -877,7 +878,7 @@ swebench:
         provider_options: {}
 ```
 
-The resources server retains owner authority, verifies while the task sandbox is alive, and stops it after verification. The agent session only disconnects. For direct access, both services resolve the same named `sandbox_provider` block and the provider must support `serialize()` and `connect()`.
+The resources server retains owner authority, verifies while the task sandbox is alive, and stops it after verification. The agent session only disconnects. For direct access, both servers resolve the same named `sandbox_provider` block and the provider must support `serialize()` and `connect()`.
 
 For a process-bound provider, the resources server uses the optional sandbox server. Its provider and lease configuration remain defined by the sandbox-server design.
 
@@ -945,7 +946,7 @@ tau2:
         jsonl_fpath: episode_processors/tau2/data/example.jsonl
 ```
 
-The processor validates the Tau2 task data, runs the complete simulation, converts the trajectory to `NeMoGymResponse`, and returns `EpisodeVerification`. A later Tau2 integration may delegate participants or state to Gym services without changing `EpisodeRequest` or `EpisodeResponse`.
+The processor validates the Tau2 task data, runs the complete simulation, converts the trajectory to `NeMoGymResponse`, and returns `EpisodeVerification`. A later Tau2 integration may delegate participants or state to Gym servers without changing `EpisodeRequest` or `EpisodeResponse`.
 
 ## Verification remains benchmark-defined
 
@@ -986,11 +987,11 @@ The initial implementation keeps admission and session state within one worker. 
 
 ### Telemetry
 
-Episode processors and sandbox servers register with Gym's existing telemetry initialization. Every service propagates `EpisodeId` and trace context.
+Episode processors and sandbox servers register with Gym's existing telemetry initialization. Every server propagates `EpisodeId` and trace context.
 
 ## Extension points
 
-Future processors may add interaction APIs and scheduling rules. They can reuse agent and resources sessions when those service boundaries fit the protocol.
+Future processors may add interaction APIs and scheduling rules. They can reuse agent and resources sessions when those server boundaries fit the protocol.
 
 Delivery order, implementation workstreams, and integration gates live in [episode-orchestration-milestones.md](episode-orchestration-milestones.md).
 
