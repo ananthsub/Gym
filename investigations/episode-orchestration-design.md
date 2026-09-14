@@ -369,7 +369,7 @@ The flow is:
 3. Compatibility translation constructs `TaskIdentity`, `EpisodeId`, and `task_data`.
 4. Rollout collection sends `EpisodeRequest` to the selected episode processor.
 5. The processor validates common fields before performing network calls.
-6. The concrete processor validates `task_data` itself or passes it to the component that owns the protocol-specific model.
+6. `SingleAgentEpisodeProcessor` passes `task_data` unchanged to the resources server, which validates its benchmark-specific model. A self-contained processor validates its own task-data model.
 7. The processor runs its protocol. A resources-backed single-agent processor passes exactly `responses_create_params` as the agent's `/v1/responses` body.
 8. The processor returns `EpisodeResponse`, and compatibility layer restores the existing result shape when required for backward compatibility.
 
@@ -392,6 +392,10 @@ class EpisodeSeedRequest(BaseModel):
     task_data: dict[str, JsonValue]
 
 
+class SWEBenchSeedRequest(EpisodeSeedRequest):
+    task_data: SWEBenchTaskData
+
+
 class MCPServerMetadata(BaseModel):
     server_name: str
     url_path: str = "/mcp"
@@ -406,6 +410,8 @@ class EpisodeSeedResponse(BaseModel):
     resources_tools: MCPServerMetadata | None = None
     sandbox_access: SandboxAccess | None = None
 ```
+
+`EpisodeSeedRequest` validates the common envelope. Each resources server binds `/seed_session` to a concrete subclass that narrows `task_data` to its benchmark-specific Pydantic model, as illustrated by `SWEBenchSeedRequest`. FastAPI performs that validation before `seed_session()` runs. The processor posts the same JSON without importing or interpreting the benchmark model.
 
 The processor retains the resources-server reference, session ID, and private transport state established by seed. It uses that state for verification and cleanup. It passes only agent-visible tool access and optional sandbox access to the agent server.
 
