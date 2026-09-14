@@ -135,7 +135,7 @@ This processor creates an agent session before invoking the Responses API. `Agen
 
 - When resources supplied `SandboxAccess`, the agent session connects to that sandbox as a borrower.
 - When resources supplied no sandbox access and the agent requires a sandbox, the agent session creates its configured fallback sandbox.
-- When the agent requires no sandbox, the agent session initializes only its tool configuration, observation state, and agent-local state.
+- When the agent requires no sandbox, the agent session configures resources tools and initializes any agent-local session state.
 
 The processor closes its agent session before asking the resources server to verify. The resources server then verifies the response and any state it owns. Finally, the processor closes the resources session, and each server destroys only the objects it owns.
 
@@ -170,7 +170,7 @@ sequenceDiagram
         end
     end
 
-    A->>A: Start agent-local state and observations
+    A->>A: Start agent-local state and optional observation capture
     A-->>P: AgentSessionCreateResponse
     P->>A: POST /v1/responses with agent session ID
     loop Agent activation
@@ -538,7 +538,7 @@ The agent still needs episode-scoped state that is not part of the Responses API
 - resources-tool access
 - optional borrowed sandbox access
 - agent-local subprocess or fallback-sandbox handles
-- an observation buffer
+- optional `AgentObservationBundle` capture state
 - owned-object cleanup
 
 The single-agent processor creates that state before calling `/v1/responses` and closes it afterward.
@@ -576,6 +576,8 @@ class AgentSessionCloseResponse(BaseModel):
     agent_observations: AgentObservationBundle | None = None
 ```
 
+`agent_observations` contains optional agent-server observability records collected during the session. It is not task or environment state.
+
 ### `POST /v1/agent_sessions`
 
 The processor sends `AgentSessionCreateRequest` to the configured `AgentServerRef`.
@@ -584,7 +586,7 @@ The agent server:
 
 1. Validates the episode, deadline, tool access, and sandbox access.
 2. Configures resources tools and either connects the borrowed sandbox or creates its configured fallback sandbox.
-3. Starts agent-local state and an observation buffer correlated with `EpisodeId`.
+3. Starts agent-local state and, when supported, observation capture correlated with `EpisodeId`.
 4. Registers cleanup for objects it owns and returns `AgentSessionCreateResponse`.
 
 If setup fails, the agent server releases anything it already acquired and returns no usable session.
@@ -753,7 +755,22 @@ A valid agent response proceeds to verification only after every agent session c
 
 No failure path invents a successful native reward.
 
-The compatibility projector maps native failures to the behavior required by each migrated deployment.
+### `/run` HTTP mapping
+
+- HTTP 200 means the processor produced a valid `EpisodeResponse`. The response may contain either verification or `EpisodeFailure`.
+- A handled agent, resources, verification, deadline, or admission failure returns HTTP 200 with `EpisodeResponse.failure`.
+- HTTP 4xx applies when the request is rejected before the processor can identify and handle an episode, such as malformed input or failed authorization.
+- HTTP 5xx applies when the server cannot produce a valid `EpisodeResponse`, such as an uncaught processor error or response-validation failure.
+- A connection or process failure may produce no HTTP response.
+
+`retryable` controls episode scheduling, not HTTP status. A native collector parses every HTTP 200 response before deciding how to persist it:
+
+- A retryable failure is written to the failure sidecar and remains eligible for another attempt, subject to the configured limit.
+- A non-retryable failure is written to the failure sidecar as terminal.
+- Neither failure enters the successful-rollout file, aggregate scoring denominator, or training data.
+- A verified response with `mask_sample=true` remains a verified result rather than an `EpisodeFailure`.
+
+The compatibility projector maps native failures to the existing failure-sidecar and terminal markers. Native NeMo RL integration treats both failure forms as non-trainable; a retryable failure may be replaced by another attempt, while a non-retryable failure is terminal for that rollout. Retry budgets and group-repair policy are consumer concerns outside this RFC.
 
 ## Agent-server scaling
 
