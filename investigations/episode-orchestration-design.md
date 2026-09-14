@@ -236,7 +236,7 @@ The task layer owns task preparation, provenance, ID generation, collation, and 
 
 The episode processor preserves `TaskId`, passes `responses_create_params` to the agent server, and passes `responses_create_params` with unchanged `task_data` to the resources server. It does not interpret either payload. A self-contained processor validates and interprets `task_data` because it owns task setup itself.
 
-This RFC does not define generic `agent_data`. Agent-visible task content belongs in `responses_create_params`; typed session capabilities belong in `AgentSessionCreateRequest`.
+This RFC does not define generic `agent_data`. Agent-visible task content belongs in `responses_create_params`. The dataset does not supply `AgentSessionCreateRequest`. The processor constructs it from `EpisodeId` and resources-seed results such as tool access and borrowed `SandboxAccess`. Users configure the processor and participating servers, not arbitrary agent-session request fields.
 
 The episode foundation depends on this materialized-task interface, not on the Tasks RFC's preparation CLI, manifests, provenance storage, oracle validation, or asset-fetching implementation. Compatibility translation supplies the same fields from current flat rows until native task materialization is available.
 
@@ -360,20 +360,54 @@ Worker-local dictionaries cannot coordinate a group spread across replicas. A gr
 
 ## From dataset to `/run`
 
-Users do not add agent-session fields to datasets.
+Users do not add agent-session or processor-routing fields to datasets.
 
 The flow is:
 
 1. The task layer supplies `TaskId`, `responses_create_params`, and `task_data`.
-2. Rollout materialization assigns rollout, attempt, and optional group fields in `EpisodeId`.
-3. Compatibility translation constructs the same fields from a legacy flat row.
-4. Rollout collection sends `EpisodeRequest` to the selected episode processor.
-5. The processor validates common fields before performing network calls.
-6. `SingleAgentEpisodeProcessor` passes `responses_create_params` and unchanged `task_data` to the resources server, which validates its benchmark-specific model. A self-contained processor validates its own task-data model.
-7. The processor runs its protocol. A resources-backed single-agent processor passes exactly `responses_create_params` as the agent's `/v1/responses` body.
-8. The processor returns `EpisodeResponse`, and compatibility layer restores the existing result shape when required for backward compatibility.
+2. Run configuration resolves the taskset portion of `TaskId` to one or more `EpisodeProcessorRef` values.
+3. Fan-out, repetition, and grouping produce planned episodes. Rollout materialization assigns `EpisodeId` to each one.
+4. Compatibility translation constructs the same task and episode fields from a legacy flat row.
+5. The runtime selects a replica for each logical processor and sends its `EpisodeRequest` to `POST /run`.
+6. The processor validates common fields before performing network calls.
+7. `SingleAgentEpisodeProcessor` passes `responses_create_params` and unchanged `task_data` to the resources server, which validates its benchmark-specific model. A self-contained processor validates its own task-data model.
+8. The processor runs its protocol. A resources-backed single-agent processor passes exactly `responses_create_params` as the agent's `/v1/responses` body.
+9. The processor returns `EpisodeResponse`, and the compatibility layer restores the existing result shape when required for backward compatibility.
 
-Existing datasets continue to carry `agent_ref` during migration. The compatibility resolver maps a migrated name to an episode-processor deployment. Native configuration selects an `EpisodeProcessorRef`.
+### Processor selection and dispatch
+
+Processor routing is run configuration, not durable task data. Native dataset rows do not contain `agent_ref` or `EpisodeProcessorRef`, and `EpisodeRequest` contains neither.
+
+Native rollout configuration supports:
+
+```yaml
+episode_processor: reasoning_gym_simple
+processor_map:
+  swebench_verified: swebench_opencode
+  tau2: tau2_processor
+fan_out:
+  reasoning_gym:
+    - reasoning_gym_simple
+    - reasoning_gym_opencode
+```
+
+- `episode_processor` is the default for tasksets without a more specific rule.
+- `processor_map` maps a taskset to one processor.
+- `fan_out` maps a taskset to several processors and creates one planned episode per target.
+- A taskset named in both `processor_map` and `fan_out` is invalid.
+- Without an explicit rule, Gym may infer the unique processor that references the taskset's resources server. Zero or multiple matches fail before dispatch.
+
+Every resolved target must name a configured episode processor. Run materialization records the selected `EpisodeProcessorRef` alongside `EpisodeRequest` so resume, logging, and dispatch use the same decision. The reference is run metadata; it is not inserted into the request or `task_data`.
+
+Replica selection happens after processor selection. Local Gym may have one replica. A sharded NeMo RL run discovers which processor deployments each Gym shard hosts, builds a processor-to-shard map, and distributes complete rollout groups across that shard's replicas. The selected replica is transport state and does not appear in `EpisodeRequest`.
+
+During migration, legacy routing remains available:
+
+1. Current `task_source`, `agent_map`, `fan_out`, `agent_name`, and row-level `agent_ref` behavior resolves a legacy deployment name.
+2. An unmigrated name resolves to the existing agent-server `/run`.
+3. A migrated name resolves to a compatibility episode-processor `/run` with the same external name. Its internal behavior agent uses a different server name.
+
+`agent_ref` is compatibility input, not a requirement for native tasks. Configuration validation rejects ambiguous legacy names. Neither native nor legacy task payloads can select a concrete replica.
 
 ## Resources-server session
 
