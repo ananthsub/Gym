@@ -202,7 +202,7 @@ sequenceDiagram
 
     alt Valid response and agent close succeeds
         P->>R: POST /verify with owner authorization
-        R-->>P: EpisodeVerification
+        R-->>P: BaseVerifyResponse subclass
     else Invalid response or agent close failure
         P->>P: Skip verification and build failed response
     end
@@ -220,7 +220,7 @@ sequenceDiagram
 
 ### Self-contained processor
 
-A processor does not have to use a resources server or agent server. It may validate `resources_data`, run an external framework, call model servers, produce `EpisodeVerification`, and clean up its own state entirely inside `process()`.
+A processor does not have to use a resources server or agent server. It may validate `resources_data`, run an external framework, call model servers, produce a concrete `BaseVerifyResponse`, and clean up its own state entirely inside `process()`.
 
 This path is appropriate when the external framework's state, participants, tools, and verifier form one protocol that does not map cleanly onto Gym's existing server boundaries. The processor deployment supplies that framework's dependency and isolation boundary. It can later delegate individual responsibilities to Gym servers without changing the caller-facing episode contract.
 
@@ -315,15 +315,13 @@ class EpisodeFailure(BaseModel):
     ]
     message: str
     retryable: bool
+    partial_response: NeMoGymResponse | None = None
 
 
-class EpisodeVerification(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class BaseVerifyResponse(BaseVerifyRequest):
+    model_config = ConfigDict(extra="allow")
 
     reward: float
-    reward_components: dict[str, float] = Field(default_factory=dict)
-    mask_sample: bool = False
-    verifier_data: dict[str, JsonValue] = Field(default_factory=dict)
 
 
 class EpisodeResponse(BaseModel):
@@ -331,8 +329,7 @@ class EpisodeResponse(BaseModel):
 
     episode_id: EpisodeId
     task_identity: TaskIdentity
-    response: NeMoGymResponse | None = None
-    verification: EpisodeVerification | None = None
+    verification: BaseVerifyResponse | None = None
     agent_observations: AgentObservationBundle | None = None
     failure: EpisodeFailure | None = None
 
@@ -340,19 +337,18 @@ class EpisodeResponse(BaseModel):
     def validate_result(self) -> Self:
         if (self.verification is None) == (self.failure is None):
             raise ValueError("exactly one of verification or failure is required")
-        if self.verification is not None and self.response is None:
-            raise ValueError("a verified episode requires a response")
         return self
 ```
 
 Validation enforces:
 
 - Exactly one of `verification` or `failure` is present.
-- A verified episode has a valid `response`. `mask_sample` may be true when the verifier accepts a result affected by partial infrastructure failure.
-- An unverified episode may retain a valid partial agent response.
+- `BaseVerifyResponse` retains its inherited `responses_create_params` and `response`, plus `reward`, and preserves additional fields.
+- The resources server validates its concrete `BaseVerifyResponse` subclass. The processor validates the common fields and preserves the complete serialized response.
+- Concrete subclasses may define `reward_components`, `mask_sample`, and other benchmark-specific fields. When present, `mask_sample` may be true when the verifier accepts a result affected by partial infrastructure failure.
+- An unverified episode may retain a valid agent response in `failure.partial_response`.
 - The response `episode_id` and `task_identity` match the request.
-- `verification.reward` and every value in `verification.reward_components` are finite. The concrete verifier defines how component values produce the scalar reward.
-- `verification.verifier_data` contains the remaining fields from the validated benchmark-specific verifier response.
+- `verification.reward` and every value in `reward_components`, when present, are finite. The concrete verifier defines how component values produce the scalar reward.
 - Failure messages are bounded and contain no credentials or internal paths.
 
 ### Grouped episodes
@@ -463,12 +459,12 @@ class ResourcesSessionCloseResponse(BaseModel):
 The processor uses three resources-server operations:
 
 - `POST /seed_session`: validates `resources_data`, creates resources-server state, and returns `EpisodeSeedResponse`.
-- `POST /verify`: accepts `EpisodeVerifyRequest` in the resources session established by seed and returns `EpisodeVerification`.
+- `POST /verify`: accepts `EpisodeVerifyRequest` in the resources session established by seed and returns the resources server's concrete `BaseVerifyResponse` subclass.
 - `POST /close_session`: accepts `ResourcesSessionCloseRequest`, releases resources-server state, and returns `ResourcesSessionCloseResponse`.
 
 The close request identifies the resources session. Session authorization remains in HTTP metadata established during seed.
 
-The resources server first validates its concrete benchmark response. It places `reward`, `reward_components`, and `mask_sample` in their common fields and copies the remaining validated fields into `verifier_data`. The processor does not interpret those fields.
+The resources server validates its concrete `BaseVerifyResponse` subclass before returning it. The processor validates the common fields and preserves all additional fields without interpreting them.
 
 `/seed_session` and `/verify` preserve current Gym route names. `/close_session` is a new required lifecycle endpoint.
 
@@ -730,7 +726,6 @@ async def process(
         return EpisodeResponse(
             episode_id=request.episode_id,
             task_identity=request.task_identity,
-            response=agent_response,
             verification=verification,
             agent_observations=close_response.agent_observations,
         )
@@ -760,7 +755,7 @@ A valid agent response proceeds to verification only after every agent session c
 
 - Invalid input fails before seed.
 - A valid verifier result includes reward and `mask_sample`, even when the verifier masks a partial infrastructure failure.
-- If no valid verifier result can be obtained, `EpisodeResponse.failure` describes the failure and may retain a partial agent response.
+- If no valid verifier result can be obtained, `EpisodeResponse.failure` describes the failure and may retain an agent response in `partial_response`.
 - Agent and resources-server cleanup still run on handled failures and caller cancellation.
 - Cleanup failures after verification are reported through telemetry rather than training or evaluation data.
 
@@ -983,11 +978,11 @@ tau2:
         jsonl_fpath: episode_processors/tau2/data/example.jsonl
 ```
 
-The processor validates the Tau2 `resources_data`, runs the complete simulation, converts the trajectory to `NeMoGymResponse`, and returns `EpisodeVerification`. A later Tau2 integration may delegate participants or state to Gym servers without changing `EpisodeRequest` or `EpisodeResponse`.
+The processor validates the Tau2 `resources_data`, runs the complete simulation, converts the trajectory to `NeMoGymResponse`, and returns a concrete `BaseVerifyResponse`. A later Tau2 integration may delegate participants or state to Gym servers without changing `EpisodeRequest` or `EpisodeResponse`.
 
 ## Verification remains benchmark-defined
 
-The base processor does not define a generic sandbox harvester or submission format. A concrete processor may verify directly or delegate verification to a resources server. The verifier validates benchmark-specific results and returns their additional fields in `EpisodeVerification.verifier_data`.
+The base processor does not define a generic sandbox harvester or submission format. A concrete processor may verify directly or delegate verification to a resources server. The verifier validates and returns its concrete `BaseVerifyResponse` subclass.
 
 ## Compatibility and migration
 
@@ -1006,7 +1001,7 @@ A migrated deployment:
 
 The translator and projector belong to the configured compatibility processor. They preserve the current deployment's request and result contract without adding a dynamic adapter registry.
 
-Rollout logging persists `verifier_data` as part of `EpisodeResponse`. The compatibility projector restores those fields at the top level before existing result logging and aggregation.
+Rollout logging persists the complete `BaseVerifyResponse` inside `EpisodeResponse`. The compatibility projector unwraps that response without remapping verifier fields, then restores only legacy agent-added fields and failure transport.
 
 ### Effect on evaluation and training
 
