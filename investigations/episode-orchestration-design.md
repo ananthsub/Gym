@@ -43,10 +43,11 @@ An agent's `/v1/responses` implementation remains responsible for agent behavior
 - A **task** is dataset content identified by `TaskIdentity`.
 - A **rollout** is one logical sample produced for that task.
 - An **attempt** is one physical execution of a rollout. A retry increments the attempt.
-- An **episode** is the complete interaction, verification, and cleanup lifecycle for one attempt.
-- An episode may contain multiple participant turns, agent invocations, model calls, and tool calls.
+- An **episode** is the complete lifecycle for one attempt, including all interaction turns, verification, and cleanup.
 - A **resources session** is resources-server state created when a processor uses a resources server.
 - An **agent session** is agent-server-local state created when a processor delegates behavior to an agent server.
+
+`POST /v1/responses` is an agent invocation, not the definition of an interaction turn. A processor may use one or more agent invocations during a turn, and each invocation may contain multiple model and tool calls.
 
 An exported rollout is a training or evaluation projection of an episode. The initial single-agent protocol produces one primary rollout from one episode.
 
