@@ -21,7 +21,7 @@ An agent's `/v1/responses` implementation remains responsible for agent behavior
 ### Requirements
 
 - **Episode processor**
-  - Exposes `/run`, owns the episode protocol and final result, and cleans up processor-local objects.
+  - Exposes `/run`, owns the episode protocol and final result, and releases any episode-scoped state it creates directly.
   - Composes agent and resources servers when those boundaries fit, or implements a self-contained external protocol.
   - Applies deadlines, cancellation, and cleanup on every handled exit path.
   - Preserves existing Gym dataset, evaluation, and NeMo RL interfaces during migration.
@@ -43,6 +43,7 @@ An agent's `/v1/responses` implementation remains responsible for agent behavior
 - A **rollout** is one logical sample produced for that task.
 - An **attempt** is one physical execution of a rollout. A retry increments the attempt.
 - An **episode** is the complete interaction, verification, and cleanup lifecycle for one attempt.
+- An episode may contain multiple participant turns, agent invocations, model calls, and tool calls.
 - A **resources session** is resources-server state created when a processor uses a resources server.
 - An **agent session** is agent-server-local state created when a processor delegates behavior to an agent server.
 
@@ -53,9 +54,9 @@ An exported rollout is a training or evaluation projection of an episode. The in
 ### Responsibilities
 
 - **Resources server:** When used, owns task setup, benchmark state, tools, verification, and every sandbox or service it creates.
-- **Episode processor:** Owns `/run`, protocol ordering, deadline enforcement, final result publication, and processor-local objects.
+- **Episode processor:** Owns `/run`, protocol ordering, deadline enforcement, final result publication, and any episode-scoped state it creates directly.
 - **Agent server:** When used, owns the agent implementation, its dependencies, its agent session, local subprocesses, and any fallback sandbox it creates.
-- **Model server:** Performs model inference when selected by an agent or processor.
+- **Model server:** Exposes Gym's model API and proxies inference requests to the configured inference endpoint.
 - **Sandbox server:** Optionally holds sandbox-provider state that cannot be reconstructed in another process.
 
 ```mermaid
