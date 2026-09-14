@@ -280,6 +280,8 @@ Current Gym constructs rollout correlation from `_ng_task_index`, `_ng_rollout_i
 
 ### Request and response
 
+The existing `BaseVerifyResponse` remains the successful verification contract. This design changes its model configuration to `ConfigDict(extra="allow")` so a processor validating an HTTP response through the base type preserves fields from the resources server's concrete response model. Each resources server still validates its concrete subclass and may forbid fields not declared by that subclass.
+
 ```python
 type JsonValue = (
     None
@@ -318,12 +320,6 @@ class EpisodeFailure(BaseModel):
     partial_response: NeMoGymResponse | None = None
 
 
-class BaseVerifyResponse(BaseVerifyRequest):
-    model_config = ConfigDict(extra="allow")
-
-    reward: float
-
-
 class EpisodeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -343,8 +339,8 @@ class EpisodeResponse(BaseModel):
 Validation enforces:
 
 - Exactly one of `verification` or `failure` is present.
-- `BaseVerifyResponse` retains its inherited `responses_create_params` and `response`, plus `reward`, and preserves additional fields.
-- The resources server validates its concrete `BaseVerifyResponse` subclass. The processor validates the common fields and preserves the complete serialized response.
+- A successful verification retains the inherited `responses_create_params` and `response`, `reward`, and every additional field validated by the resources server.
+- The processor validates the common `BaseVerifyResponse` fields without discarding those additional fields.
 - Concrete subclasses may define `reward_components`, `mask_sample`, and other benchmark-specific fields. When present, `mask_sample` may be true when the verifier accepts a result affected by partial infrastructure failure.
 - An unverified episode may retain a valid agent response in `failure.partial_response`.
 - The response `episode_id` and `task_identity` match the request.
