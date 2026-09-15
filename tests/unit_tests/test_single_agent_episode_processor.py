@@ -83,7 +83,12 @@ def _processor(*, token_capture: bool = False) -> tuple[SingleAgentEpisodeProces
             _Response({"resources_session_id": "resources-session"}),
             _Response({"agent_session_id": "agent-session"}),
             _Response(response.model_dump(mode="json")),
-            _Response({"agent_session_id": "agent-session"}),
+            _Response(
+                {
+                    "agent_session_id": "agent-session",
+                    "resources_cookies": {"session": "updated-cookie"},
+                }
+            ),
             _Response(
                 {
                     "responses_create_params": {"input": "task"},
@@ -138,6 +143,8 @@ async def test_single_agent_protocol_and_direct_tool_access() -> None:
     assert create_body.resources_access.base_url == "http://resources:8000"
     assert create_body.resources_access.cookies == {"session": "cookie-value"}
     assert client.calls[2][2]["headers"] == {"X-NeMo-Gym-Agent-Session-Id": "agent-session"}
+    assert client.calls[4][2]["cookies"] == {"session": "updated-cookie"}
+    assert client.calls[5][2]["cookies"] == {"session": "updated-cookie"}
 
 
 async def test_token_capture_keeps_prefixed_twin_route() -> None:

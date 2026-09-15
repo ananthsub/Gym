@@ -188,6 +188,8 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor[SingleAgentEpisodeRequest
                 retryable=True,
                 partial_response=agent_response,
             ) from error
+        if close_result is not None and close_result.resources_cookies is not None:
+            resources_cookies = close_result.resources_cookies
 
         try:
             verify_http_response = await self.server_client.post(

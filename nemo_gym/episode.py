@@ -269,3 +269,4 @@ class AgentSessionCloseResponse(BaseModel):
 
     agent_session_id: str
     agent_observations: AgentObservationBundle | None = None
+    resources_cookies: dict[str, str] | None = None

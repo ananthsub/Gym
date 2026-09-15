@@ -63,6 +63,7 @@ class AgentSessionServerMixin:
         return AgentSessionCloseResponse(
             agent_session_id=body.agent_session_id,
             agent_observations=observations,
+            resources_cookies=self.resources_cookies_for_session(session),
         )
 
     def require_agent_session(self, agent_session_id: str) -> AgentSession:
@@ -81,6 +82,10 @@ class AgentSessionServerMixin:
 
     async def teardown_agent_session(self, agent_session_id: str, session: AgentSession) -> Any:
         """Destroy agent-owned session state and return observations."""
+        return None
+
+    def resources_cookies_for_session(self, session: AgentSession) -> dict[str, str] | None:
+        """Return resources cookies updated during the agent session."""
         return None
 
 

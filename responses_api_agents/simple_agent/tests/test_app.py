@@ -21,6 +21,12 @@ from fastapi import Response
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
+from nemo_gym.episode import (
+    AgentSessionCloseRequest,
+    AgentSessionCreateRequest,
+    DirectResourcesToolAccess,
+    EpisodeId,
+)
 from nemo_gym.global_config import ROLLOUT_INDEX_KEY_NAME, TASK_INDEX_KEY_NAME
 from nemo_gym.openai_utils import (
     NeMoGymEasyInputMessage,
@@ -96,6 +102,26 @@ class TestApp:
             ),
         )
         SimpleAgent(config=config, server_client=MagicMock(spec=ServerClient))
+
+    async def test_agent_session_preserves_resources_cookie_updates(self) -> None:
+        server, server_client = _make_agent(False)
+        server_client._resolve_base_url.return_value = "http://resources:8080"
+        created = await server.create_agent_session(
+            AgentSessionCreateRequest(
+                episode_id=EpisodeId(rollout_id="rollout"),
+                resources_access=DirectResourcesToolAccess(
+                    base_url="http://resources:8080",
+                    cookies={"session": "initial"},
+                ),
+            )
+        )
+        session = server.require_agent_session(created.agent_session_id)
+        session.state["resources_cookies"] = {"session": "updated"}
+
+        closed = await server.close_agent_session(AgentSessionCloseRequest(agent_session_id=created.agent_session_id))
+
+        assert closed.resources_cookies == {"session": "updated"}
+        assert created.agent_session_id not in server._agent_sessions
 
     async def test_responses(self, monkeypatch: MonkeyPatch) -> None:
         config = SimpleAgentConfig(

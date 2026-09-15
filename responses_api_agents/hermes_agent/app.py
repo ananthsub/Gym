@@ -573,7 +573,7 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
     ) -> NeMoGymResponse:
         path_params = getattr(request, "path_params", None)
         rollout_id = path_params.get("rollout_id") if isinstance(path_params, Mapping) else None
-        if agent_session_id is not None:
+        if isinstance(agent_session_id, str):
             session = self.require_agent_session(agent_session_id)
             if not isinstance(rollout_id, str):
                 raise ValueError("Agent sessions require an attempt-qualified rollout path")
