@@ -290,3 +290,35 @@ The disposition section written at `05584c14a` names `LegacyAgentRunProcessor`, 
 ### What to do next
 
 Fix the two carriers first, tool access and token capture, because the simple-agent milestone cannot pass without them. Then restore bounded cleanup, define the compatibility route and the missing config fields, and state the compatibility HTTP mapping. The rest are one-paragraph edits. None of them changes the shape of the reframed proposal, which is the right one.
+
+## Third review, 2026-09-15, of the proposal at `d935c9420`
+
+Four commits since `ac2495ee7` closed most of the second review. Token capture rides the existing twin routes. Tool access is an explicit union of direct HTTP with cookies and MCP metadata, and cookies return on session close. Cleanup runs from a registry in a shielded task under `cleanup_timeout_seconds`. Pairing validation against `allowed_agents` runs before dispatch. The resources seed and close types are processor-neutral and subclass the existing base seed models. Agent sessions live in the agent base class with opt-in hooks. The failure taxonomy is replaced by a bounded message and a `terminal` flag. Tasksets and processors register a task-input contract identifier, and the request carries the materialized task.
+
+Five findings remain, ordered by what blocks a gradual transition.
+
+### A shared resources server must accept both wire shapes during migration
+
+Migration is per agent, and one resources server serves many agents. While any unmigrated agent posts the flat row to `/seed_session` and its flat verify subclass to `/verify`, the same server must also accept the native envelope with `task_data` and `verification_input` nested. Today's servers bind flat seed models of their own; Terminal Bench declares `task_name`, `docker_image`, and `task_folder` at the top level. The design shows the native shapes and the milestones list processor-neutral models, but neither describes how one server serves both. The adapter belongs in `SimpleResourcesServer`: detect the envelope, retain `task_data` in the session, unwrap it into the server's declared seed model, and on verify rebuild the declared verify model from retained task data plus the submission before calling the existing `verify`. Without it, migrating one agent forces migrating every agent that shares its resources server.
+
+The evidence is in `nemo_gym/base_resources_server.py` lines 145 to 190 and `resources_servers/terminal_bench_2_1/app.py` lines 46 to 53.
+
+### The compatibility endpoint needs a path and the collector needs the dispatch rule
+
+The migrated boundary sends the flat row to "that processor's compatibility endpoint" without naming it. If the endpoint is `/run` with the flat body, the native envelope cannot share the route on the same server. If it is another path, the collector must choose per target. The rule should be written: a compatibility processor serves the legacy body on `/run` and the native envelope on a second route until callers move, and the collector's dispatch call selects the route from the legacy routing record.
+
+The evidence is in `nemo_gym/rollout_collection.py` lines 1912 to 1922.
+
+### Handled failures on the compatibility path still return 200
+
+Unchanged from the second review. The pinned NeMo RL reads `response` from every 200 and classifies failures only by status. The compatibility projector needs the status table from the first review. The native mapping can stay once RL parses the body.
+
+### The sidecar failure class must be derived now that `kind` is gone
+
+The compatibility projector still has to emit `_ng_failure_class`. `SingleAgentEpisodeFailure.stage` maps to it cleanly. State that mapping, and state the generic class a self-contained processor emits when it has no stage.
+
+### Milestone 1 fronts the deployment topology before any code moves
+
+The first milestone adds the server type, the configuration-loader changes, dataset ownership moves, and `--agent-type` composition changes before any orchestration code leaves an agent. That ordering is what makes the transition read as a flag day. Hosting the processor inside the agent server's concrete base `run()` first, calling its own `/v1/responses` through the twin routes exactly as the self-call does today, lets `simple_agent` and its copies migrate with no configuration or caller change. The topology work then lands when a second agent server exists to point a processor at. The end-state layout is unaffected.
+
+Two smaller items. Docker and Apptainer still have no same-host connect path, which is fine for the OpenSandbox-backed first gate and not for a developer box. And a migrated deployment keeps the legacy name under `episode_processors`, so anything that enumerates `responses_api_agents` to find that name, including NeMo RL's per-agent recovery overrides, sees it disappear; the alias should be spelled out.
