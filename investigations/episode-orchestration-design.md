@@ -684,7 +684,7 @@ class DirectSandboxConnection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["direct"]
-    sandbox_provider: str
+    provider_config_ref: str
     descriptor: dict[str, JsonValue]
 
 
@@ -711,7 +711,7 @@ The agent receives a borrower interface for command execution and file transfer 
 
 Borrower restrictions require enforcement by the provider or sandbox server. A Python facade alone prevents accidental misuse but is not an authorization boundary.
 
-For direct access, `sandbox_provider` names an existing top-level Gym sandbox-provider block such as `sandbox`. The resources server creates and serializes the sandbox with that named configuration. The agent server resolves the same name through `server_client.global_config_dict`, constructs the provider, and calls `connect(descriptor)`. No borrowed-sandbox provider setting is added to agent configuration.
+For direct access, `provider_config_ref` is a reference to an existing top-level Gym sandbox-provider configuration block, such as the `sandbox` key in the deployment config. It is not a provider type such as `opensandbox`. The resources server creates and serializes the sandbox with that named configuration. The agent server resolves the reference through `server_client.global_config_dict`, constructs the provider, and calls `connect(descriptor)`. No borrowed-sandbox provider setting is added to agent configuration.
 
 Direct handoff requires a named provider configuration because an inline provider mapping may contain credentials and has no stable reference. The agent-server environment must have the provider implementation installed; otherwise agent-session creation fails before inference. Agent-session close disconnects the borrowed provider client without calling the owner operation that destroys the physical sandbox.
 
