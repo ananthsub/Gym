@@ -29,7 +29,7 @@ Implement:
 - migration of dataset ownership from each old agent deployment to its processor deployment;
 - legacy `agent_ref` resolution to migrated processor deployment names;
 - `EpisodeId`, `TaskId`, `BaseEpisodeRequest`, `BaseEpisodeResponse`, and concrete single-agent contracts;
-- agent-session create and close request and response models;
+- agent-session seed and close request and response models;
 - processor-neutral resources-session seed and close models, direct-HTTP/MCP tool access, and typed verification inputs;
 - `BaseEpisodeProcessor` and `EpisodeContext`;
 - `SingleAgentEpisodeProcessor`;
@@ -40,7 +40,7 @@ This milestone is complete when Gym can spawn and address episode processors, th
 
 ### 2. Extract the Simple Agent server
 
-Keep the existing model-and-tool loop behind `/v1/responses`. Add request-scoped agent-session create and close endpoints, scoped resources access, model-cookie isolation, trajectory capture, usage accumulation, max-step behavior, and skipped-verification compatibility behavior. Keep the `/v1/responses` request and response models unchanged.
+Keep the existing model-and-tool loop behind `/v1/responses`. Add request-scoped agent-session seed and close endpoints, scoped resources access, model-cookie isolation, trajectory capture, usage accumulation, max-step behavior, and skipped-verification compatibility behavior. Keep the `/v1/responses` request and response models unchanged.
 
 This milestone is complete when `simple_agent` with `example_single_tool_call` runs through `SingleAgentEpisodeProcessor` without changing its caller-visible result.
 
@@ -131,7 +131,7 @@ Add retained artifacts only for a concrete caller requirement. Define storage ow
 - Direct sandbox access rejects an inline, missing, or unavailable named provider before inference.
 - Closing a resources-provided connection cannot stop the resources-owned sandbox.
 - Closing an agent session stops its agent-owned sandbox on success, failure, timeout, and cancellation.
-- Simple Agent rejects non-null sandbox access during session creation.
+- Simple Agent rejects non-null sandbox access while seeding a session.
 - Cancellation during reconnect, guest startup, agent execution, verification, or cleanup runs every registered cleanup.
 - Resources-access unions retain their required discriminator after client serialization.
 - A thinking model can continue after a tool call without losing or rejecting assistant reasoning content.
