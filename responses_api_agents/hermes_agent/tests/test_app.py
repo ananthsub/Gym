@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from nemo_gym.episode import AgentSessionCreateRequest, DirectSandboxConnection, EpisodeId, SandboxAccess
 from nemo_gym.openai_utils import (
     NeMoGymEasyInputMessage,
     NeMoGymFunctionCallOutput,
@@ -78,6 +79,56 @@ class TestSanity:
     def test_configured_model_overrides_server_name(self) -> None:
         agent = HermesAgent(config=_config(model="Qwen3.6-35B-A3B"), server_client=MagicMock(spec=ServerClient))
         assert agent._model_name() == "Qwen3.6-35B-A3B"
+
+    async def test_sandbox_access_selects_runtime_provider(self, monkeypatch) -> None:
+        hermes = HermesAgent(
+            config=_config(enabled_toolsets=["terminal"]),
+            server_client=MagicMock(spec=ServerClient),
+        )
+        provider_config = {"opensandbox": {"connection": {}}}
+        resolve = MagicMock(return_value=provider_config)
+        bind = AsyncMock()
+        monkeypatch.setattr("responses_api_agents.hermes_agent.app.get_global_config_dict", lambda: {"runtime": {}})
+        monkeypatch.setattr("responses_api_agents.hermes_agent.app.resolve_provider_config", resolve)
+        monkeypatch.setattr("responses_api_agents.hermes_agent.app.bind_sandbox", bind)
+
+        await hermes.open_agent_session(
+            "session",
+            AgentSessionCreateRequest(
+                episode_id=EpisodeId(rollout_id="rollout"),
+                sandbox_access=SandboxAccess(
+                    connection=DirectSandboxConnection(
+                        sandbox_provider="runtime",
+                        descriptor={"sandbox_id": "sandbox"},
+                    ),
+                    workdir="/app",
+                ),
+            ),
+        )
+
+        resolve.assert_called_once_with("runtime", {"runtime": {}})
+        bind.assert_awaited_once_with(
+            "session",
+            descriptor={"sandbox_id": "sandbox"},
+            provider_config=provider_config,
+            workdir="/app",
+        )
+
+    async def test_sandbox_access_requires_terminal_only_mode(self) -> None:
+        hermes = HermesAgent(config=_config(), server_client=MagicMock(spec=ServerClient))
+        body = AgentSessionCreateRequest(
+            episode_id=EpisodeId(rollout_id="rollout"),
+            sandbox_access=SandboxAccess(
+                connection=DirectSandboxConnection(
+                    sandbox_provider="runtime",
+                    descriptor={"sandbox_id": "sandbox"},
+                ),
+                workdir="/app",
+            ),
+        )
+
+        with pytest.raises(ValueError, match=r"enabled_toolsets: \[terminal\]"):
+            await hermes.open_agent_session("session", body)
 
 
 class _FakeAgent:

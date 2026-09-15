@@ -27,8 +27,7 @@ from uuid import uuid4
 
 import model_tools  # noqa: F401  # fail-fast if hermes-agent isn't installed  # pyright: ignore[reportMissingImports]
 from fastapi import Header, Request
-from pydantic import ConfigDict, Field, model_validator
-from typing_extensions import Self
+from pydantic import ConfigDict, Field
 
 from nemo_gym.base_resources_server import BaseRunRequest, BaseVerifyResponse
 from nemo_gym.base_responses_api_agent import BaseResponsesAPIAgentConfig, Body, SimpleResponsesAPIAgent
@@ -188,7 +187,6 @@ class HermesAgentConfig(BaseResponsesAPIAgentConfig):
     disabled_toolsets: Optional[list[str]] = None
     temperature: float | None = None
     terminal_backend: str = "local"
-    borrowed_sandbox_provider: str | None = None
     terminal_timeout: int = 180
     session_close_timeout_seconds: float = 30.0
     system_prompt: Optional[str] = None
@@ -198,12 +196,6 @@ class HermesAgentConfig(BaseResponsesAPIAgentConfig):
     api_key: Optional[str] = None
     delegation_max_iterations: int = 50
     checkpoints_enabled: bool = False
-
-    @model_validator(mode="after")
-    def validate_borrowed_sandbox_tools(self) -> Self:
-        if self.borrowed_sandbox_provider is not None and self.enabled_toolsets != ["terminal"]:
-            raise ValueError("borrowed sandbox mode requires enabled_toolsets: [terminal]")
-        return self
 
 
 class HermesAgentRunRequest(BaseRunRequest):
@@ -288,7 +280,7 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         self.interrupted_agents = set()
         self.session_active_agents = {}
         self.initialize_agent_sessions()
-        if self.config.borrowed_sandbox_provider is not None:
+        if self.config.enabled_toolsets == ["terminal"]:
             register_sandbox_terminal()
         # hermes-agent reads these from env (cli.py / batch_runner.py); env vars are
         # process-global, so multiple HermesAgent instances in one process share them
@@ -312,23 +304,17 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         agent_session_id: str,
         body: AgentSessionCreateRequest,
     ) -> dict[str, Any]:
-        if self.config.borrowed_sandbox_provider is None:
-            raise ValueError("Hermes borrowed sandbox sessions are not enabled")
         if body.sandbox_access is None:
             raise ValueError("Hermes requires sandbox_access for an episode session")
+        if self.config.enabled_toolsets != ["terminal"]:
+            raise ValueError("Hermes sandbox access requires enabled_toolsets: [terminal]")
         connection = body.sandbox_access.connection
         if not isinstance(connection, DirectSandboxConnection):
             raise ValueError("Hermes currently supports only direct sandbox connections")
         provider_config = resolve_provider_config(
-            self.config.borrowed_sandbox_provider,
+            connection.sandbox_provider,
             get_global_config_dict(),
         )
-        provider_name = next(iter(provider_config))
-        if connection.sandbox_provider != provider_name:
-            raise ValueError(
-                f"Sandbox access requires {connection.sandbox_provider!r}, "
-                f"but Hermes is configured with {provider_name!r}"
-            )
         await bind_sandbox(
             agent_session_id,
             descriptor=connection.descriptor,

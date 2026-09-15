@@ -13,8 +13,6 @@ hermes_agent:
       enabled_toolsets: null
       temperature: 1.0
       terminal_backend: local
-      # Set to a Gym sandbox-provider ref for fail-closed borrowed-sandbox sessions.
-      borrowed_sandbox_provider: null
       terminal_timeout: 60
       session_close_timeout_seconds: 30
       system_prompt: null

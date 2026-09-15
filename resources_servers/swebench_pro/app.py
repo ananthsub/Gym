@@ -361,7 +361,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
                 resources_session_id=session_id,
                 sandbox_access=SandboxAccess(
                     connection=DirectSandboxConnection(
-                        sandbox_provider=provider_name,
+                        sandbox_provider=self.config.sandbox_provider,
                         descriptor=descriptor,
                     ),
                     workdir="/app",
