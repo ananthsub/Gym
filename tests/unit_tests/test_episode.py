@@ -117,7 +117,27 @@ def test_processor_runs_typed_request() -> None:
     assert response.result == "result"
 
 
-def test_cleanup_is_lifo_and_bounded() -> None:
+def test_cleanup_is_lifo() -> None:
+    calls: list[str] = []
+    context = EpisodeContext(
+        request=_request(),
+        server_client=MagicMock(spec=ServerClient),
+        cleanup_timeout_seconds=1,
+    )
+
+    async def first() -> None:
+        calls.append("first")
+
+    async def second() -> None:
+        calls.append("second")
+
+    context.register_cleanup("first", first)
+    context.register_cleanup("second", second)
+    asyncio.run(context.aclose())
+    assert calls == ["second", "first"]
+
+
+def test_cleanup_is_bounded() -> None:
     calls: list[str] = []
     context = EpisodeContext(
         request=_request(),
@@ -136,6 +156,32 @@ def test_cleanup_is_lifo_and_bounded() -> None:
     context.register_cleanup("hung", hung)
     asyncio.run(context.aclose())
     assert calls == ["hung"]
+
+
+def test_caller_cancellation_waits_for_cleanup() -> None:
+    cleanup_finished = asyncio.Event()
+
+    class _CancelledProcessor(_TestProcessor):
+        async def process(self, request: _TestRequest, context: EpisodeContext) -> _TestResponse:
+            async def cleanup() -> None:
+                await asyncio.sleep(0.01)
+                cleanup_finished.set()
+
+            context.register_cleanup("cleanup", cleanup)
+            await asyncio.sleep(60)
+            raise AssertionError
+
+    async def run() -> None:
+        config = _processor().config.model_copy(update={"cleanup_timeout_seconds": 1})
+        processor = _CancelledProcessor(config=config, server_client=MagicMock(spec=ServerClient))
+        task = asyncio.create_task(processor.run(_request()))
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert cleanup_finished.is_set()
 
 
 def test_capture_key_qualifies_retries() -> None:

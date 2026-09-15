@@ -185,10 +185,11 @@ class BaseEpisodeProcessor(SimpleServer, Generic[EpisodeRequestT, EpisodeRespons
         finally:
             cleanup_task = asyncio.create_task(context.aclose())
             try:
-                await asyncio.shield(cleanup_task)
-            except asyncio.CancelledError as error:
-                cancelled = cancelled or error
-                await asyncio.shield(cleanup_task)
+                while not cleanup_task.done():
+                    try:
+                        await asyncio.shield(cleanup_task)
+                    except asyncio.CancelledError as error:
+                        cancelled = cancelled or error
             finally:
                 if acquired and self._admission is not None:
                     self._admission.release()

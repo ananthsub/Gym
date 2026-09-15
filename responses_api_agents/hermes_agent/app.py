@@ -190,6 +190,7 @@ class HermesAgentConfig(BaseResponsesAPIAgentConfig):
     terminal_backend: str = "local"
     borrowed_sandbox_provider: str | None = None
     terminal_timeout: int = 180
+    session_close_timeout_seconds: float = 30.0
     system_prompt: Optional[str] = None
     compression_enabled: bool = True
     compression_threshold: float = 0.85
@@ -348,7 +349,9 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
             if hasattr(agent, "interrupt"):
                 agent.interrupt("session close")
         if active:
-            raise RuntimeError("Hermes session still has active work")
+            async with asyncio.timeout(self.config.session_close_timeout_seconds):
+                while active:
+                    await asyncio.sleep(0.05)
         await unbind_sandbox(agent_session_id)
         self.session_active_agents.pop(agent_session_id, None)
         observations = session.state.get("observations")
