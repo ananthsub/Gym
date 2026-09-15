@@ -110,6 +110,7 @@ class TestApp:
             AgentSessionCreateRequest(
                 episode_id=EpisodeId(rollout_id="rollout"),
                 resources_access=DirectResourcesToolAccess(
+                    kind="direct_http",
                     base_url="http://resources:8080",
                     cookies={"session": "initial"},
                 ),

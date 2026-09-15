@@ -85,12 +85,14 @@ def test_episode_response_requires_exactly_one_outcome() -> None:
 
 def test_direct_resources_access_is_strict() -> None:
     access = DirectResourcesToolAccess(
+        kind="direct_http",
         base_url="http://resources:8000",
         cookies={"session": "value"},
     )
     assert access.kind == "direct_http"
+    assert access.model_dump(exclude_unset=True)["kind"] == "direct_http"
     with pytest.raises(ValidationError):
-        DirectResourcesToolAccess(base_url="http://resources:8000", unknown=True)
+        DirectResourcesToolAccess(kind="direct_http", base_url="http://resources:8000", unknown=True)
 
 
 def test_verify_response_preserves_benchmark_fields_and_mask_sample() -> None:

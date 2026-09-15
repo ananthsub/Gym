@@ -186,6 +186,36 @@ class TestSigtermHandler:
         assert hermes.active_agents == set()
         assert hermes.interrupted_agents == set()
 
+    def test_session_activation_rejects_hermes_error_result(self, monkeypatch) -> None:
+        import nemo_gym.base_responses_api_agent as base_agent
+        from nemo_gym.openai_utils import NeMoGymResponseCreateParamsNonStreaming
+
+        monkeypatch.setattr(base_agent, "get_first_server_config_dict", lambda _gc, _name: {"host": "h", "port": 1})
+        server_client = MagicMock(spec=ServerClient)
+        server_client.global_config_dict = {}
+        server_client._build_server_base_url = lambda _cfg: "http://h:1"
+        hermes = HermesAgent(config=_config(), server_client=server_client)
+        hermes.session_active_agents["session"] = set()
+        monkeypatch.setattr(hermes, "_ensure_sigterm_handler", lambda: None)
+
+        class _ErrorResultAIAgent:
+            def __init__(self, **kwargs) -> None:
+                self._build_api_kwargs = lambda _messages: {}
+
+            def run_conversation(self, *args, **kwargs) -> dict:
+                return {"error": "model request failed", "messages": []}
+
+        monkeypatch.setattr("run_agent.AIAgent", _ErrorResultAIAgent)
+
+        with pytest.raises(RuntimeError, match="model request failed"):
+            asyncio.run(
+                hermes._create_response(
+                    NeMoGymResponseCreateParamsNonStreaming(input="hi"),
+                    rollout_id="rollout",
+                    agent_session_id="session",
+                )
+            )
+
 
 class TestSplitInputToUserAndHistory:
     def test_user_only(self) -> None:

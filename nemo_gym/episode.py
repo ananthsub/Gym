@@ -83,7 +83,7 @@ class DirectResourcesToolAccess(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["direct_http"] = "direct_http"
+    kind: Literal["direct_http"]
     base_url: str
     cookies: dict[str, str] = Field(default_factory=dict)
     headers: dict[str, str] = Field(default_factory=dict)
@@ -94,7 +94,7 @@ class MCPResourcesToolAccess(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["mcp"] = "mcp"
+    kind: Literal["mcp"]
     metadata: MCPServerMetadata
 
 

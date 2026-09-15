@@ -128,9 +128,10 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor[SingleAgentEpisodeRequest
                     message="The resources server did not return MCP metadata",
                     retryable=False,
                 )
-            resources_access = MCPResourcesToolAccess(metadata=seed.resources_tools)
+            resources_access = MCPResourcesToolAccess(kind="mcp", metadata=seed.resources_tools)
         else:
             resources_access = DirectResourcesToolAccess(
+                kind="direct_http",
                 base_url=self.server_client._resolve_base_url(self.config.resources_server.name),
                 cookies=resources_cookies,
             )

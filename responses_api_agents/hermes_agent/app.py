@@ -471,6 +471,9 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
                 except Exception:
                     LOG.exception("failed to return Hermes observations")
 
+        if agent_session_id is not None and result.get("error"):
+            raise RuntimeError(f"Hermes agent failed: {result['error']}")
+
         messages = result.get("messages") or []
         # aiagent omits system from returned messages
         n_input = len(history) + 1
