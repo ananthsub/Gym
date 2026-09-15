@@ -244,7 +244,7 @@ class MaterializedTask(BaseModel, Generic[TaskInputT]):
 
 `TaskId` identifies the taskset, task, and taskset revision. `episode_input` is typed by the taskset. Gym does not require every taskset to contain one `responses_create_params`, one resources-server payload, or one agent payload.
 
-The task layer owns source preparation, provenance, ID generation, collation, and validation of `episode_input`. Run configuration selects tasksets and maps them to compatible episode processors. Rollout planning adds `EpisodeId`, repetition, grouping, and processor routing. It does not modify `episode_input`.
+The task layer owns source preparation, provenance, ID generation, collation, and validation of `episode_input`. Every field in `episode_input` comes from the materialized task or its source dataset. Processor, server, and run configuration remain separate and are not copied into `episode_input`. Run configuration selects tasksets and maps them to compatible episode processors. Rollout planning adds `EpisodeId`, repetition, grouping, and processor routing. It does not modify `episode_input`.
 
 Before planning any episode, Gym validates that every selected processor accepts the taskset's input schema. Fan-out requires every target to accept that same input unless the run explicitly configures an adapter. Compatibility translation converts current flat rows into typed materialized tasks until native tasksets are available.
 
@@ -442,7 +442,6 @@ class NeMoSimEpisodeInput(BaseModel):
         str,
         NeMoGymResponseCreateParamsNonStreaming,
     ] = Field(default_factory=dict)
-    simulation_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class NeMoSimInvocation(BaseModel):
@@ -477,7 +476,7 @@ class NeMoSimEpisodeResponse(
     pass
 ```
 
-The base episode contract does not interpret NeMo-Sim's fields or require one primary `NeMoGymResponse`. A compatibility adapter converts between `NeMoSimRunRequest` and `NeMoSimProcessorResponse` and the native episode models until callers use the native contracts.
+The base episode contract does not interpret NeMo-Sim's fields or require one primary `NeMoGymResponse`. NeMo-Sim's `simulation_config` belongs to `NeMoSimEpisodeProcessorConfig`, not `NeMoSimEpisodeInput`. Migration moves that legacy request field into processor configuration. A compatibility adapter converts the remaining request and response fields until callers use the native contracts.
 
 ### Grouped episodes
 
@@ -510,7 +509,7 @@ The flow is:
 
 For `SingleAgentEpisodeProcessor`, the concrete input contains `responses_create_params` and `task_data`. The processor passes both to resources seed, passes only `responses_create_params` to the agent's `/v1/responses`, and returns verification plus optional agent observations.
 
-For NeMo-Sim, the concrete input contains `scenario`, role-keyed `model_responses_create_params`, and task-specific `simulation_config`. The processor returns the simulation result and attributed invocation list. No single-agent fields are added to the base contract.
+For NeMo-Sim, the concrete input contains the task's `scenario` and role-keyed `model_responses_create_params`. The selected processor supplies `simulation_config` from its configuration. The processor returns the simulation result and attributed invocation list. No single-agent fields are added to the base contract.
 
 ### Processor selection and dispatch
 
@@ -820,9 +819,13 @@ class SingleAgentEpisodeProcessorConfig(BaseEpisodeProcessorConfig):
 class Tau2EpisodeProcessorConfig(BaseEpisodeProcessorConfig):
     model_server: ModelServerRef
     user_model_server: ModelServerRef
+
+
+class NeMoSimEpisodeProcessorConfig(BaseEpisodeProcessorConfig):
+    simulation_config: NeMoSimSimulationConfig
 ```
 
-Each concrete processor declares the servers it uses. `episode_input` cannot select executable code, credentials, another processor, or a sandbox provider.
+Each concrete processor declares the servers and protocol configuration it uses. `episode_input` cannot select executable code, credentials, another processor, a sandbox provider, or processor behavior such as NeMo-Sim simulation limits.
 
 For `SingleAgentEpisodeProcessor`, agent configuration owns model selection and behavior-specific options, while resources-server configuration owns verification options. A self-contained processor owns its external framework's configuration.
 
@@ -1358,4 +1361,4 @@ Current `Tau2Agent.run()` calls Tau2's `run_single_task()` directly and returns 
 
 ### NeMo-Sim
 
-NeMo-Sim accepts a scenario, role-keyed model request parameters, and simulation configuration. It returns the simulation result plus a list of agent and support-model invocations attributed by alias, executor, and call index. This is direct evidence that one `responses_create_params`, one focal `NeMoGymResponse`, and one agent-observation bundle cannot be required by the base episode contracts.
+NeMo-Sim receives a scenario and role-keyed model request parameters from the materialized task and receives simulation configuration from its processor deployment. It returns the simulation result plus a list of agent and support-model invocations attributed by alias, executor, and call index. This is direct evidence that one `responses_create_params`, one focal `NeMoGymResponse`, and one agent-observation bundle cannot be required by the base episode contracts.

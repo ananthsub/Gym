@@ -19,7 +19,7 @@ Gym adds `episode_processors` as a fourth server type and `sandbox_servers` as a
 4. Terminus-2 keeps its Python loop and Harbor dependencies in its agent-server virtual environment. Its terminal commands use resources-provided `SandboxAccess` when present and otherwise use its configured local workspace.
 5. Tau2 runs as a self-contained episode processor that calls policy and simulated-user model servers without a Gym agent or resources server.
 
-The processor config contains server references and protocol limits. The processor implementation defines its concrete episode input and result models. Agent-specific configuration contains behavior settings and any sandbox the agent may create when resources returns no access. Most users select a shipped resources-and-agent preset; the expanded configuration is for authors, operators, and reviewers.
+The processor config contains server references and protocol limits. The processor implementation defines its concrete episode input and result models. Every `episode_input` field comes from the materialized task or source dataset; processor and server configuration is never copied into task data. Agent-specific configuration contains behavior settings and any sandbox the agent may create when resources returns no access. Most users select a shipped resources-and-agent preset; the expanded configuration is for authors, operators, and reviewers.
 
 The proposal also contains complete step-by-step episode flows. Its HTML companion provides interactive walkthroughs for the representative deployments and the optional sandbox-server path.
 
