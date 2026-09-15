@@ -928,7 +928,7 @@ def _single_agent_episode_request(row: Dict[str, Any]) -> SingleAgentEpisodeRequ
 
 def _project_single_agent_episode_response(response: SingleAgentEpisodeResponse) -> Dict[str, Any]:
     if response.failure is not None:
-        return {
+        failure = {
             NG_FAILURE_CLASS_KEY: EPISODE_PROCESSOR_FAILURE_CLASS,
             NG_TERMINAL_KEY: not response.failure.retryable,
             "_ng_failure_type": response.failure.kind,
@@ -936,6 +936,10 @@ def _project_single_agent_episode_response(response: SingleAgentEpisodeResponse)
             "_ng_failure_stage": response.failure.stage,
             "_ng_failure_retryable": response.failure.retryable,
         }
+        partial_response = getattr(response.failure, "partial_response", None)
+        if partial_response is not None:
+            failure["_ng_failure_partial_response"] = partial_response.model_dump(mode="json")
+        return failure
     if response.result is None:
         raise ValueError("Successful episode response has no result")
     result = response.result.verification.model_dump(mode="json")

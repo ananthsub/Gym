@@ -266,6 +266,40 @@ async def test_episode_seed_returns_direct_access_and_resources_close_owns_stop(
 
 
 @pytest.mark.asyncio
+async def test_episode_seed_rolls_back_sandbox_when_handoff_fails(monkeypatch: MonkeyPatch) -> None:
+    server = make_server(golden=False, apply_anti_cheating=False)
+    sandbox = SimpleNamespace(
+        exec=AsyncMock(),
+        serialize=AsyncMock(side_effect=RuntimeError("cannot serialize")),
+        stop=AsyncMock(),
+    )
+    monkeypatch.setattr(server, "_create_sandbox", AsyncMock(return_value=sandbox))
+    monkeypatch.setattr(
+        "resources_servers.swebench_pro.app.resolve_provider_config",
+        lambda name, config: {"opensandbox": {}},
+    )
+    monkeypatch.setattr("resources_servers.swebench_pro.app.get_global_config_dict", lambda: {})
+    request = SimpleNamespace(session={SESSION_ID_KEY: "session"})
+    task_data = request_body()
+    task_data.pop("responses_create_params")
+    task_data.pop("response")
+
+    with pytest.raises(RuntimeError, match="cannot serialize"):
+        await server.seed_session(
+            request,
+            EpisodeResourcesSeedRequest(
+                episode_id=EpisodeId(rollout_id="rollout"),
+                task_id=TaskId(task_source="swebench_pro", task_id="instance_example"),
+                task_data=task_data,
+            ),
+        )
+
+    sandbox.stop.assert_awaited_once()
+    assert "session" not in server._session_id_to_sandbox
+    assert "session" not in server._session_id_to_task
+
+
+@pytest.mark.asyncio
 async def test_extract_model_patch_includes_commits_and_untracked_files() -> None:
     server = make_server(golden=False)
     sandbox = SimpleNamespace(

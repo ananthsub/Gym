@@ -151,3 +151,9 @@ async def test_token_capture_keeps_prefixed_twin_route() -> None:
     processor, client = _processor(token_capture=True)
     await processor.run(_request())
     assert client.calls[2][1] == "/ng-rollout/rollout-a2/training-token-capture/v1/responses"
+
+
+def test_dependency_failure_messages_are_bounded() -> None:
+    processor, _ = _processor()
+    error = processor._failure(stage="agent", message="x" * 3000, retryable=True)
+    assert len(error.failure.message) == 2000

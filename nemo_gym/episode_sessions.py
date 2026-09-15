@@ -28,6 +28,7 @@ class AgentSession:
 
     request: AgentSessionCreateRequest
     state: Any
+    activation_started: bool = False
 
 
 class AgentSessionServerMixin:
@@ -71,6 +72,15 @@ class AgentSessionServerMixin:
             return self._agent_sessions[agent_session_id]
         except KeyError as error:
             raise ValueError(f"Unknown agent_session_id: {agent_session_id}") from error
+
+    def begin_agent_activation(self, agent_session_id: str, rollout_id: str) -> AgentSession:
+        session = self.require_agent_session(agent_session_id)
+        if rollout_id != session.request.episode_id.capture_key:
+            raise ValueError("Agent-session episode_id does not match the rollout route")
+        if session.activation_started:
+            raise ValueError("Agent session has already been activated")
+        session.activation_started = True
+        return session
 
     async def open_agent_session(
         self,

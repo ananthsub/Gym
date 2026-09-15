@@ -306,6 +306,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
     ) -> SWEBenchProSeedSessionResponse | EpisodeResourcesSeedResponse:
         session_id = request.session[SESSION_ID_KEY]
         self._session_id_to_pristine_untracked.pop(session_id, None)
+        self._session_id_to_task.pop(session_id, None)
         await self.close_pty_session(self._session_id_to_pty.pop(session_id, None))
         previous = self._session_id_to_sandbox.pop(session_id, None)
         if previous is not None:
@@ -315,38 +316,47 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
                 print("Failed to stop previous SWE-bench Pro sandbox", format_exc(), file=sys.stderr)
 
         native_request = isinstance(body, EpisodeResourcesSeedRequest)
-        task = (
-            SWEBenchProInstanceRequest.model_validate(body.task_data)
-            if native_request
-            else SWEBenchProInstanceRequest.model_validate(body.model_dump())
-        )
-        self._session_id_to_task[session_id] = task
-
-        sandbox = await self._create_sandbox(task)
-        pty_session = None if native_request else await sandbox.pty.create()
-        if self.config.apply_anti_cheating:
-            anti_cheat_setup_fpath = Path(__file__).parent.parent / "swebench" / "anti_cheat_setup.sh"
-            await sandbox.upload(anti_cheat_setup_fpath, "/app/anti_cheat_setup.sh")
-            result = await sandbox.exec(
-                "git reset --hard && WORKING_DIRECTORY=/app bash anti_cheat_setup.sh && rm anti_cheat_setup.sh",
-                timeout_s=600,
-            )
-            if result.return_code != 0:
-                print(
-                    f"Failed to setup anti-cheating for {task.instance_id}. Return code: {result.return_code}\n"
-                    f"Stdout:\n{result.stdout}\nStderr:\n{result.stderr}"
-                )
-        await self.normalize_sandbox_environment(sandbox, task.instance_id)
-        self._session_id_to_pristine_untracked[session_id] = await self.pristine_untracked_files(sandbox)
-        self._session_id_to_sandbox[session_id] = sandbox
-        if pty_session is not None:
-            self._session_id_to_pty[session_id] = pty_session
+        provider_name = None
         if native_request:
             provider_config = resolve_provider_config(self.config.sandbox_provider, get_global_config_dict())
             provider_name = next(iter(provider_config))
             if provider_name != "opensandbox":
                 raise ValueError("SWE-bench Pro episode sessions currently require the opensandbox provider")
-            descriptor = await sandbox.serialize()
+        task = (
+            SWEBenchProInstanceRequest.model_validate(body.task_data)
+            if native_request
+            else SWEBenchProInstanceRequest.model_validate(body.model_dump())
+        )
+        sandbox = await self._create_sandbox(task)
+        pty_session = None
+        try:
+            pty_session = None if native_request else await sandbox.pty.create()
+            if self.config.apply_anti_cheating:
+                anti_cheat_setup_fpath = Path(__file__).parent.parent / "swebench" / "anti_cheat_setup.sh"
+                await sandbox.upload(anti_cheat_setup_fpath, "/app/anti_cheat_setup.sh")
+                result = await sandbox.exec(
+                    "git reset --hard && WORKING_DIRECTORY=/app bash anti_cheat_setup.sh && rm anti_cheat_setup.sh",
+                    timeout_s=600,
+                )
+                if result.return_code != 0:
+                    print(
+                        f"Failed to setup anti-cheating for {task.instance_id}. Return code: {result.return_code}\n"
+                        f"Stdout:\n{result.stdout}\nStderr:\n{result.stderr}"
+                    )
+            await self.normalize_sandbox_environment(sandbox, task.instance_id)
+            pristine_untracked = await self.pristine_untracked_files(sandbox)
+            descriptor = await sandbox.serialize() if native_request else None
+        except BaseException:
+            await self.close_pty_session(pty_session)
+            await sandbox.stop()
+            raise
+
+        self._session_id_to_task[session_id] = task
+        self._session_id_to_pristine_untracked[session_id] = pristine_untracked
+        self._session_id_to_sandbox[session_id] = sandbox
+        if pty_session is not None:
+            self._session_id_to_pty[session_id] = pty_session
+        if native_request:
             return EpisodeResourcesSeedResponse(
                 resources_session_id=session_id,
                 sandbox_access=SandboxAccess(

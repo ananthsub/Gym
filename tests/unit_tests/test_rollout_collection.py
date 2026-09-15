@@ -4147,6 +4147,16 @@ class TestEpisodeProcessorRouting:
                 "stage": "agent",
                 "message": "agent unavailable",
                 "retryable": True,
+                "partial_response": {
+                    "id": "partial",
+                    "created_at": 0,
+                    "model": "model",
+                    "object": "response",
+                    "output": [],
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": True,
+                    "tools": [],
+                },
             },
         }
         post = AsyncMock(return_value=FakeResponse(200, payload))
@@ -4164,3 +4174,4 @@ class TestEpisodeProcessorRouting:
         assert result[NG_TERMINAL_KEY] is False
         assert result["_ng_failure_retryable"] is True
         assert result["_ng_failure_stage"] == "agent"
+        assert result["_ng_failure_partial_response"]["id"] == "partial"

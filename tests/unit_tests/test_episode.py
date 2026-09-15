@@ -16,6 +16,7 @@ from nemo_gym.base_episode_processor import (
 )
 from nemo_gym.base_resources_server import BaseVerifyResponse
 from nemo_gym.episode import (
+    AgentSessionCreateRequest,
     BaseEpisodeRequest,
     BaseEpisodeResponse,
     DirectResourcesToolAccess,
@@ -23,6 +24,7 @@ from nemo_gym.episode import (
     EpisodeId,
     TaskId,
 )
+from nemo_gym.episode_sessions import AgentSessionServerMixin
 from nemo_gym.openai_utils import NeMoGymResponse
 from nemo_gym.server_utils import ServerClient
 
@@ -187,3 +189,21 @@ def test_caller_cancellation_waits_for_cleanup() -> None:
 def test_capture_key_qualifies_retries() -> None:
     assert EpisodeId(rollout_id="r").capture_key == "r"
     assert EpisodeId(rollout_id="r", attempt=2).capture_key == "r-a2"
+
+
+def test_agent_session_activation_enforces_episode_identity_and_single_use() -> None:
+    class _Sessions(AgentSessionServerMixin):
+        pass
+
+    sessions = _Sessions()
+    sessions.config = MagicMock(num_workers=1)
+    sessions.initialize_agent_sessions()
+    created = asyncio.run(
+        sessions.create_agent_session(AgentSessionCreateRequest(episode_id=EpisodeId(rollout_id="rollout", attempt=2)))
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        sessions.begin_agent_activation(created.agent_session_id, "other")
+    sessions.begin_agent_activation(created.agent_session_id, "rollout-a2")
+    with pytest.raises(ValueError, match="already been activated"):
+        sessions.begin_agent_activation(created.agent_session_id, "rollout-a2")

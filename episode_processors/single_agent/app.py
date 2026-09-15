@@ -82,7 +82,7 @@ class SingleAgentEpisodeProcessor(BaseEpisodeProcessor[SingleAgentEpisodeRequest
             SingleAgentEpisodeFailure(
                 kind="dependency",
                 stage=stage,
-                message=message,
+                message=message[:2000],
                 retryable=retryable,
                 partial_response=partial_response,
             )

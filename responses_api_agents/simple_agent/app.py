@@ -298,7 +298,12 @@ class SimpleAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         path_params = getattr(request, "path_params", None)
         rollout_id = path_params.get("rollout_id") if isinstance(path_params, Mapping) else None
         collect_trajectory = self._model_call_capture_enabled() and isinstance(rollout_id, str)
-        agent_session = self.require_agent_session(agent_session_id) if isinstance(agent_session_id, str) else None
+        if isinstance(agent_session_id, str):
+            if not isinstance(rollout_id, str):
+                raise ValueError("Agent sessions require an attempt-qualified rollout path")
+            agent_session = self.begin_agent_activation(agent_session_id, rollout_id)
+        else:
+            agent_session = None
         resources_server_cookies = (
             agent_session.state["resources_cookies"] if agent_session is not None else request.cookies
         )
