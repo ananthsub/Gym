@@ -6,10 +6,10 @@ This branch contains the public Gym architecture RFC and a concrete proposal for
 
 ## Core design
 
-1. **Episode processor.** Each `episode_processors` deployment hosts one concrete processor. `BaseEpisodeProcessor.run()` supplies validation, admission, cancellation, cleanup, finalization, HTTP status, and compatibility projection. A concrete `process()` method owns its interaction protocol.
-2. **Composed Gym services.** A processor may use independently deployed agent and resources servers when those boundaries fit its protocol. It may instead run a self-contained external integration such as Tau2. Agent servers retain their existing `POST /v1/responses` request and response models.
+1. **Episode processor.** Each `episode_processors` deployment hosts one concrete processor. The processor binds concrete request and response models to the shared `POST /run` endpoint. `BaseEpisodeProcessor.run()` supplies worker-local admission, queue and episode timeouts, handled-failure conversion, response validation, identity checks, and telemetry. A concrete `process()` method owns its protocol and participant cleanup order.
+2. **Composed Gym servers.** A processor may use independently deployed agent and resources servers when those boundaries fit its protocol. It may instead run a self-contained external integration such as Tau2. Agent servers retain their existing `POST /v1/responses` request and response models.
 
-Gym adds `episode_processors` as a fourth server type and `sandbox_servers` as an optional fifth type. A sandbox server is configured only when provider state cannot be reconstructed across the resources-server and agent-server processes. Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available during migration. Native callers use `EpisodeProcessorRef`. Broader routing redesign remains follow-on work.
+Gym adds `episode_processors` as a fourth server type and `sandbox_servers` as an optional fifth type. A sandbox server is configured only when provider state cannot be reconstructed across the resources-server and agent-server processes. Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available through compatibility adapters. Native run configuration maps tasksets to `EpisodeProcessorRef` values before rollout planning; processor routing is not stored in task data or the episode request.
 
 ## Representative deployment paths
 
@@ -19,7 +19,7 @@ Gym adds `episode_processors` as a fourth server type and `sandbox_servers` as a
 4. Terminus-2 keeps its Python loop and Harbor dependencies in its agent-server virtual environment. Its terminal commands use resources-provided `SandboxAccess` when present and otherwise use its configured local workspace.
 5. Tau2 runs as a self-contained episode processor that calls policy and simulated-user model servers without a Gym agent or resources server.
 
-The processor config contains service references and protocol limits. Agent-specific configuration contains behavior settings and any sandbox the agent may create when resources returns no access. Most users select a shipped resources-and-agent preset; the expanded configuration is for authors, operators, and reviewers.
+The processor config contains server references and protocol limits. The processor implementation defines its concrete episode input and result models. Agent-specific configuration contains behavior settings and any sandbox the agent may create when resources returns no access. Most users select a shipped resources-and-agent preset; the expanded configuration is for authors, operators, and reviewers.
 
 The proposal also contains complete step-by-step episode flows. Its HTML companion provides interactive walkthroughs for the representative deployments and the optional sandbox-server path.
 
@@ -29,7 +29,9 @@ Agent sessions are process-local. The initial deployment uses one Uvicorn worker
 
 ## Contracts defined by the proposal
 
-- `EpisodeId`, `EpisodeRequest`, `EpisodeResponse`, `EpisodeVerification`, failure, and cleanup;
+- `EpisodeId`, minimal generic `BaseEpisodeRequest` and `BaseEpisodeResponse` contracts, and protocol-neutral handled failures;
+- concrete single-agent and NeMo-Sim episode inputs, results, requests, and responses;
+- taskset-to-processor routing and processor-specific evaluation and training projection;
 - the `episode_processors` server category, `EpisodeProcessorRef`, and the single-agent protocol;
 - the unchanged `/v1/responses` behavior endpoint;
 - `POST /v1/agent_sessions`, behavior invocation, and `POST /v1/agent_sessions/close`;
@@ -39,7 +41,7 @@ Agent sessions are process-local. The initial deployment uses one Uvicorn worker
 - typed Simple Agent, OpenCode, and Terminus-2 agent-server configuration with four deployment examples;
 - exact current-to-target behavior mappings for OpenCode and `simple_agent`;
 - scoped resources-tool and sandbox access, `EpisodeId` checks, and bounded cleanup;
-- legacy JSONL, `agent_ref`, `/run`, HTTP behavior, and NeMo RL projection;
+- legacy JSONL, `agent_ref`, `/run`, HTTP behavior, and processor-specific NeMo RL projection;
 - horizontal agent-server scaling through one-worker replicas and session-affine routed pools.
 
 ## Capabilities added after the foundations
