@@ -175,7 +175,7 @@ sequenceDiagram
 
     A->>A: Start agent-local state and optional observation capture
     A-->>P: AgentSessionCreateResponse
-    P->>A: POST /v1/responses with agent session ID
+    P->>A: POST /ng-rollout/{capture_key}/v1/responses with agent session ID
     loop Agent activation
         A->>M: Model request
         M-->>A: Model response or tool call
@@ -540,32 +540,28 @@ Replica selection happens after processor selection. Local Gym may have one repl
 
 During migration, legacy routing remains available:
 
-1. Current `task_source`, `agent_map`, `fan_out`, `agent_name`, and row-level `agent_ref` behavior resolves a legacy deployment name.
-2. An unmigrated name resolves to the existing agent-server `/run`.
-3. A migrated name resolves to a compatibility episode-processor `/run` with the same external name. Its internal behavior agent uses a different server name.
+1. `episode_processor_name` selects one compatibility processor for every row.
+2. `episode_processor_map` selects processors by `task_source`; `_default` handles unmatched sources.
+3. A row without a processor route retains the existing `agent_map`, `agent_name`, and row-level `agent_ref` behavior and resolves to the existing agent-server `/run`.
+4. Before dispatch, Gym verifies that the selected processor exists, its agent and resources references resolve, the row's `task_source` matches the configured resources server, and the agent is included in the resources server's `allowed_agents`.
 
 `agent_ref` is compatibility input, not a requirement for native tasks. Configuration validation rejects ambiguous legacy names. Neither native nor legacy task payloads can select a concrete replica.
 
 ## Resources-server session for the single-agent flow
 
-These contracts belong to `SingleAgentEpisodeProcessor`. Another processor may define a different resources-server protocol or use no resources server.
+These contracts define the processor-neutral resources-session boundary. A concrete processor may specialize the verification input or use no resources server.
 
 ### Seed and access
 
 The resources server creates its episode state during seed. The processor does not open an empty remote session before calling seed.
 
 ```python
-class SingleAgentSeedRequest(BaseModel):
+class EpisodeResourcesSeedRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     episode_id: EpisodeId
     task_id: TaskId
-    responses_create_params: NeMoGymResponseCreateParamsNonStreaming
     task_data: dict[str, JsonValue]
-
-
-class SWEBenchSeedRequest(SingleAgentSeedRequest):
-    task_data: SWEBenchTaskData
 
 
 class MCPServerMetadata(BaseModel):
@@ -575,7 +571,7 @@ class MCPServerMetadata(BaseModel):
     headers: dict[str, str]
 
 
-class SingleAgentSeedResponse(BaseModel):
+class EpisodeResourcesSeedResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     resources_session_id: str
@@ -583,7 +579,7 @@ class SingleAgentSeedResponse(BaseModel):
     sandbox_access: SandboxAccess | None = None
 ```
 
-`SingleAgentSeedRequest` validates the single-agent envelope. Each resources server binds `/seed_session` to a concrete subclass that narrows `task_data` to its benchmark-specific Pydantic model, as illustrated by `SWEBenchSeedRequest`. FastAPI performs that validation before `seed_session()` runs. The processor posts the same JSON without importing or interpreting the benchmark model. The resources session retains the validated `task_id` and `task_data` for verification; the processor does not resend them in `SingleAgentVerifyRequest`.
+`EpisodeResourcesSeedRequest` carries episode identity, task identity, and benchmark-specific task data. Each resources server validates `task_data` with its benchmark-specific Pydantic model before creating state. The processor posts the same JSON without importing or interpreting that model. The resources session retains the validated task data for verification.
 
 The processor retains the resources-server reference, session ID, and private transport state established by seed. It uses that state for verification and cleanup. It passes only agent-visible tool access and optional sandbox access to the agent server.
 
@@ -591,7 +587,30 @@ The processor retains the resources-server reference, session ID, and private tr
 
 Tool schemas may already appear in `responses_create_params.tools`. A resources server may also return `MCPServerMetadata` for tools exposed from the seeded session.
 
-The processor passes that metadata during agent-session creation. The agent server configures the agent implementation before activation:
+The processor converts the seed result and resources-session HTTP state into explicit agent-visible access:
+
+```python
+class DirectResourcesToolAccess(BaseModel):
+    kind: Literal["direct_http"]
+    base_url: str
+    cookies: dict[str, str]
+    headers: dict[str, str]
+
+
+class MCPResourcesToolAccess(BaseModel):
+    kind: Literal["mcp"]
+    metadata: MCPServerMetadata
+
+
+ResourcesToolAccess = Annotated[
+    DirectResourcesToolAccess | MCPResourcesToolAccess,
+    Field(discriminator="kind"),
+]
+```
+
+Direct HTTP access is synthesized from the resolved resources-server URL and the cookies established by seed. MCP access uses metadata returned by seed. The processor selects the transport in its configuration and passes the resulting union during agent-session creation. The discriminator is required in serialized JSON.
+
+The agent server configures the agent implementation before activation:
 
 - clients that support per-server HTTP headers receive the MCP endpoint and scoped headers;
 - a header-incapable black-box agent requires an agent-server-owned proxy that adds the scoped headers;
@@ -602,12 +621,32 @@ The processor does not proxy individual tool calls. The resources server authori
 ### Verification and cleanup
 
 ```python
-class SingleAgentVerifyRequest(BaseModel):
+VerificationInputT = TypeVar("VerificationInputT", bound=BaseModel)
+
+
+class BaseEpisodeResourcesVerifyRequest(
+    BaseModel,
+    Generic[VerificationInputT],
+):
     model_config = ConfigDict(extra="forbid")
 
     episode_id: EpisodeId
+    verification_input: VerificationInputT
+
+
+class ResponsesEpisodeVerificationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     responses_create_params: NeMoGymResponseCreateParamsNonStreaming
     response: NeMoGymResponse
+
+
+class ResponsesEpisodeResourcesVerifyRequest(
+    BaseEpisodeResourcesVerifyRequest[
+        ResponsesEpisodeVerificationInput
+    ],
+):
+    pass
 
 
 class ResourcesSessionCloseRequest(BaseModel):
@@ -624,8 +663,8 @@ class ResourcesSessionCloseResponse(BaseModel):
 
 The processor uses three resources-server operations:
 
-- `POST /seed_session`: validates `task_data`, creates resources-server state, and returns `SingleAgentSeedResponse`.
-- `POST /verify`: accepts `SingleAgentVerifyRequest` in the resources session established by seed and returns the resources server's concrete `BaseVerifyResponse` subclass.
+- `POST /seed_session`: validates `task_data`, creates resources-server state, and returns `EpisodeResourcesSeedResponse`.
+- `POST /verify`: accepts a concrete `BaseEpisodeResourcesVerifyRequest` specialization in the resources session established by seed and returns the resources server's concrete `BaseVerifyResponse` subclass.
 - `POST /close_session`: accepts `ResourcesSessionCloseRequest`, releases resources-server state, and returns `ResourcesSessionCloseResponse`.
 
 The close request identifies the resources session. Session authorization remains in HTTP metadata established during seed.
@@ -678,10 +717,11 @@ Direct handoff requires a named provider configuration because an inline provide
 
 ### Seed behavior
 
-- When `SingleAgentSeedResponse.sandbox_access` is present, the resources server requires the agent to operate that task sandbox.
+- When `EpisodeResourcesSeedResponse.sandbox_access` is present, the resources server requires the agent to operate that task sandbox.
 - When it is absent, the agent follows its own configuration.
 - Absence does not mean the resources server failed to provision a required sandbox. That failure makes seed fail.
 - The resources server may create other private sandboxes for tools or verification without exposing them.
+- The resources server validates handoff compatibility before allocation when possible. If seed fails after creating a sandbox or other object, it releases that object before returning the failure.
 
 The processor passes `SandboxAccess` unchanged during agent-session creation.
 
@@ -726,7 +766,7 @@ class AgentSessionCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     episode_id: EpisodeId
-    resources_tools: MCPServerMetadata | None = None
+    resources_access: ResourcesToolAccess | None = None
     sandbox_access: SandboxAccess | None = None
 
 
@@ -747,9 +787,10 @@ class AgentSessionCloseResponse(BaseModel):
 
     agent_session_id: str
     agent_observations: AgentObservationBundle | None = None
+    resources_cookies: dict[str, str] | None = None
 ```
 
-`agent_observations` contains optional agent-server observability records collected during the session. It is not task or environment state.
+`agent_observations` contains optional agent-server observability records collected during the session. It is not task or environment state. `resources_cookies` returns cookie updates produced by direct resources-tool calls so verification and resources cleanup continue the same resources session.
 
 ### `POST /v1/agent_sessions`
 
@@ -764,13 +805,18 @@ The agent server:
 
 If setup fails, the agent server releases anything it already acquired and returns no usable session.
 
-### `POST /v1/responses`
+### Responses invocation
 
-The processor sends the ordinary Responses body with:
+The processor sends the ordinary Responses body to an attempt-qualified twin of the agent endpoint:
 
 ```text
+POST /ng-rollout/<capture_key>/v1/responses
+POST /ng-rollout/<capture_key>/training-token-capture/v1/responses
+
 X-NeMo-Gym-Agent-Session-Id: <agent_session_id>
 ```
+
+The second route is selected only when token capture is enabled. The prefix preserves rollout and attempt correlation while the request and response bodies remain unchanged.
 
 The processor does not send its episode request or a legacy `BaseRunRequest` to the agent server. Task content visible to the agent belongs in the Responses body. Episode-scoped tool and sandbox setup belongs in `AgentSessionCreateRequest`. Static harness behavior belongs in agent-server configuration.
 
@@ -782,9 +828,11 @@ The agent server:
 - performs one complete agent activation
 - returns `NeMoGymResponse`
 
+For an activation containing several model/tool iterations, the agent and model-server chat schemas preserve assistant `reasoning_content` when the provider returns it. Dropping or rejecting that field can make a thinking model's second request fail after its first tool call.
+
 The calling processor may record the request and response under a participant role and invocation index. The endpoint does not seed resources-server state, verify a reward, clean up resources-server-owned state, or publish an episode result.
 
-The initial single-agent processor performs one `/v1/responses` activation per session. Concurrent or repeated activations are rejected.
+The initial single-agent processor performs one Responses activation per session. The route's `capture_key` must match the session's immutable `EpisodeId`. Concurrent or repeated activations are rejected.
 
 ### `POST /v1/agent_sessions/close`
 
@@ -794,7 +842,7 @@ The agent server:
 
 1. Stops the activation and agent-owned subprocesses.
 2. Stops an agent-owned fallback sandbox or disconnects from a borrowed sandbox.
-3. Flushes observations and returns `AgentSessionCloseResponse`.
+3. Flushes observations and returns `AgentSessionCloseResponse`, including updated resources cookies when direct HTTP tools were used.
 
 A successful close means agent-controlled activity has stopped. If close fails, the processor does not begin final verification. Session expiry triggers cleanup while the worker remains alive; provider TTLs bound external objects after worker loss.
 
@@ -807,8 +855,9 @@ A successful close means agent-controlled activity has stopped. If close fails, 
 ```python
 class BaseEpisodeProcessorConfig(BaseRunServerInstanceConfig):
     max_concurrent_episodes: PositiveInt | None = None
-    queue_timeout_seconds: PositiveFloat
+    queue_timeout_seconds: PositiveFloat | None = None
     default_episode_timeout_seconds: PositiveFloat
+    cleanup_timeout_seconds: PositiveFloat
 
 
 class SingleAgentEpisodeProcessorConfig(BaseEpisodeProcessorConfig):
@@ -858,6 +907,7 @@ class BaseEpisodeProcessor(
         )
 
     async def run(self, request: EpisodeRequestT) -> EpisodeResponseT:
+        acquired = False
         if self._admission is not None:
             try:
                 await asyncio.wait_for(
@@ -873,20 +923,17 @@ class BaseEpisodeProcessor(
                         retryable=True,
                     ),
                 )
+            acquired = True
 
+        context = self.create_context(request)
+        cancelled = None
         try:
-            episode_timeout = asyncio.timeout(
-                self.config.default_episode_timeout_seconds
-            )
             try:
-                async with episode_timeout:
-                    response = await self.process(
-                        request,
-                        self.create_context(request),
-                    )
+                async with asyncio.timeout(
+                    self.config.default_episode_timeout_seconds
+                ):
+                    response = await self.process(request, context)
             except TimeoutError:
-                if not episode_timeout.expired():
-                    raise
                 response = self.failure_response(
                     request,
                     EpisodeFailure(
@@ -900,13 +947,25 @@ class BaseEpisodeProcessor(
                     request,
                     error.failure,
                 )
-
-            response = self.response_model.model_validate(response)
-            self.validate_response_identity(request, response)
-            return response
+            except asyncio.CancelledError as error:
+                cancelled = error
         finally:
-            if self._admission is not None:
-                self._admission.release()
+            cleanup_task = asyncio.create_task(context.aclose())
+            try:
+                while not cleanup_task.done():
+                    try:
+                        await asyncio.shield(cleanup_task)
+                    except asyncio.CancelledError as error:
+                        cancelled = cancelled or error
+            finally:
+                if acquired:
+                    self._admission.release()
+
+        if cancelled is not None:
+            raise cancelled
+        response = self.response_model.model_validate(response)
+        self.validate_response_identity(request, response)
+        return response
 
     @abstractmethod
     async def process(
@@ -951,11 +1010,13 @@ class SingleAgentEpisodeProcessor(
 
 `BaseEpisodeProcessor` registers `POST /run` with `request_model` as the FastAPI request-body model and `response_model` as the response model. A concrete processor supplies those models and implements `process()`; it does not override `run()`.
 
-The base runner owns optional worker-local admission, queue timeout, the overall episode timeout, conversion of explicitly handled errors, response validation, identity checks, and telemetry around the call. `max_concurrent_episodes: null` disables the processor-level semaphore, and `queue_timeout_seconds` is then unused. Caller cancellation and unexpected exceptions propagate to the HTTP server. Because participant shutdown order is protocol-specific, `process()` closes its agent and resources sessions in `finally` blocks; cancellation still executes those blocks. When enabled, the semaphore limits episodes admitted to one worker and provides no cluster-wide admission or failover.
+The base runner owns optional worker-local admission, queue timeout, the overall episode timeout, conversion of explicitly handled errors, response validation, identity checks, and telemetry around the call. `max_concurrent_episodes: null` disables the processor-level semaphore, and `queue_timeout_seconds` is then unused. When admission is enabled, `queue_timeout_seconds` is required.
+
+`EpisodeContext` holds a LIFO registry of cleanup callbacks. The base runner executes that registry outside the episode timeout under `cleanup_timeout_seconds`. Cleanup runs in a shielded task and continues through repeated caller cancellation; cancellation is re-raised after cleanup finishes or reaches its own bound. Unexpected exceptions also propagate after cleanup. When enabled, the semaphore limits episodes admitted to one worker and provides no cluster-wide admission or failover.
 
 ### Processing order
 
-The presence of `SingleAgentSeedResponse.sandbox_access` selects the sandbox lifecycle. The processor does not infer ownership from the agent type, provider, or task name.
+The presence of `EpisodeResourcesSeedResponse.sandbox_access` selects the sandbox lifecycle. The processor does not infer ownership from the agent type, provider, or task name.
 
 #### The resources server provides the task sandbox
 
@@ -987,10 +1048,9 @@ async def process(
 ) -> SingleAgentEpisodeResponse:
     episode_input = request.episode_input
     seed = await context.resources_server.seed(
-        SingleAgentSeedRequest(
+        EpisodeResourcesSeedRequest(
             episode_id=request.episode_id,
             task_id=request.task_id,
-            responses_create_params=episode_input.responses_create_params,
             task_data=episode_input.task_data,
         )
     )
@@ -999,15 +1059,16 @@ async def process(
         session = await self.create_agent_session(
             AgentSessionCreateRequest(
                 episode_id=request.episode_id,
-                resources_tools=seed.resources_tools,
+                resources_access=self.resources_access(seed),
                 sandbox_access=seed.sandbox_access,
             )
         )
 
         try:
-            agent_response = await self.call_agent_responses(
+            agent_response = await self.call_agent(
                 session,
                 episode_input.responses_create_params,
+                capture_key=request.episode_id.capture_key,
             )
         finally:
             close_response = await self.close_agent_session(
@@ -1018,10 +1079,14 @@ async def process(
             )
 
         verification = await context.resources_server.verify(
-            SingleAgentVerifyRequest(
+            ResponsesEpisodeResourcesVerifyRequest(
                 episode_id=request.episode_id,
-                responses_create_params=episode_input.responses_create_params,
-                response=agent_response,
+                verification_input=ResponsesEpisodeVerificationInput(
+                    responses_create_params=(
+                        episode_input.responses_create_params
+                    ),
+                    response=agent_response,
+                ),
             )
         )
 
@@ -1043,7 +1108,7 @@ async def process(
 
 This pseudocode shows the single-agent protocol and its cleanup order. The shared `run()` shown above provides the protocol-neutral lifecycle around it. Compatibility translation occurs at the adapter boundary rather than inside `run()`.
 
-`call_agent_responses` either returns a validated `NeMoGymResponse` or raises a classified agent error. `close_agent_session` raises when it cannot confirm that agent-controlled activity stopped.
+`call_agent` uses the attempt-qualified Responses route and either returns a validated `NeMoGymResponse` or raises a classified agent error. An agent implementation must not convert an internal model or tool failure into an apparently valid empty response. `close_agent_session` raises when it cannot confirm that agent-controlled activity stopped.
 
 A valid agent response proceeds to verification only after every agent session closes successfully. Failure to produce a valid `NeMoGymResponse` or close every agent session skips verification.
 
@@ -1105,8 +1170,8 @@ reasoning_gym_simple_agent:
         name: simple_agent
       max_concurrent_episodes: 32
       queue_timeout_seconds: 300
-      shutdown_grace_seconds: 60
       default_episode_timeout_seconds: 3600
+      cleanup_timeout_seconds: 180
       compatibility:
         expected_agent_name: reasoning_gym_simple_agent
 
@@ -1140,8 +1205,8 @@ reasoning_gym_opencode:
         name: opencode_agent
       max_concurrent_episodes: 16
       queue_timeout_seconds: 300
-      shutdown_grace_seconds: 60
       default_episode_timeout_seconds: 10800
+      cleanup_timeout_seconds: 180
 
 opencode_agent:
   responses_api_agents:
@@ -1186,8 +1251,8 @@ opencode_swebench:
         name: opencode_agent
       max_concurrent_episodes: 16
       queue_timeout_seconds: 300
-      shutdown_grace_seconds: 60
       default_episode_timeout_seconds: 10800
+      cleanup_timeout_seconds: 180
 
 swebench:
   resources_servers:
@@ -1227,8 +1292,8 @@ reasoning_gym_terminus_2:
         name: terminus_2_agent
       max_concurrent_episodes: 8
       queue_timeout_seconds: 300
-      shutdown_grace_seconds: 60
       default_episode_timeout_seconds: 10800
+      cleanup_timeout_seconds: 180
 
 terminus_2_agent:
   responses_api_agents:
