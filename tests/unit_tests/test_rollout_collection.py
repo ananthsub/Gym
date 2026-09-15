@@ -47,6 +47,7 @@ from nemo_gym.rollout_collection import (
     _DEFAULT_MAX_ROLLOUT_ATTEMPTS,
     AGENT_REQUEST_FAILED_FAILURE_CLASS,
     AGENT_RUN_ERROR_FAILURE_CLASS,
+    EPISODE_PROCESSOR_FAILURE_CLASS,
     NG_FAILURE_CLASS_KEY,
     NG_NO_PERSIST_KEY,
     NG_PERF_KEY,
@@ -87,6 +88,35 @@ from nemo_gym.token_id_capture.delivery import (
     retire_rollout_token_capture,
     rollout_carries_token_ids,
 )
+
+
+def _episode_processor_config() -> DictConfig:
+    return OmegaConf.create(
+        {
+            "swe": {
+                "resources_servers": {
+                    "swebench_pro": {
+                        "allowed_agents": ["hermes_agent"],
+                    }
+                }
+            },
+            "hermes": {
+                "responses_api_agents": {
+                    "hermes_agent": {
+                        "resources_server": {"type": "resources_servers", "name": "swe"},
+                    }
+                }
+            },
+            "processor": {
+                "episode_processors": {
+                    "single_agent": {
+                        "agent_server": {"type": "responses_api_agents", "name": "hermes"},
+                        "resources_server": {"type": "resources_servers", "name": "swe"},
+                    }
+                }
+            },
+        }
+    )
 
 
 class _StubLineageStore:
@@ -4045,3 +4075,92 @@ class TestPreprocessExamples:
     def test_validates_knobs_like_the_cli(self) -> None:
         with pytest.raises(ValueError, match="empty list"):
             RolloutCollectionHelper().preprocess_examples([self._ts_row()], fan_out={"math": []})
+
+
+class TestEpisodeProcessorRouting:
+    def _row(self) -> dict:
+        return {
+            TASK_INDEX_KEY_NAME: 0,
+            ROLLOUT_INDEX_KEY_NAME: 0,
+            ATTEMPT_INDEX_KEY_NAME: 1,
+            "task_source": "swe",
+            "instance_id": "instance",
+            "base_commit": "abc",
+            "responses_create_params": {"input": "fix it"},
+        }
+
+    async def test_routes_native_request_and_projects_legacy_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        agent_response = {
+            "id": "response",
+            "created_at": 0,
+            "model": "model",
+            "object": "response",
+            "output": [],
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+            "tools": [],
+        }
+        payload = {
+            "episode_id": {"rollout_id": "0-0", "attempt": 1},
+            "task_id": {"task_source": "swe", "task_id": "instance"},
+            "result": {
+                "verification": {
+                    "responses_create_params": {"input": "fix it"},
+                    "response": agent_response,
+                    "reward": 1.0,
+                    "model_patch": "patch",
+                },
+                "agent_observations": {"source": "hermes", "records": [], "gaps": []},
+            },
+        }
+        post = AsyncMock(return_value=FakeResponse(200, payload))
+        client = install_fake_server_client(monkeypatch, post)
+        client.global_config_dict = _episode_processor_config()
+        row = self._row()
+
+        returned_row, result = await next(
+            RolloutCollectionHelper().run_examples(
+                [row],
+                episode_processor_map={"swe": "processor"},
+            )
+        )
+
+        assert returned_row is row
+        assert row["agent_ref"] == {"name": "hermes"}
+        assert result["reward"] == 1.0
+        assert result["model_patch"] == "patch"
+        assert result["ng_agent_observations"]["source"] == "hermes"
+        assert post.await_args.kwargs["server_name"] == "processor"
+        native_request = post.await_args.kwargs["json"]
+        assert native_request.episode_id.attempt == 1
+        assert native_request.episode_input.task_data == {
+            "instance_id": "instance",
+            "base_commit": "abc",
+        }
+
+    async def test_projects_http_200_failure_for_the_sidecar(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        payload = {
+            "episode_id": {"rollout_id": "0-0", "attempt": 1},
+            "task_id": {"task_source": "swe", "task_id": "instance"},
+            "failure": {
+                "kind": "dependency",
+                "stage": "agent",
+                "message": "agent unavailable",
+                "retryable": True,
+            },
+        }
+        post = AsyncMock(return_value=FakeResponse(200, payload))
+        client = install_fake_server_client(monkeypatch, post)
+        client.global_config_dict = _episode_processor_config()
+
+        _, result = await next(
+            RolloutCollectionHelper().run_examples(
+                [self._row()],
+                episode_processor_map={"swe": "processor"},
+            )
+        )
+
+        assert result[NG_FAILURE_CLASS_KEY] == EPISODE_PROCESSOR_FAILURE_CLASS
+        assert result[NG_TERMINAL_KEY] is False
+        assert result["_ng_failure_retryable"] is True
+        assert result["_ng_failure_stage"] == "agent"

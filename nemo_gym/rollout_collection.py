@@ -51,6 +51,13 @@ from nemo_gym.config_types import (
     ConfigPathNotFoundError,
     UploadRolloutsConfigMixin,
 )
+from nemo_gym.episode import (
+    EpisodeId,
+    SingleAgentEpisodeInput,
+    SingleAgentEpisodeRequest,
+    SingleAgentEpisodeResponse,
+    TaskId,
+)
 from nemo_gym.exporters import export_metrics, export_rollouts, get_exporters
 from nemo_gym.global_config import (
     AGENT_REF_KEY_NAME,
@@ -149,7 +156,14 @@ NG_NO_PERSIST_KEY = "_ng_no_persist"
 NG_TERMINAL_KEY = "_ng_failure_terminal"
 AGENT_REQUEST_FAILED_FAILURE_CLASS = "agent_request_failed"
 AGENT_RUN_ERROR_FAILURE_CLASS = "agent_run_error"
-_NO_RESULT_FAILURE_CLASSES = frozenset({AGENT_REQUEST_FAILED_FAILURE_CLASS, AGENT_RUN_ERROR_FAILURE_CLASS})
+EPISODE_PROCESSOR_FAILURE_CLASS = "episode_processor_failed"
+_NO_RESULT_FAILURE_CLASSES = frozenset(
+    {
+        AGENT_REQUEST_FAILED_FAILURE_CLASS,
+        AGENT_RUN_ERROR_FAILURE_CLASS,
+        EPISODE_PROCESSOR_FAILURE_CLASS,
+    }
+)
 NG_TRAJECTORY_KEY = "ng_trajectory"
 NG_PERF_KEY = "ng_perf"
 _MODEL_CALL_PAYLOAD_KEYS = ("request", "response", "request_raw", "response_raw")
@@ -634,6 +648,30 @@ class SharedRolloutCollectionConfig(UploadRolloutsConfigMixin, BaseNeMoGymCLICon
             "When unset, the standard single-pass collection runs."
         ),
     )
+    episode_processor_name: Optional[str] = Field(
+        default=None,
+        description="Episode processor used for every row unless episode_processor_map has a task-source entry.",
+    )
+    episode_processor_map: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Episode processors keyed by task_source. The special key '_default' applies to unmatched rows.",
+    )
+
+    @model_validator(mode="after")
+    def _fold_episode_processor_name_into_map(self) -> "SharedRolloutCollectionConfig":
+        if self.episode_processor_name is None:
+            return self
+        existing_default = (self.episode_processor_map or {}).get("_default")
+        if existing_default is not None and existing_default != self.episode_processor_name:
+            raise ValueError(
+                f"episode_processor_name={self.episode_processor_name!r} conflicts with "
+                f"episode_processor_map._default={existing_default!r}"
+            )
+        self.episode_processor_map = {
+            **(self.episode_processor_map or {}),
+            "_default": self.episode_processor_name,
+        }
+        return self
 
 
 class E2ERolloutCollectionConfig(SharedRolloutCollectionConfig):
@@ -857,6 +895,53 @@ def _agent_request_failure_row(exc: BaseException, status: Optional[int]) -> Dic
         "_ng_failure_http_status": status,
         "_ng_failure_response_body": _truncated_body(body),
     }
+
+
+def _single_agent_episode_request(row: Dict[str, Any]) -> SingleAgentEpisodeRequest:
+    task_id, rollout_id = _trajectory_identity(row)
+    task_source = row.get(TASK_SOURCE_KEY_NAME)
+    if not isinstance(task_source, str) or not task_source:
+        raise ValueError("Episode processor rows require task_source")
+    attempt = row.get(ATTEMPT_INDEX_KEY_NAME, 0)
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 0:
+        raise ValueError(f"Invalid episode attempt: {attempt!r}")
+    excluded = {
+        RESPONSES_CREATE_PARAMS_KEY_NAME,
+        AGENT_REF_KEY_NAME,
+        TASK_SOURCE_KEY_NAME,
+        SKILLS_REF_KEY_NAME,
+        ROLLOUT_ID_KEY_NAME,
+        TASK_INDEX_KEY_NAME,
+        ROLLOUT_INDEX_KEY_NAME,
+        ATTEMPT_INDEX_KEY_NAME,
+    }
+    task_data = {key: value for key, value in row.items() if key not in excluded}
+    return SingleAgentEpisodeRequest(
+        episode_id=EpisodeId(rollout_id=rollout_id, attempt=attempt),
+        task_id=TaskId(task_source=task_source, task_id=task_id),
+        episode_input=SingleAgentEpisodeInput(
+            responses_create_params=row[RESPONSES_CREATE_PARAMS_KEY_NAME],
+            task_data=task_data,
+        ),
+    )
+
+
+def _project_single_agent_episode_response(response: SingleAgentEpisodeResponse) -> Dict[str, Any]:
+    if response.failure is not None:
+        return {
+            NG_FAILURE_CLASS_KEY: EPISODE_PROCESSOR_FAILURE_CLASS,
+            NG_TERMINAL_KEY: not response.failure.retryable,
+            "_ng_failure_type": response.failure.kind,
+            "_ng_failure_message": response.failure.message,
+            "_ng_failure_stage": response.failure.stage,
+            "_ng_failure_retryable": response.failure.retryable,
+        }
+    if response.result is None:
+        raise ValueError("Successful episode response has no result")
+    result = response.result.verification.model_dump(mode="json")
+    if response.result.agent_observations is not None:
+        result["ng_agent_observations"] = response.result.agent_observations.model_dump(mode="json")
+    return result
 
 
 def _truncated_body(body: Optional[bytes]) -> Optional[str]:
@@ -1386,6 +1471,7 @@ class RolloutCollectionHelper(BaseModel):
             input_rows,
             semaphore=semaphore,
             route_failures_to_sidecar=config.route_failures_to_sidecar,
+            episode_processor_map=config.episode_processor_map,
         ):
             completed = await future
             row, result, rollout_latency_ms = completed.row, completed.result, completed.rollout_latency_ms
@@ -1853,6 +1939,57 @@ Aggregate metrics: {aggregate_metrics_fpath}{coverage}""")
         )
 
     @staticmethod
+    def _episode_processor_for_row(
+        row: Dict[str, Any],
+        episode_processor_map: Optional[Dict[str, str]],
+    ) -> Optional[str]:
+        if not episode_processor_map:
+            return None
+        task_source = row.get(TASK_SOURCE_KEY_NAME)
+        return episode_processor_map.get(task_source, episode_processor_map.get("_default"))
+
+    @classmethod
+    def _apply_episode_processor_routes(
+        cls,
+        examples: List[Dict],
+        global_config_dict: DictConfig,
+        episode_processor_map: Optional[Dict[str, str]],
+    ) -> None:
+        requested = {
+            processor
+            for row in examples
+            if (processor := cls._episode_processor_for_row(row, episode_processor_map)) is not None
+        }
+        available = {
+            str(name)
+            for name, block in global_config_dict.items()
+            if isinstance(block, DictConfig) and "episode_processors" in block
+        }
+        unknown = sorted(requested - available)
+        if unknown:
+            raise ValueError(f"Rows reference episode processors not present in the running config: {unknown}")
+
+        for row in examples:
+            processor_name = cls._episode_processor_for_row(row, episode_processor_map)
+            if processor_name is None:
+                continue
+            processor_types = global_config_dict[processor_name]["episode_processors"]
+            processor_type = next(iter(processor_types))
+            processor_config = processor_types[processor_type]
+            agent_ref = processor_config.get("agent_server")
+            resources_ref = processor_config.get("resources_server")
+            if not isinstance(agent_ref, DictConfig) or not isinstance(resources_ref, DictConfig):
+                raise ValueError(
+                    f"Episode processor {processor_name!r} does not implement the single-agent resources protocol"
+                )
+            if row.get(TASK_SOURCE_KEY_NAME) != resources_ref.get("name"):
+                raise ValueError(
+                    f"Row task_source={row.get(TASK_SOURCE_KEY_NAME)!r} does not match "
+                    f"episode processor {processor_name!r} resources server {resources_ref.get('name')!r}"
+                )
+            row[AGENT_REF_KEY_NAME] = {"name": str(agent_ref["name"])}
+
+    @staticmethod
     def _validate_agent_pairings(examples: List[Dict], global_config_dict: DictConfig) -> None:
         """Fail before dispatch when a row points to agent incompatible with the resources server it runs on."""
         if pairing_override_enabled(global_config_dict):
@@ -1898,6 +2035,7 @@ Aggregate metrics: {aggregate_metrics_fpath}{coverage}""")
         head_server_config: Optional[BaseServerConfig] = None,
         semaphore: Optional[Semaphore] = None,
         route_failures_to_sidecar: bool = False,
+        episode_processor_map: Optional[Dict[str, str]] = None,
     ) -> Iterator[Future]:  # pragma: no cover
         """
         Internal dispatch shared by ``run_examples`` and Gym's own collection paths.
@@ -1908,6 +2046,7 @@ Aggregate metrics: {aggregate_metrics_fpath}{coverage}""")
         that a direct caller of ``run_examples`` could also observe.
         """
         server_client = self.setup_server_client(head_server_config)
+        self._apply_episode_processor_routes(examples, server_client.global_config_dict, episode_processor_map)
         self.resolve_task_sources(examples, server_client.global_config_dict)
         self._validate_agent_names(examples, server_client.global_config_dict)
         self._validate_agent_pairings(examples, server_client.global_config_dict)
@@ -1918,9 +2057,20 @@ Aggregate metrics: {aggregate_metrics_fpath}{coverage}""")
                 started_at = time()
                 res = None
                 try:
-                    res = await server_client.post(server_name=row["agent_ref"]["name"], url_path="/run", json=row)
+                    episode_processor = self._episode_processor_for_row(row, episode_processor_map)
+                    if episode_processor is None:
+                        server_name = row["agent_ref"]["name"]
+                        request_body: Any = row
+                    else:
+                        server_name = episode_processor
+                        request_body = _single_agent_episode_request(row)
+                    res = await server_client.post(server_name=server_name, url_path="/run", json=request_body)
                     await raise_for_status(res)
                     result = await get_response_json(res)
+                    if episode_processor is not None:
+                        result = _project_single_agent_episode_response(
+                            SingleAgentEpisodeResponse.model_validate(result)
+                        )
                     # Independently-measured task wall-clock (ng_perf.total_latency_ms), not derived
                     # from summed model-call/tool latencies to account for additional overhead.
                     rollout_latency_ms = (time() - started_at) * 1000
@@ -1957,6 +2107,7 @@ Aggregate metrics: {aggregate_metrics_fpath}{coverage}""")
         head_server_config: Optional[BaseServerConfig] = None,
         semaphore: Optional[Semaphore] = None,
         route_failures_to_sidecar: bool = False,
+        episode_processor_map: Optional[Dict[str, str]] = None,
     ) -> Iterator[Future]:  # pragma: no cover
         """
         We provide this function as a lower level interface for running rollout collection.
@@ -1984,6 +2135,7 @@ Aggregate metrics: {aggregate_metrics_fpath}{coverage}""")
                 head_server_config=head_server_config,
                 semaphore=semaphore,
                 route_failures_to_sidecar=route_failures_to_sidecar,
+                episode_processor_map=episode_processor_map,
             ),
         )
 
