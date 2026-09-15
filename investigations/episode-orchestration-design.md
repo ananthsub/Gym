@@ -225,13 +225,13 @@ sequenceDiagram
 
 ### Self-contained processor
 
-A processor does not have to use a resources server or agent server. It may validate its concrete episode input, run an external framework, call model servers, produce its concrete episode result, and clean up its own state entirely inside `process()`.
+A processor does not have to use a resources server or agent server. It may validate its concrete task input, run an external framework, call model servers, produce its concrete episode result, and clean up its own state entirely inside `process()`.
 
 This path is appropriate when the external framework's state, participants, tools, and verifier form one protocol that does not map cleanly onto Gym's existing server boundaries. The processor deployment supplies that framework's dependency and isolation boundary. It can later delegate individual responsibilities to Gym servers without changing its concrete `/run` contract or the base identity contract.
 
-### Tasksets and materialized episode input
+### Tasksets and materialized task input
 
-A taskset is a declaration plus its prepared task rows. The declaration identifies the source, preparation logic, and input schema. Preparation produces the rows and revision. The declaration is consumed when an evaluation or training run loads tasks; it is not a server and is not sent with each episode.
+A taskset is a declaration plus its prepared task rows. The declaration identifies the source, preparation logic, and task-input contract. The taskset preparation implementation converts each source record into a `MaterializedTask` and produces the taskset revision. The declaration is consumed when an evaluation or training run loads tasks; it is not a server and is not sent with each episode.
 
 The [Gym Tasks RFC](https://rfc.frontier-evals.nvidia.com/m/frontier-eval-rfcs/r/gym-tasks) must provide each materialized task as:
 
@@ -241,21 +241,23 @@ TaskInputT = TypeVar("TaskInputT", bound=BaseModel)
 
 class MaterializedTask(BaseModel, Generic[TaskInputT]):
     task_id: TaskId
-    episode_input: TaskInputT
+    task_input: TaskInputT
 ```
 
-`TaskId` identifies the taskset, task, and taskset revision. `episode_input` is typed by the taskset. Gym does not require every taskset to contain one `responses_create_params`, one resources-server payload, or one agent payload.
+`TaskId` identifies the taskset, task, and taskset revision. `task_input` is the taskset preparation implementation's typed output. Its contract describes an episode protocol, not a concrete processor deployment or agent. A taskset producing `SingleAgentTaskInput` can therefore be routed to any processor that accepts that contract. A user-simulation taskset can produce a different input type without adding simulation fields to the base contract.
 
-The task layer owns source preparation, provenance, ID generation, collation, and validation of `episode_input`. Every field in `episode_input` comes from the materialized task or its source dataset. Processor, server, and run configuration remain separate and are not copied into `episode_input`. Run configuration selects tasksets and maps them to compatible episode processors. Rollout planning adds `EpisodeId`, repetition, grouping, and processor routing. It does not modify `episode_input`.
+The task layer owns source preparation, provenance, ID generation, collation, and validation of `task_input`. Every field in `task_input` comes from the prepared task or its source dataset. Processor, server, and run configuration remain separate and are not copied into `task_input`. Run configuration selects tasksets and maps them to compatible episode processors. Rollout planning adds `EpisodeId`, repetition, grouping, and processor routing. It does not modify `task_input`.
 
-Before planning any episode, Gym validates that every selected processor accepts the taskset's input schema. Fan-out requires every target to accept that same input unless the run explicitly configures an adapter. Compatibility translation converts current flat rows into typed materialized tasks until native tasksets are available.
+The taskset declaration and processor registration name the same task-input contract. Before planning any episode, Gym validates that every selected processor accepts the taskset's declared contract. The contract binds a stable identifier to its Pydantic task-input model; Python generic parameters alone do not provide routing metadata. Fan-out requires every target to accept that same contract unless the run explicitly configures an adapter. Compatibility translation converts current flat rows into typed materialized tasks until native tasksets are available.
+
+The contract identifier is declaration metadata, not a field copied into every task or episode request. The shared protocol definition owns the identifier and model. For example, a taskset preparer and a single-agent processor both register `nemo_gym.single_agent.v1` with `SingleAgentTaskInput`. The preparer validates source rows with that model. The rollout planner compares the registered identifiers when resolving the configured processor. The processor endpoint performs the final body validation with `SingleAgentEpisodeRequest`.
 
 ```mermaid
 flowchart LR
     subgraph Preparation
         Source["Source dataset"] --> Prepare["Prepare and validate"]
-        Declaration["Taskset declaration<br/>source and input schema"] --> Prepare
-        Prepare --> Tasks["Materialized tasks<br/>TaskId and typed episode_input"]
+        Declaration["Taskset declaration<br/>source and task-input contract"] --> Prepare
+        Prepare --> Tasks["Materialized tasks<br/>TaskId and typed task_input"]
     end
 
     subgraph Startup
@@ -270,9 +272,13 @@ flowchart LR
     end
 
     Tasks --> Loader
-    Loader --> Planner["Rollout planning<br/>EpisodeId and processor reference"]
+    Loader --> Match["Resolve processor<br/>validate task-input contract"]
+    RunConfig --> Match
     RunConfig --> Planner
-    Planner -->|POST /run| Processor
+    ProcessorCode --> Match
+    Match --> Planner["Rollout planning<br/>EpisodeId and processor reference"]
+    Planner --> Request["Episode request<br/>EpisodeId and MaterializedTask"]
+    Request -->|POST /run| Processor
     Processor -->|protocol-specific calls| Agent
     Processor -->|protocol-specific calls| Resources
     Processor -->|protocol-specific calls| Model
@@ -286,11 +292,11 @@ flowchart LR
     Result --> Training["Training projection"]
 ```
 
-For evaluation, Gym loads the selected tasksets and plans episodes over their materialized tasks. For training, the training data loader samples the same materialized tasks and sends planned episodes through the same processor `/run` contract. The taskset declaration is used to find and validate those tasks at startup; only `TaskId` and the concrete episode input travel per episode.
+For evaluation, Gym loads the selected tasksets and plans episodes over their materialized tasks. For training, the training data loader samples the same materialized tasks and sends planned episodes through the same processor `/run` contract. The taskset declaration is used to find and validate those tasks at startup; the complete `MaterializedTask` travels inside each episode request.
 
 Server configuration and run configuration have separate jobs. Server configuration starts processors and the agent, resources, model, and sandbox servers they reference. Run configuration selects tasksets and connects each taskset to a logical processor deployment. The rollout planner is where loaded task data and the selected processor first meet.
 
-Values that describe one task belong in `episode_input`. Processor routing, fan-out, repetition, model bindings, concurrency, and run-wide timeouts belong in run or server configuration. `EpisodeId`, session IDs, scoped tool access, sandbox access, and replica selection are generated at runtime.
+Values that describe one task belong in `task_input`. Processor routing, fan-out, repetition, model bindings, concurrency, and run-wide timeouts belong in run or server configuration. `EpisodeId`, session IDs, scoped tool access, sandbox access, and replica selection are generated at runtime.
 
 The episode foundation depends only on this materialized-task interface. Task preparation commands, manifests, provenance storage, and asset fetching remain in the Tasks RFC.
 
@@ -334,7 +340,7 @@ Current Gym constructs rollout correlation from `_ng_task_index`, `_ng_rollout_i
 
 ### Request and response
 
-Every processor derives its concrete request and response from minimal base contracts. The base models provide identity, typed episode input, and handled-failure transport. They do not prescribe a participant count, Responses API invocation, resources server, verifier, or trajectory shape.
+Every processor derives its concrete request and response from minimal base contracts. The base models provide episode identity, a typed materialized task, and handled-failure transport. They do not prescribe a participant count, Responses API invocation, resources server, verifier, or trajectory shape.
 
 ```python
 type JsonValue = (
@@ -348,16 +354,14 @@ type JsonValue = (
 )
 
 
-EpisodeInputT = TypeVar("EpisodeInputT", bound=BaseModel)
 EpisodeResultT = TypeVar("EpisodeResultT", bound=BaseModel)
 
 
-class BaseEpisodeRequest(BaseModel, Generic[EpisodeInputT]):
+class BaseEpisodeRequest(BaseModel, Generic[TaskInputT]):
     model_config = ConfigDict(extra="forbid")
 
     episode_id: EpisodeId
-    task_id: TaskId
-    episode_input: EpisodeInputT
+    task: MaterializedTask[TaskInputT]
 
 
 class EpisodeFailure(BaseModel):
@@ -382,7 +386,7 @@ class BaseEpisodeResponse(BaseModel, Generic[EpisodeResultT]):
         return self
 
 
-class SingleAgentEpisodeInput(BaseModel):
+class SingleAgentTaskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     responses_create_params: NeMoGymResponseCreateParamsNonStreaming
@@ -402,7 +406,7 @@ class SingleAgentEpisodeFailure(EpisodeFailure):
 
 
 class SingleAgentEpisodeRequest(
-    BaseEpisodeRequest[SingleAgentEpisodeInput],
+    BaseEpisodeRequest[SingleAgentTaskInput],
 ):
     pass
 
@@ -415,7 +419,9 @@ class SingleAgentEpisodeResponse(
 
 Validation enforces:
 
-- Every concrete request retains the base `episode_id`, `task_id`, and typed `episode_input`.
+- Every concrete request retains the base `episode_id` and typed `task`.
+- `task.task_id` identifies the immutable task content while `episode_id` identifies this execution attempt.
+- The concrete endpoint annotation recursively validates `task.task_input` as the processor's accepted task-input model. The serialized JSON carries no Python generic type marker.
 - Exactly one of `result` or `failure` is present.
 
 `EpisodeFailure` deliberately has no framework-wide failure-kind taxonomy. `terminal=false` means only that rollout collection may make another attempt under its configured attempt limit. It does not claim that replay is idempotent or free of duplicate external effects. Processors derive terminality from concrete failures: connection failures, timeouts, HTTP 408/425/429, and HTTP 5xx are non-terminal; schema errors, other HTTP 4xx responses, protocol incompatibilities, and cleanup failures are terminal. `message` is bounded diagnostic text, not a stable machine-readable category.
@@ -430,7 +436,7 @@ Validation enforces:
 NeMo-Sim demonstrates the extension:
 
 ```python
-class NeMoSimEpisodeInput(BaseModel):
+class NeMoSimTaskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scenario: NeMoSimScenario
@@ -461,7 +467,7 @@ class NeMoSimEpisodeResult(BaseModel):
 
 
 class NeMoSimEpisodeRequest(
-    BaseEpisodeRequest[NeMoSimEpisodeInput],
+    BaseEpisodeRequest[NeMoSimTaskInput],
 ):
     pass
 
@@ -472,7 +478,7 @@ class NeMoSimEpisodeResponse(
     pass
 ```
 
-The base episode contract does not interpret NeMo-Sim's fields or require one primary `NeMoGymResponse`. NeMo-Sim's `simulation_config` belongs to `NeMoSimEpisodeProcessorConfig`, not `NeMoSimEpisodeInput`. Migration moves that legacy request field into processor configuration. A compatibility adapter converts the remaining request and response fields until callers use the native contracts.
+The base episode contract does not interpret NeMo-Sim's fields or require one primary `NeMoGymResponse`. NeMo-Sim's `simulation_config` belongs to `NeMoSimEpisodeProcessorConfig`, not `NeMoSimTaskInput`. Migration moves that legacy request field into processor configuration. A compatibility adapter converts the remaining request and response fields until callers use the native contracts.
 
 ### Grouped episodes
 
@@ -492,20 +498,21 @@ Users do not add agent-session or processor-routing fields to datasets.
 
 The flow is:
 
-1. Run configuration selects one or more tasksets.
-2. The task layer loads materialized tasks containing `TaskId` and typed `episode_input`.
-3. Run configuration resolves each taskset to one or more `EpisodeProcessorRef` values.
-4. Fan-out, repetition, and grouping produce planned episodes. Rollout materialization assigns `EpisodeId` to each one.
-5. Compatibility translation converts a legacy flat row into the concrete input expected by its migrated processor.
-6. The runtime selects a replica for each logical processor and sends its concrete `BaseEpisodeRequest` subtype to `POST /run`.
-7. The processor validates the complete request with its registered concrete request model before performing network calls.
+1. Taskset preparation converts each source record into a `MaterializedTask[TaskInputT]`. It assigns `TaskId`, constructs the protocol-shaped `task_input`, and validates that input with the taskset's declared task-input contract.
+2. Run configuration selects one or more tasksets and resolves each one to one or more logical `EpisodeProcessorRef` values.
+3. Gym compares the taskset's declared task-input contract with the contract registered by every selected processor. An incompatible mapping fails before episode dispatch.
+4. Fan-out, repetition, and grouping produce planned episodes. The rollout planner assigns `EpisodeId` to each attempt.
+5. The rollout planner constructs the common request envelope from that `EpisodeId` and the unchanged `MaterializedTask`. The collector does not import or construct a processor-specific request model.
+6. The runtime selects a replica for the logical processor and sends the envelope to `POST /run`.
+7. The selected processor's FastAPI route binds the envelope to its concrete `BaseEpisodeRequest[TaskInputT]` subtype. Pydantic recursively validates `task.task_input` with the concrete model before the processor performs network calls.
 8. The processor runs its protocol and returns its concrete `BaseEpisodeResponse` subtype.
 9. The collector decodes and persists the registered concrete response type. Its processor-specific projector produces evaluation or training records.
-10. The compatibility layer restores existing request and result shapes where required.
 
-For `SingleAgentEpisodeProcessor`, the concrete input contains `responses_create_params` and `task_data`. The processor passes both to resources seed, passes only `responses_create_params` to the agent's `/v1/responses`, and returns verification plus optional agent observations.
+Compatibility translation performs step 1 for current flat rows until their tasksets emit native `MaterializedTask` values. The compatibility response projector restores existing result shapes where required.
 
-For NeMo-Sim, the concrete input contains the task's `scenario` and role-keyed `model_responses_create_params`. The selected processor supplies `simulation_config` from its configuration. The processor returns the simulation result and attributed invocation list. No single-agent fields are added to the base contract.
+For `SingleAgentEpisodeProcessor`, `SingleAgentTaskInput` contains `responses_create_params` and `task_data`. The processor passes both to resources seed, passes only `responses_create_params` to the agent's `/v1/responses`, and returns verification plus optional agent observations.
+
+For NeMo-Sim, `NeMoSimTaskInput` contains the task's `scenario` and role-keyed `model_responses_create_params`. The selected processor supplies `simulation_config` from its configuration. The processor returns the simulation result and attributed invocation list. No single-agent fields are added to the base contract.
 
 ### Processor selection and dispatch
 
@@ -530,7 +537,7 @@ fan_out:
 - A taskset named in both `processor_map` and `fan_out` is invalid.
 - Without a matching rule or default processor, routing fails before dispatch.
 
-Every processor deployment registers its concrete request and response models. Every resolved target must accept the taskset's episode-input schema. Run materialization records the selected `EpisodeProcessorRef` and response-schema identity alongside the concrete request so resume, decoding, logging, and dispatch use the same decision. This routing metadata is not inserted into the request or `episode_input`.
+Every processor deployment registers its concrete request and response models and its accepted task-input contract. Every resolved target must accept the taskset's declared contract. Run materialization records the selected `EpisodeProcessorRef` and response-schema identity alongside the request so resume, decoding, logging, and dispatch use the same decision. This routing metadata is not inserted into the request or `task_input`.
 
 Replica selection happens after processor selection. Local Gym may have one replica. A sharded NeMo RL run discovers which processor deployments each Gym shard hosts, builds a processor-to-shard map, and distributes complete rollout groups across that shard's replicas. The selected replica is transport state and does not appear in the episode request.
 
@@ -874,7 +881,7 @@ class NeMoSimEpisodeProcessorConfig(BaseEpisodeProcessorConfig):
     simulation_config: NeMoSimSimulationConfig
 ```
 
-Each concrete processor declares the servers and protocol configuration it uses. `episode_input` cannot select executable code, credentials, another processor, a sandbox provider, or processor behavior such as NeMo-Sim simulation limits.
+Each concrete processor declares the servers and protocol configuration it uses. `task_input` cannot select executable code, credentials, another processor, a sandbox provider, or processor behavior such as NeMo-Sim simulation limits.
 
 For `SingleAgentEpisodeProcessor`, agent configuration owns model selection and behavior-specific options, while resources-server configuration owns verification options. A self-contained processor owns its external framework's configuration.
 
@@ -980,7 +987,7 @@ class BaseEpisodeProcessor(
         return self.response_model.model_validate(
             {
                 "episode_id": request.episode_id,
-                "task_id": request.task_id,
+                "task_id": request.task.task_id,
                 "failure": failure.model_dump(),
             }
         )
@@ -992,7 +999,7 @@ class BaseEpisodeProcessor(
     ) -> None:
         if response.episode_id != request.episode_id:
             raise ValueError("response episode_id does not match request")
-        if response.task_id != request.task_id:
+        if response.task_id != request.task.task_id:
             raise ValueError("response task_id does not match request")
 
 
@@ -1044,12 +1051,12 @@ async def process(
     request: SingleAgentEpisodeRequest,
     context: EpisodeContext,
 ) -> SingleAgentEpisodeResponse:
-    episode_input = request.episode_input
+    task_input = request.task.task_input
     seed = await context.resources_server.seed(
         ResourcesSeedSessionRequest(
             episode_id=request.episode_id,
-            task_id=request.task_id,
-            task_data=episode_input.task_data,
+            task_id=request.task.task_id,
+            task_data=task_input.task_data,
         )
     )
 
@@ -1065,7 +1072,7 @@ async def process(
         try:
             agent_response = await self.call_agent(
                 session,
-                episode_input.responses_create_params,
+                task_input.responses_create_params,
                 capture_key=request.episode_id.capture_key,
             )
         finally:
@@ -1081,7 +1088,7 @@ async def process(
                 episode_id=request.episode_id,
                 verification_input=ResponsesEpisodeVerificationInput(
                     responses_create_params=(
-                        episode_input.responses_create_params
+                        task_input.responses_create_params
                     ),
                     response=agent_response,
                 ),
@@ -1090,7 +1097,7 @@ async def process(
 
         return SingleAgentEpisodeResponse(
             episode_id=request.episode_id,
-            task_id=request.task_id,
+            task_id=request.task.task_id,
             result=SingleAgentEpisodeResult(
                 verification=verification,
                 agent_observations=close_response.agent_observations,
@@ -1337,7 +1344,7 @@ tau2:
         jsonl_fpath: episode_processors/tau2/data/example.jsonl
 ```
 
-The processor validates its concrete Tau2 episode input, runs the complete simulation, and returns its concrete result. A later Tau2 integration may delegate participants or state to Gym servers without changing the base episode contracts.
+The processor validates its concrete Tau2 task input, runs the complete simulation, and returns its concrete result. A later Tau2 integration may delegate participants or state to Gym servers without changing the base episode contracts.
 
 ## Processor-defined results and verification
 
