@@ -22,6 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
+from nemo_gym.episode import EpisodeId, EpisodeResourcesSeedRequest, ResourcesSessionCloseRequest, TaskId
 from nemo_gym.server_utils import SESSION_ID_KEY, ServerClient
 from resources_servers.swebench_pro.app import (
     SWEBenchProInstanceRequest,
@@ -218,6 +219,50 @@ async def test_seed_session_can_skip_anti_cheat_setup(monkeypatch: MonkeyPatch) 
     sandbox.upload.assert_not_awaited()
     # anti-cheat is skipped, but the container is still normalized and snapshotted
     assert sandbox.exec.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_episode_seed_returns_direct_access_and_resources_close_owns_stop(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    server = make_server(golden=False, apply_anti_cheating=False)
+    sandbox = SimpleNamespace(
+        pty=fake_pty(),
+        exec=AsyncMock(),
+        serialize=AsyncMock(return_value={"sandbox_id": "sandbox-id"}),
+        stop=AsyncMock(),
+    )
+    monkeypatch.setattr(server, "_create_sandbox", AsyncMock(return_value=sandbox))
+    monkeypatch.setattr(
+        "resources_servers.swebench_pro.app.resolve_provider_config",
+        lambda name, config: {"opensandbox": {}},
+    )
+    monkeypatch.setattr("resources_servers.swebench_pro.app.get_global_config_dict", lambda: {})
+    request = SimpleNamespace(session={SESSION_ID_KEY: "session"})
+    task_data = request_body()
+    task_data.pop("responses_create_params")
+    task_data.pop("response")
+
+    response = await server.seed_session(
+        request,
+        EpisodeResourcesSeedRequest(
+            episode_id=EpisodeId(rollout_id="rollout"),
+            task_id=TaskId(task_source="swebench_pro", task_id="instance_example"),
+            task_data=task_data,
+        ),
+    )
+
+    assert response.resources_session_id == "session"
+    assert response.sandbox_access.connection.sandbox_provider == "opensandbox"
+    assert response.sandbox_access.connection.descriptor == {"sandbox_id": "sandbox-id"}
+    sandbox.pty.create.assert_not_awaited()
+    sandbox.stop.assert_not_awaited()
+
+    await server.close_session(
+        request,
+        ResourcesSessionCloseRequest(resources_session_id="session"),
+    )
+    sandbox.stop.assert_awaited_once()
 
 
 @pytest.mark.asyncio

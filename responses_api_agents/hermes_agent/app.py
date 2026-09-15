@@ -26,12 +26,16 @@ from typing import Any, Callable, Optional
 from uuid import uuid4
 
 import model_tools  # noqa: F401  # fail-fast if hermes-agent isn't installed  # pyright: ignore[reportMissingImports]
-from fastapi import Request
-from pydantic import ConfigDict, Field
+from fastapi import Header, Request
+from pydantic import ConfigDict, Field, model_validator
+from typing_extensions import Self
 
 from nemo_gym.base_resources_server import BaseRunRequest, BaseVerifyResponse
 from nemo_gym.base_responses_api_agent import BaseResponsesAPIAgentConfig, Body, SimpleResponsesAPIAgent
 from nemo_gym.config_types import ModelServerRef, ResourcesServerRef
+from nemo_gym.episode import AgentSessionCreateRequest, DirectSandboxConnection
+from nemo_gym.episode_sessions import AgentSession, AgentSessionServerMixin
+from nemo_gym.global_config import get_global_config_dict
 from nemo_gym.openai_utils import (
     NeMoGymEasyInputMessage,
     NeMoGymFunctionCallOutput,
@@ -52,8 +56,14 @@ from nemo_gym.rollout_observability import (
     AgentObservationBundle,
     ObservationGap,
 )
+from nemo_gym.sandbox.config import resolve_provider_config
 from nemo_gym.server_utils import get_response_json, raise_for_status
 from responses_api_agents.hermes_agent.observability import HermesAgentObserver
+from responses_api_agents.hermes_agent.sandbox_terminal import (
+    bind_sandbox,
+    register_sandbox_terminal,
+    unbind_sandbox,
+)
 
 
 def _trajectory_to_output_items(messages, n_input):
@@ -178,6 +188,7 @@ class HermesAgentConfig(BaseResponsesAPIAgentConfig):
     disabled_toolsets: Optional[list[str]] = None
     temperature: float | None = None
     terminal_backend: str = "local"
+    borrowed_sandbox_provider: str | None = None
     terminal_timeout: int = 180
     system_prompt: Optional[str] = None
     compression_enabled: bool = True
@@ -186,6 +197,12 @@ class HermesAgentConfig(BaseResponsesAPIAgentConfig):
     api_key: Optional[str] = None
     delegation_max_iterations: int = 50
     checkpoints_enabled: bool = False
+
+    @model_validator(mode="after")
+    def validate_borrowed_sandbox_tools(self) -> Self:
+        if self.borrowed_sandbox_provider is not None and self.enabled_toolsets != ["terminal"]:
+            raise ValueError("borrowed sandbox mode requires enabled_toolsets: [terminal]")
+        return self
 
 
 class HermesAgentRunRequest(BaseRunRequest):
@@ -202,13 +219,14 @@ class HermesAgentVerifyResponse(BaseVerifyResponse):
     )
 
 
-class HermesAgent(SimpleResponsesAPIAgent):
+class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
     config: HermesAgentConfig
     sem: Semaphore = None
     # Set of agents currently running run_conversation, plus a flag tracking whether the single
     # shared SIGTERM dispatcher has been installed on the event loop. See _ensure_sigterm_handler.
     active_agents: set = None
     interrupted_agents: set = None
+    session_active_agents: dict[str, set] = None
     sigterm_installed: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -267,6 +285,10 @@ class HermesAgent(SimpleResponsesAPIAgent):
         self.sem = Semaphore(self.config.concurrency)
         self.active_agents = set()
         self.interrupted_agents = set()
+        self.session_active_agents = {}
+        self.initialize_agent_sessions()
+        if self.config.borrowed_sandbox_provider is not None:
+            register_sandbox_terminal()
         # hermes-agent reads these from env (cli.py / batch_runner.py); env vars are
         # process-global, so multiple HermesAgent instances in one process share them
         os.environ["TERMINAL_ENV"] = self.config.terminal_backend
@@ -279,6 +301,64 @@ class HermesAgent(SimpleResponsesAPIAgent):
             _f.write(self._build_config())
         os.environ["HERMES_HOME"] = hermes_home
 
+    def setup_webserver(self):
+        app = super().setup_webserver()
+        self.setup_agent_session_routes(app)
+        return app
+
+    async def open_agent_session(
+        self,
+        agent_session_id: str,
+        body: AgentSessionCreateRequest,
+    ) -> dict[str, Any]:
+        if self.config.borrowed_sandbox_provider is None:
+            raise ValueError("Hermes borrowed sandbox sessions are not enabled")
+        if body.sandbox_access is None:
+            raise ValueError("Hermes requires sandbox_access for an episode session")
+        connection = body.sandbox_access.connection
+        if not isinstance(connection, DirectSandboxConnection):
+            raise ValueError("Hermes currently supports only direct sandbox connections")
+        provider_config = resolve_provider_config(
+            self.config.borrowed_sandbox_provider,
+            get_global_config_dict(),
+        )
+        provider_name = next(iter(provider_config))
+        if connection.sandbox_provider != provider_name:
+            raise ValueError(
+                f"Sandbox access requires {connection.sandbox_provider!r}, "
+                f"but Hermes is configured with {provider_name!r}"
+            )
+        await bind_sandbox(
+            agent_session_id,
+            descriptor=connection.descriptor,
+            provider_config=provider_config,
+            workdir=body.sandbox_access.workdir,
+        )
+        self.session_active_agents[agent_session_id] = set()
+        return {"observations": None}
+
+    async def teardown_agent_session(
+        self,
+        agent_session_id: str,
+        session: AgentSession,
+    ) -> AgentObservationBundle:
+        active = self.session_active_agents.get(agent_session_id, set())
+        for agent in list(active):
+            self.interrupted_agents.add(id(agent))
+            if hasattr(agent, "interrupt"):
+                agent.interrupt("session close")
+        if active:
+            raise RuntimeError("Hermes session still has active work")
+        await unbind_sandbox(agent_session_id)
+        self.session_active_agents.pop(agent_session_id, None)
+        observations = session.state.get("observations")
+        if observations is None:
+            return AgentObservationBundle(
+                source="hermes",
+                gaps=[ObservationGap(code="observation_capture_failed")],
+            )
+        return observations
+
     def _model_name(self) -> str:
         return self.config.model or str(self.config.model_server.name)
 
@@ -288,6 +368,7 @@ class HermesAgent(SimpleResponsesAPIAgent):
         *,
         rollout_id: Optional[str] = None,
         observation_collector: Optional[Callable[[AgentObservationBundle], None]] = None,
+        agent_session_id: str | None = None,
     ) -> NeMoGymResponse:
         from run_agent import AIAgent  # from hermes-agent on path  # pyright: ignore[reportMissingImports]
 
@@ -343,6 +424,8 @@ class HermesAgent(SimpleResponsesAPIAgent):
         self._ensure_sigterm_handler()
         agent_id = id(agent)
         self.active_agents.add(agent)
+        if agent_session_id is not None:
+            self.session_active_agents[agent_session_id].add(agent)
 
         result = None
         agent_error: Optional[BaseException] = None
@@ -353,12 +436,15 @@ class HermesAgent(SimpleResponsesAPIAgent):
                 user_message,
                 system_message,
                 history,
+                task_id=agent_session_id,
             )
         except BaseException as exc:
             agent_error = exc
             raise
         finally:
             self.active_agents.discard(agent)
+            if agent_session_id is not None:
+                self.session_active_agents.get(agent_session_id, set()).discard(agent)
             interrupted_by_dispatch = agent_id in self.interrupted_agents
             self.interrupted_agents.discard(agent_id)
             if observation_collector is not None:
@@ -480,9 +566,21 @@ class HermesAgent(SimpleResponsesAPIAgent):
         self,
         request: Request,
         body: NeMoGymResponseCreateParamsNonStreaming = Body(),
+        agent_session_id: str | None = Header(default=None, alias="X-NeMo-Gym-Agent-Session-Id"),
     ) -> NeMoGymResponse:
         path_params = getattr(request, "path_params", None)
         rollout_id = path_params.get("rollout_id") if isinstance(path_params, Mapping) else None
+        if agent_session_id is not None:
+            session = self.require_agent_session(agent_session_id)
+            if not isinstance(rollout_id, str):
+                raise ValueError("Agent sessions require an attempt-qualified rollout path")
+            episode = await self._create_episode(
+                body,
+                rollout_id=rollout_id,
+                agent_session_id=agent_session_id,
+            )
+            session.state["observations"] = episode.observations
+            return episode.response
         if not isinstance(rollout_id, str):
             return await self._create_response(body)
         episode = await self._create_episode(body, rollout_id=rollout_id)
@@ -495,6 +593,7 @@ class HermesAgent(SimpleResponsesAPIAgent):
         body: NeMoGymResponseCreateParamsNonStreaming,
         *,
         rollout_id: str,
+        agent_session_id: str | None = None,
     ) -> AgentEpisode:
         observations: Optional[AgentObservationBundle] = None
 
@@ -506,26 +605,28 @@ class HermesAgent(SimpleResponsesAPIAgent):
             body,
             rollout_id=rollout_id,
             observation_collector=collect,
+            agent_session_id=agent_session_id,
         )
         if observations is None:
             observations = AgentObservationBundle(
                 source="hermes",
                 gaps=[ObservationGap(code="observation_capture_failed")],
             )
-        observations.gaps.append(
-            ObservationGap(
-                code=(
-                    "no_sandbox_runtime"
-                    if self.config.terminal_backend == "local"
-                    else "sandbox_observation_unavailable"
-                ),
-                detail=(
-                    None
-                    if self.config.terminal_backend == "local"
-                    else f"terminal_backend={self.config.terminal_backend}"
-                ),
+        if agent_session_id is None:
+            observations.gaps.append(
+                ObservationGap(
+                    code=(
+                        "no_sandbox_runtime"
+                        if self.config.terminal_backend == "local"
+                        else "sandbox_observation_unavailable"
+                    ),
+                    detail=(
+                        None
+                        if self.config.terminal_backend == "local"
+                        else f"terminal_backend={self.config.terminal_backend}"
+                    ),
+                )
             )
-        )
         return AgentEpisode(response=response, observations=observations)
 
     async def run(self, request: Request, body: HermesAgentRunRequest) -> HermesAgentVerifyResponse:
