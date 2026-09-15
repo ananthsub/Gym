@@ -57,6 +57,11 @@ class CleanupHandle:
     entry: _CleanupEntry
 
     async def close(self) -> None:
+        """Run this idempotent callback once.
+
+        The episode timeout bounds calls made during the protocol. The context's
+        cleanup timeout bounds callbacks left for final unwinding.
+        """
         if not self.entry.active:
             return
         await self.entry.callback()
@@ -65,7 +70,17 @@ class CleanupHandle:
 
 @dataclass
 class EpisodeContext:
-    """Hold private participant state and bounded cleanup."""
+    """Hold processor-local cleanup callbacks for one episode.
+
+    Callbacks:
+    - are process-local Python objects, although they may issue remote close requests;
+    - run sequentially in LIFO order within one total cleanup timeout;
+    - must be idempotent because a timed-out remote request may have succeeded;
+    - are lost on process or host failure, so remote owners need expiry or reaping.
+
+    Callback failures are logged and do not stop later callbacks. Cleanup has no
+    durable retry after this context is discarded.
+    """
 
     request: BaseEpisodeRequest[Any]
     server_client: ServerClient
@@ -143,9 +158,8 @@ class BaseEpisodeProcessor(SimpleServer, Generic[EpisodeRequestT, EpisodeRespons
                 return self.failure_response(
                     request,
                     EpisodeFailure(
-                        kind="unavailable",
                         message="Episode admission timed out",
-                        retryable=True,
+                        terminal=False,
                     ),
                 )
             acquired = True
@@ -165,9 +179,8 @@ class BaseEpisodeProcessor(SimpleServer, Generic[EpisodeRequestT, EpisodeRespons
                 response = self.failure_response(
                     request,
                     EpisodeFailure(
-                        kind="timeout",
                         message="Episode timed out",
-                        retryable=True,
+                        terminal=False,
                     ),
                 )
             except HandledEpisodeError as error:
@@ -177,9 +190,8 @@ class BaseEpisodeProcessor(SimpleServer, Generic[EpisodeRequestT, EpisodeRespons
                 response = self.failure_response(
                     request,
                     EpisodeFailure(
-                        kind="processor",
                         message="Episode request was cancelled",
-                        retryable=True,
+                        terminal=False,
                     ),
                 )
         finally:

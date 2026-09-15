@@ -21,19 +21,20 @@ import sys
 import tempfile
 from asyncio import Semaphore
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from time import time
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
 import model_tools  # noqa: F401  # fail-fast if hermes-agent isn't installed  # pyright: ignore[reportMissingImports]
-from fastapi import Header, Request
+from fastapi import Request
 from pydantic import ConfigDict, Field
 
 from nemo_gym.base_resources_server import BaseRunRequest, BaseVerifyResponse
 from nemo_gym.base_responses_api_agent import BaseResponsesAPIAgentConfig, Body, SimpleResponsesAPIAgent
 from nemo_gym.config_types import ModelServerRef, ResourcesServerRef
-from nemo_gym.episode import AgentSessionCreateRequest, DirectSandboxConnection
-from nemo_gym.episode_sessions import AgentSession, AgentSessionServerMixin
+from nemo_gym.episode import AgentSeedSessionRequest, DirectSandboxConnection
+from nemo_gym.episode_sessions import AgentCloseSessionResult, AgentSession
 from nemo_gym.global_config import get_global_config_dict
 from nemo_gym.openai_utils import (
     NeMoGymEasyInputMessage,
@@ -128,6 +129,12 @@ LOG = logging.getLogger(__name__)
 _INTERNAL_OBSERVATIONS_KEY = "_ng_agent_observations"
 
 
+@dataclass
+class HermesAgentSessionState:
+    active_agents: set[Any] = field(default_factory=set)
+    observations: AgentObservationBundle | None = None
+
+
 # if ray close sys.stderr mid-request, write to the original fd
 class _SafeStderrHandler(logging.Handler):
     def emit(self, record):
@@ -212,14 +219,14 @@ class HermesAgentVerifyResponse(BaseVerifyResponse):
     )
 
 
-class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
+class HermesAgent(SimpleResponsesAPIAgent):
     config: HermesAgentConfig
+    supports_agent_sessions = True
     sem: Semaphore = None
     # Set of agents currently running run_conversation, plus a flag tracking whether the single
     # shared SIGTERM dispatcher has been installed on the event loop. See _ensure_sigterm_handler.
     active_agents: set = None
     interrupted_agents: set = None
-    session_active_agents: dict[str, set] = None
     sigterm_installed: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -275,11 +282,10 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         return yaml.dump(config, default_flow_style=False)
 
     def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
         self.sem = Semaphore(self.config.concurrency)
         self.active_agents = set()
         self.interrupted_agents = set()
-        self.session_active_agents = {}
-        self.initialize_agent_sessions()
         if self.config.enabled_toolsets == ["terminal"]:
             register_sandbox_terminal()
         # hermes-agent reads these from env (cli.py / batch_runner.py); env vars are
@@ -294,16 +300,11 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
             _f.write(self._build_config())
         os.environ["HERMES_HOME"] = hermes_home
 
-    def setup_webserver(self):
-        app = super().setup_webserver()
-        self.setup_agent_session_routes(app)
-        return app
-
-    async def open_agent_session(
+    async def initialize_agent_session_state(
         self,
         agent_session_id: str,
-        body: AgentSessionCreateRequest,
-    ) -> dict[str, Any]:
+        body: AgentSeedSessionRequest,
+    ) -> HermesAgentSessionState:
         if body.sandbox_access is None:
             raise ValueError("Hermes requires sandbox_access for an episode session")
         if self.config.enabled_toolsets != ["terminal"]:
@@ -321,15 +322,16 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
             provider_config=provider_config,
             workdir=body.sandbox_access.workdir,
         )
-        self.session_active_agents[agent_session_id] = set()
-        return {"observations": None}
+        return HermesAgentSessionState()
 
-    async def teardown_agent_session(
+    async def close_agent_session_state(
         self,
         agent_session_id: str,
         session: AgentSession,
-    ) -> AgentObservationBundle:
-        active = self.session_active_agents.get(agent_session_id, set())
+    ) -> AgentCloseSessionResult:
+        if not isinstance(session.state, HermesAgentSessionState):
+            raise TypeError("Unexpected Hermes agent session state")
+        active = session.state.active_agents
         for agent in list(active):
             self.interrupted_agents.add(id(agent))
             if hasattr(agent, "interrupt"):
@@ -339,14 +341,12 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
                 while active:
                     await asyncio.sleep(0.05)
         await unbind_sandbox(agent_session_id)
-        self.session_active_agents.pop(agent_session_id, None)
-        observations = session.state.get("observations")
+        observations = session.state.observations
         if observations is None:
-            return AgentObservationBundle(
-                source="hermes",
-                gaps=[ObservationGap(code="observation_capture_failed")],
+            observations = AgentObservationBundle(
+                source="hermes", gaps=[ObservationGap(code="observation_capture_failed")]
             )
-        return observations
+        return AgentCloseSessionResult(agent_observations=observations)
 
     def _model_name(self) -> str:
         return self.config.model or str(self.config.model_server.name)
@@ -414,7 +414,10 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         agent_id = id(agent)
         self.active_agents.add(agent)
         if agent_session_id is not None:
-            self.session_active_agents[agent_session_id].add(agent)
+            session = self.require_agent_session(agent_session_id)
+            if not isinstance(session.state, HermesAgentSessionState):
+                raise TypeError("Unexpected Hermes agent session state")
+            session.state.active_agents.add(agent)
 
         result = None
         agent_error: Optional[BaseException] = None
@@ -433,7 +436,9 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         finally:
             self.active_agents.discard(agent)
             if agent_session_id is not None:
-                self.session_active_agents.get(agent_session_id, set()).discard(agent)
+                session = self.require_agent_session(agent_session_id)
+                if isinstance(session.state, HermesAgentSessionState):
+                    session.state.active_agents.discard(agent)
             interrupted_by_dispatch = agent_id in self.interrupted_agents
             self.interrupted_agents.discard(agent_id)
             if observation_collector is not None:
@@ -558,8 +563,8 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         self,
         request: Request,
         body: NeMoGymResponseCreateParamsNonStreaming = Body(),
-        agent_session_id: str | None = Header(default=None, alias="X-NeMo-Gym-Agent-Session-Id"),
     ) -> NeMoGymResponse:
+        agent_session_id = self.agent_session_id_from_request(request)
         path_params = getattr(request, "path_params", None)
         rollout_id = path_params.get("rollout_id") if isinstance(path_params, Mapping) else None
         if isinstance(agent_session_id, str):
@@ -571,7 +576,9 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
                 rollout_id=rollout_id,
                 agent_session_id=agent_session_id,
             )
-            session.state["observations"] = episode.observations
+            if not isinstance(session.state, HermesAgentSessionState):
+                raise TypeError("Unexpected Hermes agent session state")
+            session.state.observations = episode.observations
             return episode.response
         if not isinstance(rollout_id, str):
             return await self._create_response(body)

@@ -22,7 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
-from nemo_gym.episode import EpisodeId, EpisodeResourcesSeedRequest, ResourcesSessionCloseRequest, TaskId
+from nemo_gym.episode import EpisodeId, ResourcesCloseSessionRequest, ResourcesSeedSessionRequest, TaskId
 from nemo_gym.server_utils import SESSION_ID_KEY, ServerClient
 from resources_servers.swebench_pro.app import (
     SWEBenchProInstanceRequest,
@@ -245,7 +245,7 @@ async def test_episode_seed_returns_direct_access_and_resources_close_owns_stop(
 
     response = await server.seed_session(
         request,
-        EpisodeResourcesSeedRequest(
+        ResourcesSeedSessionRequest(
             episode_id=EpisodeId(rollout_id="rollout"),
             task_id=TaskId(task_source="swebench_pro", task_id="instance_example"),
             task_data=task_data,
@@ -260,7 +260,7 @@ async def test_episode_seed_returns_direct_access_and_resources_close_owns_stop(
 
     await server.close_session(
         request,
-        ResourcesSessionCloseRequest(resources_session_id="session"),
+        ResourcesCloseSessionRequest(resources_session_id="session"),
     )
     sandbox.stop.assert_awaited_once()
 
@@ -287,7 +287,7 @@ async def test_episode_seed_rolls_back_sandbox_when_handoff_fails(monkeypatch: M
     with pytest.raises(RuntimeError, match="cannot serialize"):
         await server.seed_session(
             request,
-            EpisodeResourcesSeedRequest(
+            ResourcesSeedSessionRequest(
                 episode_id=EpisodeId(rollout_id="rollout"),
                 task_id=TaskId(task_source="swebench_pro", task_id="instance_example"),
                 task_data=task_data,

@@ -38,10 +38,10 @@ from nemo_gym.base_resources_server import (
 )
 from nemo_gym.episode import (
     DirectSandboxConnection,
-    EpisodeResourcesSeedRequest,
-    EpisodeResourcesSeedResponse,
-    ResourcesSessionCloseRequest,
-    ResourcesSessionCloseResponse,
+    ResourcesCloseSessionRequest,
+    ResourcesCloseSessionResponse,
+    ResourcesSeedSessionRequest,
+    ResourcesSeedSessionResponse,
     ResponsesEpisodeResourcesVerifyRequest,
     SandboxAccess,
 )
@@ -200,6 +200,8 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
 
     def model_post_init(self, context: Any, /) -> None:
         super().model_post_init(context)
+        if self.config.num_workers not in (None, 1):
+            raise ValueError("SWE-bench Pro process-local sessions require num_workers=1")
         self._session_id_to_sandbox: dict[str, AsyncSandbox] = {}
         # The agent's terminal for the session. Leading underscore: pydantic needs it.
         self._session_id_to_pty: dict[str, SandboxPtySession] = {}
@@ -302,8 +304,8 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
     async def seed_session(
         self,
         request: Request,
-        body: SWEBenchProSeedSessionRequest | EpisodeResourcesSeedRequest,
-    ) -> SWEBenchProSeedSessionResponse | EpisodeResourcesSeedResponse:
+        body: SWEBenchProSeedSessionRequest | ResourcesSeedSessionRequest,
+    ) -> SWEBenchProSeedSessionResponse | ResourcesSeedSessionResponse:
         session_id = request.session[SESSION_ID_KEY]
         self._session_id_to_pristine_untracked.pop(session_id, None)
         self._session_id_to_task.pop(session_id, None)
@@ -315,7 +317,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
             except Exception:
                 print("Failed to stop previous SWE-bench Pro sandbox", format_exc(), file=sys.stderr)
 
-        native_request = isinstance(body, EpisodeResourcesSeedRequest)
+        native_request = isinstance(body, ResourcesSeedSessionRequest)
         provider_name = None
         if native_request:
             provider_config = resolve_provider_config(self.config.sandbox_provider, get_global_config_dict())
@@ -357,7 +359,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
         if pty_session is not None:
             self._session_id_to_pty[session_id] = pty_session
         if native_request:
-            return EpisodeResourcesSeedResponse(
+            return ResourcesSeedSessionResponse(
                 resources_session_id=session_id,
                 sandbox_access=SandboxAccess(
                     connection=DirectSandboxConnection(
@@ -527,8 +529,8 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
     async def close_session(
         self,
         request: Request,
-        body: ResourcesSessionCloseRequest,
-    ) -> ResourcesSessionCloseResponse:
+        body: ResourcesCloseSessionRequest,
+    ) -> ResourcesCloseSessionResponse:
         session_id = request.session[SESSION_ID_KEY]
         if body.resources_session_id != session_id:
             raise ValueError("resources_session_id does not match the session cookie")
@@ -538,7 +540,7 @@ class SWEBenchProResourcesServer(SimpleResourcesServer):
         sandbox = self._session_id_to_sandbox.pop(session_id, None)
         if sandbox is not None:
             await sandbox.stop()
-        return ResourcesSessionCloseResponse(resources_session_id=session_id)
+        return ResourcesCloseSessionResponse(resources_session_id=session_id)
 
 
 if __name__ == "__main__":

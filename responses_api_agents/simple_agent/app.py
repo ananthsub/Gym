@@ -14,10 +14,11 @@
 # limitations under the License.
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from time import perf_counter, time
 from typing import Any, List
 
-from fastapi import Header, Request, Response
+from fastapi import Request, Response
 from pydantic import ConfigDict, ValidationError
 
 from nemo_gym.base_resources_server import (
@@ -33,8 +34,8 @@ from nemo_gym.base_responses_api_agent import (
     SimpleResponsesAPIAgent,
 )
 from nemo_gym.config_types import ModelServerRef, ResourcesServerRef
-from nemo_gym.episode import AgentSessionCreateRequest, DirectResourcesToolAccess
-from nemo_gym.episode_sessions import AgentSession, AgentSessionServerMixin
+from nemo_gym.episode import AgentSeedSessionRequest, DirectResourcesToolAccess
+from nemo_gym.episode_sessions import AgentCloseSessionResult, AgentSession
 from nemo_gym.openai_utils import (
     NeMoGymEasyInputMessage,
     NeMoGymFunctionCallOutput,
@@ -46,6 +47,7 @@ from nemo_gym.openai_utils import (
 )
 from nemo_gym.rollout_observability import (
     AgentInvocation,
+    AgentObservationBundle,
     ModelCallRef,
     ObservationGap,
     TrajectoryRecord,
@@ -56,6 +58,12 @@ from nemo_gym.server_utils import get_response_json, raise_for_status
 
 
 _INTERNAL_TRAJECTORY_KEY = "_ng_trajectory"
+
+
+@dataclass
+class SimpleAgentSessionState:
+    resources_cookies: dict[str, Any]
+    observations: AgentObservationBundle | None = None
 
 
 class SimpleAgentConfig(BaseResponsesAPIAgentConfig):
@@ -76,23 +84,15 @@ class SimpleAgentVerifyResponse(BaseVerifyResponse):
     model_config = ConfigDict(extra="allow")
 
 
-class SimpleAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
+class SimpleAgent(SimpleResponsesAPIAgent):
     config: SimpleAgentConfig
+    supports_agent_sessions = True
 
-    def model_post_init(self, context: Any, /) -> None:
-        super().model_post_init(context)
-        self.initialize_agent_sessions()
-
-    def setup_webserver(self):
-        app = super().setup_webserver()
-        self.setup_agent_session_routes(app)
-        return app
-
-    async def open_agent_session(
+    async def initialize_agent_session_state(
         self,
         agent_session_id: str,
-        body: AgentSessionCreateRequest,
-    ) -> dict[str, Any]:
+        body: AgentSeedSessionRequest,
+    ) -> SimpleAgentSessionState:
         if body.sandbox_access is not None:
             raise ValueError("simple_agent does not run in or control a sandbox")
         if not isinstance(body.resources_access, DirectResourcesToolAccess):
@@ -100,21 +100,20 @@ class SimpleAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         expected_base_url = self.server_client._resolve_base_url(self.config.resources_server.name)
         if body.resources_access.base_url.rstrip("/") != expected_base_url.rstrip("/"):
             raise ValueError("resources access does not match simple_agent's configured resources server")
-        return {
-            "resources_cookies": dict(body.resources_access.cookies),
-            "observations": None,
-        }
+        return SimpleAgentSessionState(resources_cookies=dict(body.resources_access.cookies))
 
-    async def teardown_agent_session(
+    async def close_agent_session_state(
         self,
         agent_session_id: str,
         session: AgentSession,
-    ):
-        return session.state["observations"]
-
-    def resources_cookies_for_session(self, session: AgentSession) -> dict[str, str]:
-        cookies = session.state["resources_cookies"]
-        return {str(name): str(getattr(value, "value", value)) for name, value in cookies.items()}
+    ) -> AgentCloseSessionResult:
+        if not isinstance(session.state, SimpleAgentSessionState):
+            raise TypeError("Unexpected simple_agent session state")
+        cookies = session.state.resources_cookies
+        return AgentCloseSessionResult(
+            agent_observations=session.state.observations,
+            resources_cookies={str(name): str(getattr(value, "value", value)) for name, value in cookies.items()},
+        )
 
     async def _create_episode(
         self,
@@ -293,8 +292,8 @@ class SimpleAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         request: Request,
         response: Response,
         body: NeMoGymResponseCreateParamsNonStreaming = Body(),
-        agent_session_id: str | None = Header(default=None, alias="X-NeMo-Gym-Agent-Session-Id"),
     ) -> NeMoGymResponse:
+        agent_session_id = self.agent_session_id_from_request(request)
         path_params = getattr(request, "path_params", None)
         rollout_id = path_params.get("rollout_id") if isinstance(path_params, Mapping) else None
         collect_trajectory = self._model_call_capture_enabled() and isinstance(rollout_id, str)
@@ -304,8 +303,10 @@ class SimpleAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
             agent_session = self.begin_agent_activation(agent_session_id, rollout_id)
         else:
             agent_session = None
+        if agent_session is not None and not isinstance(agent_session.state, SimpleAgentSessionState):
+            raise TypeError("Unexpected simple_agent session state")
         resources_server_cookies = (
-            agent_session.state["resources_cookies"] if agent_session is not None else request.cookies
+            agent_session.state.resources_cookies if agent_session is not None else request.cookies
         )
         model_response, trajectory, model_server_cookies, resources_server_cookies = await self._create_episode(
             body,
@@ -318,11 +319,9 @@ class SimpleAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         for k, v in (*resources_server_cookies.items(), *model_server_cookies.items()):
             response.set_cookie(k, v)
         if agent_session is not None:
-            agent_session.state["resources_cookies"] = resources_server_cookies
+            agent_session.state.resources_cookies = resources_server_cookies
             if trajectory is not None:
-                from nemo_gym.rollout_observability import AgentObservationBundle
-
-                agent_session.state["observations"] = AgentObservationBundle(
+                agent_session.state.observations = AgentObservationBundle(
                     source="simple_agent",
                     records=trajectory.invocations,
                     gaps=trajectory.gaps,

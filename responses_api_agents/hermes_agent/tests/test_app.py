@@ -18,7 +18,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from nemo_gym.episode import AgentSessionCreateRequest, DirectSandboxConnection, EpisodeId, SandboxAccess
+from nemo_gym.episode import AgentSeedSessionRequest, DirectSandboxConnection, EpisodeId, SandboxAccess
+from nemo_gym.episode_sessions import AgentSession
 from nemo_gym.openai_utils import (
     NeMoGymEasyInputMessage,
     NeMoGymFunctionCallOutput,
@@ -33,6 +34,7 @@ from responses_api_agents.hermes_agent.app import (
     HermesAgent,
     HermesAgentConfig,
     HermesAgentRunRequest,
+    HermesAgentSessionState,
     ModelServerRef,
     ResourcesServerRef,
     _split_input_to_user_and_history,
@@ -92,9 +94,9 @@ class TestSanity:
         monkeypatch.setattr("responses_api_agents.hermes_agent.app.resolve_provider_config", resolve)
         monkeypatch.setattr("responses_api_agents.hermes_agent.app.bind_sandbox", bind)
 
-        await hermes.open_agent_session(
+        await hermes.initialize_agent_session_state(
             "session",
-            AgentSessionCreateRequest(
+            AgentSeedSessionRequest(
                 episode_id=EpisodeId(rollout_id="rollout"),
                 sandbox_access=SandboxAccess(
                     connection=DirectSandboxConnection(
@@ -116,7 +118,7 @@ class TestSanity:
 
     async def test_sandbox_access_requires_terminal_only_mode(self) -> None:
         hermes = HermesAgent(config=_config(), server_client=MagicMock(spec=ServerClient))
-        body = AgentSessionCreateRequest(
+        body = AgentSeedSessionRequest(
             episode_id=EpisodeId(rollout_id="rollout"),
             sandbox_access=SandboxAccess(
                 connection=DirectSandboxConnection(
@@ -128,7 +130,7 @@ class TestSanity:
         )
 
         with pytest.raises(ValueError, match=r"enabled_toolsets: \[terminal\]"):
-            await hermes.open_agent_session("session", body)
+            await hermes.initialize_agent_session_state("session", body)
 
 
 class _FakeAgent:
@@ -246,7 +248,10 @@ class TestSigtermHandler:
         server_client.global_config_dict = {}
         server_client._build_server_base_url = lambda _cfg: "http://h:1"
         hermes = HermesAgent(config=_config(), server_client=server_client)
-        hermes.session_active_agents["session"] = set()
+        hermes._agent_sessions["session"] = AgentSession(
+            request=AgentSeedSessionRequest(episode_id=EpisodeId(rollout_id="rollout")),
+            state=HermesAgentSessionState(),
+        )
         monkeypatch.setattr(hermes, "_ensure_sigterm_handler", lambda: None)
 
         class _ErrorResultAIAgent:

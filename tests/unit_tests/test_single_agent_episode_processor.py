@@ -8,6 +8,7 @@ from pydantic import ConfigDict
 from episode_processors.single_agent.app import (
     SingleAgentEpisodeProcessor,
     SingleAgentEpisodeProcessorConfig,
+    _is_retryable_dependency_error,
 )
 from nemo_gym.config_types import AgentServerRef, ResourcesServerRef
 from nemo_gym.episode import EpisodeId, SingleAgentEpisodeInput, SingleAgentEpisodeRequest, TaskId
@@ -153,7 +154,30 @@ async def test_token_capture_keeps_prefixed_twin_route() -> None:
     assert client.calls[2][1] == "/ng-rollout/rollout-a2/training-token-capture/v1/responses"
 
 
+async def test_legacy_compatibility_is_owned_by_the_processor() -> None:
+    processor, _ = _processor()
+    result = await processor.run_legacy(
+        {
+            "_ng_task_index": 3,
+            "_ng_rollout_index": 2,
+            "_ng_attempt_index": 1,
+            "task_source": "source",
+            "instance_id": "task",
+            "benchmark_field": "input",
+            "responses_create_params": {"input": "task"},
+        }
+    )
+
+    assert result["reward"] == 1.0
+    assert result["benchmark_field"] == "preserved"
+
+
 def test_dependency_failure_messages_are_bounded() -> None:
     processor, _ = _processor()
-    error = processor._failure(stage="agent", message="x" * 3000, retryable=True)
+    error = processor._failure(stage="agent", message="x" * 3000, terminal=False)
     assert len(error.failure.message) == 2000
+
+
+def test_retry_requires_a_transient_dependency_error() -> None:
+    assert _is_retryable_dependency_error(TimeoutError()) is True
+    assert _is_retryable_dependency_error(ValueError("invalid response")) is False

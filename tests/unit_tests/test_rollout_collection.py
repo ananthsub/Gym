@@ -4089,29 +4089,13 @@ class TestEpisodeProcessorRouting:
             "responses_create_params": {"input": "fix it"},
         }
 
-    async def test_routes_native_request_and_projects_legacy_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        agent_response = {
-            "id": "response",
-            "created_at": 0,
-            "model": "model",
-            "object": "response",
-            "output": [],
-            "tool_choice": "auto",
-            "parallel_tool_calls": True,
-            "tools": [],
-        }
+    async def test_routes_legacy_row_to_processor_compatibility_endpoint(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         payload = {
-            "episode_id": {"rollout_id": "0-0", "attempt": 1},
-            "task_id": {"task_source": "swe", "task_id": "instance"},
-            "result": {
-                "verification": {
-                    "responses_create_params": {"input": "fix it"},
-                    "response": agent_response,
-                    "reward": 1.0,
-                    "model_patch": "patch",
-                },
-                "agent_observations": {"source": "hermes", "records": [], "gaps": []},
-            },
+            "reward": 1.0,
+            "model_patch": "patch",
+            "ng_agent_observations": {"source": "hermes", "records": [], "gaps": []},
         }
         post = AsyncMock(return_value=FakeResponse(200, payload))
         client = install_fake_server_client(monkeypatch, post)
@@ -4131,33 +4115,16 @@ class TestEpisodeProcessorRouting:
         assert result["model_patch"] == "patch"
         assert result["ng_agent_observations"]["source"] == "hermes"
         assert post.await_args.kwargs["server_name"] == "processor"
-        native_request = post.await_args.kwargs["json"]
-        assert native_request.episode_id.attempt == 1
-        assert native_request.episode_input.task_data == {
-            "instance_id": "instance",
-            "base_commit": "abc",
-        }
+        assert post.await_args.kwargs["url_path"] == "/run_legacy"
+        assert post.await_args.kwargs["json"] is row
 
-    async def test_projects_http_200_failure_for_the_sidecar(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_accepts_projected_http_200_failure_for_the_sidecar(self, monkeypatch: pytest.MonkeyPatch) -> None:
         payload = {
-            "episode_id": {"rollout_id": "0-0", "attempt": 1},
-            "task_id": {"task_source": "swe", "task_id": "instance"},
-            "failure": {
-                "kind": "dependency",
-                "stage": "agent",
-                "message": "agent unavailable",
-                "retryable": True,
-                "partial_response": {
-                    "id": "partial",
-                    "created_at": 0,
-                    "model": "model",
-                    "object": "response",
-                    "output": [],
-                    "tool_choice": "auto",
-                    "parallel_tool_calls": True,
-                    "tools": [],
-                },
-            },
+            NG_FAILURE_CLASS_KEY: EPISODE_PROCESSOR_FAILURE_CLASS,
+            NG_TERMINAL_KEY: False,
+            "_ng_failure_message": "agent unavailable",
+            "_ng_failure_stage": "agent",
+            "_ng_failure_partial_response": {"id": "partial"},
         }
         post = AsyncMock(return_value=FakeResponse(200, payload))
         client = install_fake_server_client(monkeypatch, post)
@@ -4172,6 +4139,6 @@ class TestEpisodeProcessorRouting:
 
         assert result[NG_FAILURE_CLASS_KEY] == EPISODE_PROCESSOR_FAILURE_CLASS
         assert result[NG_TERMINAL_KEY] is False
-        assert result["_ng_failure_retryable"] is True
+        assert result["_ng_failure_terminal"] is False
         assert result["_ng_failure_stage"] == "agent"
         assert result["_ng_failure_partial_response"]["id"] == "partial"

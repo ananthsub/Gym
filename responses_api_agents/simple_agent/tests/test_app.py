@@ -22,8 +22,8 @@ from fastapi.testclient import TestClient
 from pytest import MonkeyPatch
 
 from nemo_gym.episode import (
-    AgentSessionCloseRequest,
-    AgentSessionCreateRequest,
+    AgentCloseSessionRequest,
+    AgentSeedSessionRequest,
     DirectResourcesToolAccess,
     EpisodeId,
 )
@@ -106,8 +106,8 @@ class TestApp:
     async def test_agent_session_preserves_resources_cookie_updates(self) -> None:
         server, server_client = _make_agent(False)
         server_client._resolve_base_url.return_value = "http://resources:8080"
-        created = await server.create_agent_session(
-            AgentSessionCreateRequest(
+        created = await server.seed_agent_session(
+            AgentSeedSessionRequest(
                 episode_id=EpisodeId(rollout_id="rollout"),
                 resources_access=DirectResourcesToolAccess(
                     kind="direct_http",
@@ -117,9 +117,9 @@ class TestApp:
             )
         )
         session = server.require_agent_session(created.agent_session_id)
-        session.state["resources_cookies"] = {"session": "updated"}
+        session.state.resources_cookies = {"session": "updated"}
 
-        closed = await server.close_agent_session(AgentSessionCloseRequest(agent_session_id=created.agent_session_id))
+        closed = await server.close_agent_session(AgentCloseSessionRequest(agent_session_id=created.agent_session_id))
 
         assert closed.resources_cookies == {"session": "updated"}
         assert created.agent_session_id not in server._agent_sessions

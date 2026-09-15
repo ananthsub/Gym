@@ -8,7 +8,12 @@ from typing import Annotated, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from typing_extensions import Self
 
-from nemo_gym.base_resources_server import BaseVerifyResponse, MCPServerMetadata
+from nemo_gym.base_resources_server import (
+    BaseSeedSessionRequest,
+    BaseSeedSessionResponse,
+    BaseVerifyResponse,
+    MCPServerMetadata,
+)
 from nemo_gym.openai_utils import NeMoGymResponse, NeMoGymResponseCreateParamsNonStreaming
 from nemo_gym.rollout_observability import AgentObservationBundle
 
@@ -42,9 +47,8 @@ class EpisodeFailure(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["unavailable", "timeout", "dependency", "processor"]
     message: str = Field(max_length=2000)
-    retryable: bool
+    terminal: bool = Field(description="Whether rollout collection must not attempt this episode again.")
 
 
 EpisodeInputT = TypeVar("EpisodeInputT")
@@ -175,7 +179,7 @@ class SingleAgentEpisodeResponse(BaseEpisodeResponse[SingleAgentEpisodeResult]):
     failure: SingleAgentEpisodeFailure | None = None
 
 
-class EpisodeResourcesSeedRequest(BaseModel):
+class ResourcesSeedSessionRequest(BaseSeedSessionRequest):
     """Initialize resources-server state for one episode."""
 
     model_config = ConfigDict(extra="forbid")
@@ -185,7 +189,7 @@ class EpisodeResourcesSeedRequest(BaseModel):
     task_data: dict[str, JsonValue]
 
 
-class EpisodeResourcesSeedResponse(BaseModel):
+class ResourcesSeedSessionResponse(BaseSeedSessionResponse):
     """Return resources state and optional agent access."""
 
     model_config = ConfigDict(extra="forbid")
@@ -220,7 +224,7 @@ class ResponsesEpisodeResourcesVerifyRequest(BaseEpisodeResourcesVerifyRequest[R
     """Verify one completed Responses API activation."""
 
 
-class ResourcesSessionCloseRequest(BaseModel):
+class ResourcesCloseSessionRequest(BaseModel):
     """Close resources-server state."""
 
     model_config = ConfigDict(extra="forbid")
@@ -228,7 +232,7 @@ class ResourcesSessionCloseRequest(BaseModel):
     resources_session_id: str
 
 
-class ResourcesSessionCloseResponse(BaseModel):
+class ResourcesCloseSessionResponse(BaseModel):
     """Confirm resources-server state was closed."""
 
     model_config = ConfigDict(extra="forbid")
@@ -236,7 +240,7 @@ class ResourcesSessionCloseResponse(BaseModel):
     resources_session_id: str
 
 
-class AgentSessionCreateRequest(BaseModel):
+class AgentSeedSessionRequest(BaseModel):
     """Initialize agent-server state for one episode."""
 
     model_config = ConfigDict(extra="forbid")
@@ -246,7 +250,7 @@ class AgentSessionCreateRequest(BaseModel):
     sandbox_access: SandboxAccess | None = None
 
 
-class AgentSessionCreateResponse(BaseModel):
+class AgentSeedSessionResponse(BaseModel):
     """Return the worker-local agent session identifier."""
 
     model_config = ConfigDict(extra="forbid")
@@ -254,7 +258,7 @@ class AgentSessionCreateResponse(BaseModel):
     agent_session_id: str
 
 
-class AgentSessionCloseRequest(BaseModel):
+class AgentCloseSessionRequest(BaseModel):
     """Close agent-server state."""
 
     model_config = ConfigDict(extra="forbid")
@@ -262,7 +266,7 @@ class AgentSessionCloseRequest(BaseModel):
     agent_session_id: str
 
 
-class AgentSessionCloseResponse(BaseModel):
+class AgentCloseSessionResponse(BaseModel):
     """Confirm closure and return captured observations."""
 
     model_config = ConfigDict(extra="forbid")

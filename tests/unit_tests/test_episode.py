@@ -14,9 +14,10 @@ from nemo_gym.base_episode_processor import (
     BaseEpisodeProcessorConfig,
     EpisodeContext,
 )
-from nemo_gym.base_resources_server import BaseVerifyResponse
+from nemo_gym.base_resources_server import BaseSeedSessionResponse, BaseVerifyResponse
+from nemo_gym.base_responses_api_agent import SimpleResponsesAPIAgent
 from nemo_gym.episode import (
-    AgentSessionCreateRequest,
+    AgentSeedSessionRequest,
     BaseEpisodeRequest,
     BaseEpisodeResponse,
     DirectResourcesToolAccess,
@@ -24,7 +25,6 @@ from nemo_gym.episode import (
     EpisodeId,
     TaskId,
 )
-from nemo_gym.episode_sessions import AgentSessionServerMixin
 from nemo_gym.openai_utils import NeMoGymResponse
 from nemo_gym.server_utils import ServerClient
 
@@ -79,7 +79,7 @@ def test_episode_response_requires_exactly_one_outcome() -> None:
             episode_id=request.episode_id,
             task_id=request.task_id,
             result="result",
-            failure=EpisodeFailure(kind="processor", message="failure", retryable=False),
+            failure=EpisodeFailure(message="failure", terminal=True),
         )
 
 
@@ -91,6 +91,10 @@ def test_direct_resources_access_is_strict() -> None:
     )
     assert access.kind == "direct_http"
     assert access.model_dump(exclude_unset=True)["kind"] == "direct_http"
+
+
+def test_empty_seed_response_preserves_legacy_wire_shape() -> None:
+    assert BaseSeedSessionResponse().model_dump() == {}
     with pytest.raises(ValidationError):
         DirectResourcesToolAccess(kind="direct_http", base_url="http://resources:8000", unknown=True)
 
@@ -194,14 +198,20 @@ def test_capture_key_qualifies_retries() -> None:
 
 
 def test_agent_session_activation_enforces_episode_identity_and_single_use() -> None:
-    class _Sessions(AgentSessionServerMixin):
-        pass
+    class _Sessions(SimpleResponsesAPIAgent):
+        async def responses(self, body):
+            raise NotImplementedError
 
-    sessions = _Sessions()
-    sessions.config = MagicMock(num_workers=1)
-    sessions.initialize_agent_sessions()
+        async def run(self, body):
+            raise NotImplementedError
+
+        async def initialize_agent_session_state(self, agent_session_id, body):
+            return None
+
+    sessions = _Sessions.model_construct(config=MagicMock(num_workers=1), server_client=MagicMock())
+    sessions._agent_sessions = {}
     created = asyncio.run(
-        sessions.create_agent_session(AgentSessionCreateRequest(episode_id=EpisodeId(rollout_id="rollout", attempt=2)))
+        sessions.seed_agent_session(AgentSeedSessionRequest(episode_id=EpisodeId(rollout_id="rollout", attempt=2)))
     )
 
     with pytest.raises(ValueError, match="does not match"):

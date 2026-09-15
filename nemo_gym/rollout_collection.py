@@ -51,13 +51,6 @@ from nemo_gym.config_types import (
     ConfigPathNotFoundError,
     UploadRolloutsConfigMixin,
 )
-from nemo_gym.episode import (
-    EpisodeId,
-    SingleAgentEpisodeInput,
-    SingleAgentEpisodeRequest,
-    SingleAgentEpisodeResponse,
-    TaskId,
-)
 from nemo_gym.exporters import export_metrics, export_rollouts, get_exporters
 from nemo_gym.global_config import (
     AGENT_REF_KEY_NAME,
@@ -895,57 +888,6 @@ def _agent_request_failure_row(exc: BaseException, status: Optional[int]) -> Dic
         "_ng_failure_http_status": status,
         "_ng_failure_response_body": _truncated_body(body),
     }
-
-
-def _single_agent_episode_request(row: Dict[str, Any]) -> SingleAgentEpisodeRequest:
-    task_id, rollout_id = _trajectory_identity(row)
-    task_source = row.get(TASK_SOURCE_KEY_NAME)
-    if not isinstance(task_source, str) or not task_source:
-        raise ValueError("Episode processor rows require task_source")
-    attempt = row.get(ATTEMPT_INDEX_KEY_NAME, 0)
-    if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 0:
-        raise ValueError(f"Invalid episode attempt: {attempt!r}")
-    excluded = {
-        RESPONSES_CREATE_PARAMS_KEY_NAME,
-        AGENT_REF_KEY_NAME,
-        TASK_SOURCE_KEY_NAME,
-        SKILLS_REF_KEY_NAME,
-        ROLLOUT_ID_KEY_NAME,
-        TASK_INDEX_KEY_NAME,
-        ROLLOUT_INDEX_KEY_NAME,
-        ATTEMPT_INDEX_KEY_NAME,
-    }
-    task_data = {key: value for key, value in row.items() if key not in excluded}
-    return SingleAgentEpisodeRequest(
-        episode_id=EpisodeId(rollout_id=rollout_id, attempt=attempt),
-        task_id=TaskId(task_source=task_source, task_id=task_id),
-        episode_input=SingleAgentEpisodeInput(
-            responses_create_params=row[RESPONSES_CREATE_PARAMS_KEY_NAME],
-            task_data=task_data,
-        ),
-    )
-
-
-def _project_single_agent_episode_response(response: SingleAgentEpisodeResponse) -> Dict[str, Any]:
-    if response.failure is not None:
-        failure = {
-            NG_FAILURE_CLASS_KEY: EPISODE_PROCESSOR_FAILURE_CLASS,
-            NG_TERMINAL_KEY: not response.failure.retryable,
-            "_ng_failure_type": response.failure.kind,
-            "_ng_failure_message": response.failure.message,
-            "_ng_failure_stage": response.failure.stage,
-            "_ng_failure_retryable": response.failure.retryable,
-        }
-        partial_response = getattr(response.failure, "partial_response", None)
-        if partial_response is not None:
-            failure["_ng_failure_partial_response"] = partial_response.model_dump(mode="json")
-        return failure
-    if response.result is None:
-        raise ValueError("Successful episode response has no result")
-    result = response.result.verification.model_dump(mode="json")
-    if response.result.agent_observations is not None:
-        result["ng_agent_observations"] = response.result.agent_observations.model_dump(mode="json")
-    return result
 
 
 def _truncated_body(body: Optional[bytes]) -> Optional[str]:
@@ -2065,16 +2007,14 @@ Aggregate metrics: {aggregate_metrics_fpath}{coverage}""")
                     if episode_processor is None:
                         server_name = row["agent_ref"]["name"]
                         request_body: Any = row
+                        url_path = "/run"
                     else:
                         server_name = episode_processor
-                        request_body = _single_agent_episode_request(row)
-                    res = await server_client.post(server_name=server_name, url_path="/run", json=request_body)
+                        request_body = row
+                        url_path = "/run_legacy"
+                    res = await server_client.post(server_name=server_name, url_path=url_path, json=request_body)
                     await raise_for_status(res)
                     result = await get_response_json(res)
-                    if episode_processor is not None:
-                        result = _project_single_agent_episode_response(
-                            SingleAgentEpisodeResponse.model_validate(result)
-                        )
                     # Independently-measured task wall-clock (ng_perf.total_latency_ms), not derived
                     # from summed model-call/tool latencies to account for additional overhead.
                     rollout_latency_ms = (time() - started_at) * 1000
