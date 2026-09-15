@@ -6,7 +6,7 @@ This branch contains the public Gym architecture RFC and a concrete proposal for
 
 ## Core design
 
-1. **Episode processor.** Each `episode_processors` deployment hosts one concrete processor. The processor binds concrete request and response models to the shared `POST /run` endpoint. `BaseEpisodeProcessor.run()` supplies worker-local admission, queue and episode timeouts, handled-failure conversion, response validation, identity checks, and telemetry. A concrete `process()` method owns its protocol and participant cleanup order.
+1. **Episode processor.** Each `episode_processors` deployment hosts one concrete processor. The processor binds concrete request and response models to the shared `POST /run` endpoint. `BaseEpisodeProcessor.run()` supplies optional worker-local admission, queue and episode timeouts, handled-failure conversion, response validation, identity checks, and telemetry. Setting `max_concurrent_episodes: null` disables processor-level admission control. A concrete `process()` method owns its protocol and participant cleanup order.
 2. **Composed Gym servers.** A processor may use independently deployed agent and resources servers when those boundaries fit its protocol. It may instead run a self-contained external integration such as Tau2. Agent servers retain their existing `POST /v1/responses` request and response models.
 
 Gym adds `episode_processors` as a fourth server type and `sandbox_servers` as an optional fifth type. A sandbox server is configured only when provider state cannot be reconstructed across the resources-server and agent-server processes. Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available through compatibility adapters. Native run configuration maps tasksets to `EpisodeProcessorRef` values before rollout planning; processor routing is not stored in task data or the episode request.
@@ -23,7 +23,7 @@ The processor config contains server references and protocol limits. The process
 
 The proposal also contains complete step-by-step episode flows. Its HTML companion provides interactive walkthroughs for the representative deployments and the optional sandbox-server path.
 
-When used, the resources server owns benchmark state, tools, verification, and task sandboxes. `sandbox_access` exposes only a sandbox that an agent must operate; it does not list every object owned by the resources server or say where agent-server code runs. Resources cannot implicitly inspect a separate sandbox created by the agent.
+When used, the resources server owns benchmark state, tools, verification, and task sandboxes. Seed validates and retains `task_data`; the online verify request carries only episode correlation, the original Responses input, and the agent response. `sandbox_access` exposes only a sandbox that an agent must operate; it does not list every object owned by the resources server or say where agent-server code runs. Resources cannot implicitly inspect a separate sandbox created by the agent.
 
 Agent sessions are process-local. The initial deployment uses one Uvicorn worker per agent-server replica, admits several asynchronous sessions in that worker, and scales through replicas or NeMo RL shards. A future routed pool must keep create, `/v1/responses`, and close on the replica that owns the session.
 

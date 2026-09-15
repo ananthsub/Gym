@@ -584,7 +584,7 @@ class SingleAgentSeedResponse(BaseModel):
     sandbox_access: SandboxAccess | None = None
 ```
 
-`SingleAgentSeedRequest` validates the single-agent envelope. Each resources server binds `/seed_session` to a concrete subclass that narrows `task_data` to its benchmark-specific Pydantic model, as illustrated by `SWEBenchSeedRequest`. FastAPI performs that validation before `seed_session()` runs. The processor posts the same JSON without importing or interpreting the benchmark model.
+`SingleAgentSeedRequest` validates the single-agent envelope. Each resources server binds `/seed_session` to a concrete subclass that narrows `task_data` to its benchmark-specific Pydantic model, as illustrated by `SWEBenchSeedRequest`. FastAPI performs that validation before `seed_session()` runs. The processor posts the same JSON without importing or interpreting the benchmark model. The resources session retains the validated `task_id` and `task_data` for verification; the processor does not resend them in `SingleAgentVerifyRequest`.
 
 The processor retains the resources-server reference, session ID, and private transport state established by seed. It uses that state for verification and cleanup. It passes only agent-visible tool access and optional sandbox access to the agent server.
 
@@ -632,6 +632,8 @@ The processor uses three resources-server operations:
 The close request identifies the resources session. Session authorization remains in HTTP metadata established during seed.
 
 The resources server validates its concrete `BaseVerifyResponse` subclass before returning it. The processor validates the common fields and preserves all additional fields without interpreting them.
+
+The online `/verify` operation is session-backed. Offline reverification must replay seed, verify, and close from the materialized task, or use a separate stateless reverification contract. It does not expand the online request with the legacy flat dataset row.
 
 `/seed_session` and `/verify` preserve current Gym route names. `/close_session` is a new required lifecycle endpoint.
 
@@ -805,7 +807,7 @@ A successful close means agent-controlled activity has stopped. If close fails, 
 
 ```python
 class BaseEpisodeProcessorConfig(BaseRunServerInstanceConfig):
-    max_concurrent_episodes: PositiveInt
+    max_concurrent_episodes: PositiveInt | None = None
     queue_timeout_seconds: PositiveFloat
     default_episode_timeout_seconds: PositiveFloat
 
@@ -842,29 +844,32 @@ class BaseEpisodeProcessor(
 ):
     request_model: ClassVar[type[EpisodeRequestT]]
     response_model: ClassVar[type[EpisodeResponseT]]
-    _admission: asyncio.Semaphore = PrivateAttr()
+    _admission: asyncio.Semaphore | None = PrivateAttr(default=None)
 
     def model_post_init(self, context: Any) -> None:
         super().model_post_init(context)
-        self._admission = asyncio.Semaphore(
-            self.config.max_concurrent_episodes
+        self._admission = (
+            asyncio.Semaphore(self.config.max_concurrent_episodes)
+            if self.config.max_concurrent_episodes is not None
+            else None
         )
 
     async def run(self, request: EpisodeRequestT) -> EpisodeResponseT:
-        try:
-            await asyncio.wait_for(
-                self._admission.acquire(),
-                timeout=self.config.queue_timeout_seconds,
-            )
-        except TimeoutError:
-            return self.failure_response(
-                request,
-                EpisodeFailure(
-                    kind="unavailable",
-                    message="Episode admission timed out",
-                    retryable=True,
-                ),
-            )
+        if self._admission is not None:
+            try:
+                await asyncio.wait_for(
+                    self._admission.acquire(),
+                    timeout=self.config.queue_timeout_seconds,
+                )
+            except TimeoutError:
+                return self.failure_response(
+                    request,
+                    EpisodeFailure(
+                        kind="unavailable",
+                        message="Episode admission timed out",
+                        retryable=True,
+                    ),
+                )
 
         try:
             episode_timeout = asyncio.timeout(
@@ -897,7 +902,8 @@ class BaseEpisodeProcessor(
             self.validate_response_identity(request, response)
             return response
         finally:
-            self._admission.release()
+            if self._admission is not None:
+                self._admission.release()
 
     @abstractmethod
     async def process(
@@ -942,7 +948,7 @@ class SingleAgentEpisodeProcessor(
 
 `BaseEpisodeProcessor` registers `POST /run` with `request_model` as the FastAPI request-body model and `response_model` as the response model. A concrete processor supplies those models and implements `process()`; it does not override `run()`.
 
-The base runner owns worker-local admission, queue timeout, the overall episode timeout, conversion of explicitly handled errors, response validation, identity checks, and telemetry around the call. Caller cancellation and unexpected exceptions propagate to the HTTP server. Because participant shutdown order is protocol-specific, `process()` closes its agent and resources sessions in `finally` blocks; cancellation still executes those blocks. The semaphore limits episodes admitted to one worker and provides no cluster-wide admission or failover.
+The base runner owns optional worker-local admission, queue timeout, the overall episode timeout, conversion of explicitly handled errors, response validation, identity checks, and telemetry around the call. `max_concurrent_episodes: null` disables the processor-level semaphore, and `queue_timeout_seconds` is then unused. Caller cancellation and unexpected exceptions propagate to the HTTP server. Because participant shutdown order is protocol-specific, `process()` closes its agent and resources sessions in `finally` blocks; cancellation still executes those blocks. When enabled, the semaphore limits episodes admitted to one worker and provides no cluster-wide admission or failover.
 
 ### Processing order
 
