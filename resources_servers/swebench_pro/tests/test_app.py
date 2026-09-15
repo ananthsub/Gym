@@ -253,7 +253,7 @@ async def test_episode_seed_returns_direct_access_and_resources_close_owns_stop(
     )
 
     assert response.resources_session_id == "session"
-    assert response.sandbox_access.connection.sandbox_provider == server.config.sandbox_provider
+    assert response.sandbox_access.connection.provider_config_ref == server.config.sandbox_provider
     assert response.sandbox_access.connection.descriptor == {"sandbox_id": "sandbox-id"}
     sandbox.pty.create.assert_not_awaited()
     sandbox.stop.assert_not_awaited()

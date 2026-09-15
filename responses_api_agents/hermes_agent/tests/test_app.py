@@ -98,7 +98,7 @@ class TestSanity:
                 episode_id=EpisodeId(rollout_id="rollout"),
                 sandbox_access=SandboxAccess(
                     connection=DirectSandboxConnection(
-                        sandbox_provider="runtime",
+                        provider_config_ref="runtime",
                         descriptor={"sandbox_id": "sandbox"},
                     ),
                     workdir="/app",
@@ -120,7 +120,7 @@ class TestSanity:
             episode_id=EpisodeId(rollout_id="rollout"),
             sandbox_access=SandboxAccess(
                 connection=DirectSandboxConnection(
-                    sandbox_provider="runtime",
+                    provider_config_ref="runtime",
                     descriptor={"sandbox_id": "sandbox"},
                 ),
                 workdir="/app",

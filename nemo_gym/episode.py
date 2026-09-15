@@ -105,12 +105,12 @@ ResourcesToolAccess = Annotated[
 
 
 class DirectSandboxConnection(BaseModel):
-    """Reconnect through a named sandbox provider."""
+    """Reconnect through a named top-level sandbox-provider configuration."""
 
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["direct"] = "direct"
-    sandbox_provider: str
+    provider_config_ref: str
     descriptor: dict[str, JsonValue]
 
 

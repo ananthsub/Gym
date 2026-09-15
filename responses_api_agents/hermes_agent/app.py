@@ -312,7 +312,7 @@ class HermesAgent(AgentSessionServerMixin, SimpleResponsesAPIAgent):
         if not isinstance(connection, DirectSandboxConnection):
             raise ValueError("Hermes currently supports only direct sandbox connections")
         provider_config = resolve_provider_config(
-            connection.sandbox_provider,
+            connection.provider_config_ref,
             get_global_config_dict(),
         )
         await bind_sandbox(
