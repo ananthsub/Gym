@@ -226,3 +226,67 @@ A follow-up contract audit tightened the implementation details. `run()` now ret
 ## What stands after these changes
 
 With the changes above, the processor is a routed `episode_processors` deployment with a framework-owned envelope, and behavior remains behind independently deployed harness servers. Failures travel in the HTTP status with the body as detail. The verifier's reply keeps everything consumers read today. The resources server gains explicit session authority and cleanup so the design's cleanup guarantee has a receiver. Optional `SandboxAccess` lets a harness operate a resources-owned task sandbox without destroying it. Without access, the harness follows its own configuration. Direct access is used whenever provider scope and topology allow, while an optional `sandbox_servers` deployment brokers non-connectable providers. `simple_agent`, OpenCode, Terminus-2, and managed harnesses keep dependency isolation through their server virtualenvs. Multi-agent processors open one harness session per role and may share one task sandbox through independent borrower connections. Task data continues through each server's existing adapter. The task-set redesign proceeds separately on its own evidence.
+
+## Second review, 2026-09-15, of the reframed proposal at `ac2495ee7`
+
+Twenty commits between `05584c14a` and `ac2495ee7` cut the proposal from 19,400 words to 7,500, made the agent harness stay an HTTP server behind `/v1/responses` with a create and close session pair around it, removed the executor and runtime hierarchies, made the base request and response generic over a processor-defined input and result, added self-contained processors for Tau2 and NeMo-Sim, and moved delivery planning to `episode-orchestration-milestones.md`. The baseline for this pass is unchanged: Gym `main` at `e3dd5f6b1`, RL `main` at `5d49fbf4e`, RL pin `fd5e84d6b`.
+
+The reframing is a better fit for the requirements than the draft this review first examined. The agent stays independently deployable and independently scaled, which is what NeMo RL can address by name. One processor deployment binds one agent server, so capacity is static. `EpisodeId` carries the group fields RL already stamps. `SandboxAccess` names an existing provider block and distinguishes direct from brokered connections. The resources server gains a session id and a close route. Milestone 1 lists the configuration-loader work that the fourth server type needs instead of assuming the launcher handles it. The self-contained processor is the right home for Tau2 and NeMo-Sim, and it answers the question of how protocols that do not fit the agent and resources boundaries expand.
+
+The findings below are the places where the reframed text does not yet hold together or where it reintroduces a problem the first review closed.
+
+### Handled failures return HTTP 200, which the current RL integration cannot read
+
+The `/run` mapping section returns HTTP 200 for every handled failure, with `EpisodeFailure` in the body and `retryable` left to the scheduler. NeMo RL reads `result["response"]` from every 200 without checking for a failure field, so a failure body raises a key error inside the actor. That error carries no HTTP status, so the typed-failure mapping returns nothing and the exception is re-raised untyped, which kills the stream for the batch instead of retrying the row. The native mapping can stay as written once RL's native path parses the body. The compatibility projector must not use it. The projector emits the status table from the first review, 503 with a retry hint for admission, timeout, and dependency failures and 500 for a processor failure, so the pinned RL keeps classifying by status. The design should state that the two wire modes differ here on purpose.
+
+The evidence is in NeMo RL `nemo_rl/environments/nemo_gym.py` lines 139 to 169 and 883, and in Gym `nemo_gym/rollout_collection.py` lines 1925 to 1945, where the collector re-raises when it is not routing failures to the sidecar.
+
+### Tool access for `simple_agent` has no carrier
+
+The seed response carries `resources_tools` as optional MCP metadata, and the tools section describes only clients that take per-server headers or a proxy that adds them. `simple_agent` calls tools by posting to the tool route with the resources cookies it received. It has no MCP client. MCP exposure is opt-in on resources servers and off by default, and the design mentions no cookie or session token for direct tool calls. As written, the representative non-sandbox path cannot reach its tools.
+
+The fix is a second access form in the seed response next to the MCP metadata: the resources base URL plus the session cookie or a scoped session header, passed to the agent at session creation, and sent by the agent's tool client on every tool call. That is the mechanism that exists today, carried explicitly instead of through a self-call. Alternatively the design can require MCP exposure on every resources server paired with `simple_agent`, but that is a change to the tool path of every simple environment and should be named as such.
+
+The evidence is in `responses_api_agents/simple_agent/app.py` lines 187 to 194 and `nemo_gym/base_resources_server.py` lines 78 to 80 and 136 to 142.
+
+### Token capture has no carrier either
+
+The word token does not appear in the proposal. The processor calls the plain `/v1/responses` route with a session header. Today the agent learns whether to use the training-token-capture model path from the incoming request path, because `run()` self-calls a prefixed twin route and `url_path_for_request` reads the segment back. With a plain route and a header, the agent's model calls go unprefixed and training captures nothing.
+
+The fix is small. Keep the existing twin routes as the transport for episode correlation and the capture flag: the processor posts to `/ng-rollout/{id}/v1/responses` or its training-token-capture variant, chosen by processor configuration, and the session header carries only the session id. The agent's existing path logic then works unchanged, and the rollout context is set by the route as it is now.
+
+The evidence is in `nemo_gym/base_responses_api_agent.py` lines 77 to 82 and 122 to 178.
+
+### Cleanup runs unbounded inside cancelled tasks
+
+The 53af3c711 draft had a cleanup registry that ran every registered release with its own bounds. The reframed `process()` closes the agent session and the resources session in `finally` blocks, and `run()` wraps `process()` in an asyncio timeout. When that timeout fires, or when the client-disconnect middleware cancels the request, the close calls in `finally` run after a cancellation with no bound of their own. A hung agent close holds the episode past its deadline, and a second cancellation during the agent close skips the resources close, which is the one that stops the task sandbox.
+
+The fix is to bound each close with its own timeout and shield it from further cancellation, and to say so in the processing-order section. The registry from the earlier draft did this once for every protocol; if it stays removed, every concrete processor must repeat the pattern.
+
+### Several names are used before they are defined
+
+`EpisodeContext` is passed to `process()` and provides `resources_server`, but no definition remains. The deployment examples set `shutdown_grace_seconds` and `compatibility.expected_agent_name`, and neither field exists on `BaseEpisodeProcessorConfig`. The migrated compatibility boundary validates `BaseRunRequest` and converts it, but `run()` types its body as the concrete episode request with extras forbidden, so no route in the proposal can accept a legacy body. `SingleAgentEpisodeResult.verification` is typed `BaseVerifyResponse`, whose extra-field policy is the Pydantic default of ignore, so validating it drops every benchmark field unless the processor uses an allow-extras variant. The text says extras are preserved; the model as written does not. `mask_sample` is placed on the verify response, while RL reads `instance_config.mask_sample`, and no projection rule is stated. The reward-equals-sum rule from the first review is absent, though the disposition says it was adopted.
+
+### Terminus-2 falls back to host execution
+
+The Terminus-2 example runs terminal commands in a configured local workspace when no sandbox access arrives. That is model-directed shell execution on the agent server host, which the earlier draft ruled out for production and which the first review's audit flagged as the reason CLI harnesses need a sandbox. The current Terminus-2 agent does exactly this through tmux, so the example is faithful to today, but the proposal should require an agent-owned sandbox for Terminus-2 outside development and gate the local workspace behind an explicit flag.
+
+The evidence is in `responses_api_agents/terminus_2_agent/app.py` lines 36, 113 to 120, and 164 to 180.
+
+### The single-host Docker and Apptainer case is still routed through the sandbox server
+
+The proposal says direct handoff is valid when the provider can serialize and reconnect, and that other providers use a sandbox server. Docker, Apptainer, and the local provider are not mentioned. They cannot serialize or reconnect today, so every single-host deployment on them is sent through the sandbox server, which the branch owner does not want when a direct path exists. Milestone 3 implements direct reconnection but does not list adding `serialize_handle` and `connect` to those providers. Adding them for same-host use is a small provider change and should be in milestone 3.
+
+### Agent pairing validation is not addressed
+
+Configuration validation checks `allowed_agents` by agent directory name at parse time and again per run. A migrated deployment keeps the legacy name under `episode_processors` and binds an agent server under a different name. Neither check knows which name to compare. The proposal should say the check compares the resources server's list against the processor's bound agent server, and that the compatibility name is an alias.
+
+The evidence is in `nemo_gym/global_config.py` lines 903 to 944 and `nemo_gym/rollout_collection.py` lines 1856 to 1893.
+
+### The disposition above describes a draft that no longer exists
+
+The disposition section written at `05584c14a` names `LegacyAgentRunProcessor`, token-capture identity on harness sessions, a locked cookie compatibility path, provider scopes, and documented migration classes. The simplification commits that followed removed all of them. The proposal now says unmigrated agents keep their own `/run` and do not use a processor, which is a different and simpler answer than a forwarding processor. The disposition should be rewritten against `ac2495ee7`, or dropped in favor of this section. Fifteen of the twenty new commits have no body.
+
+### What to do next
+
+Fix the two carriers first, tool access and token capture, because the simple-agent milestone cannot pass without them. Then restore bounded cleanup, define the compatibility route and the missing config fields, and state the compatibility HTTP mapping. The rest are one-paragraph edits. None of them changes the shape of the reframed proposal, which is the right one.
