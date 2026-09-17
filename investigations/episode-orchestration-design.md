@@ -136,11 +136,11 @@ The rollout caller sends one request to the episode processor and receives one f
 
 `SingleAgentEpisodeProcessor` uses the resources-backed flow below. The resources server prepares the task first. Seed creates a resources session and may return agent-visible tool access and `SandboxAccess`. The processor retains the resources session for verification and cleanup. The resources server remains the owner of its session state and task sandbox.
 
-This processor seeds an agent session before invoking the Responses API. `AgentSeedSessionRequest` contains the immutable episode ID, resources-tool access, and optional `SandboxAccess`. Sandbox selection happens while the agent server seeds that session:
+This processor seeds an agent session before invoking the Responses API. `AgentSeedSessionRequest` contains immutable episode and task identity, fully resolved episode-scoped tool grants, and optional `SandboxAccess`. The agent server combines those values with its configured harness defaults while seeding the session:
 
 - When resources supplied `SandboxAccess`, the agent session connects to that sandbox as a borrower.
 - When resources supplied no sandbox access and the agent requires a sandbox, the agent session creates its configured fallback sandbox.
-- When the agent requires no sandbox, the agent session configures resources tools and initializes any agent-local session state.
+- When the agent requires no sandbox, the agent session configures its effective tool access and initializes any agent-local session state.
 
 The processor closes its agent session before asking the resources server to verify. The resources server then verifies the response and any state it owns. Finally, the processor closes the resources session, and each server destroys only the objects it owns.
 
@@ -158,16 +158,17 @@ sequenceDiagram
     C->>P: POST /run with SingleAgentEpisodeRequest
     P->>P: Validate, admit, and apply configured timeout
     P->>R: POST /seed_session
-    R->>R: Create resources session and agent-visible tool access
+    R->>R: Create resources session and scoped tool metadata
+    Note over A: Agent-server config supplies reusable tool declarations
 
     alt Resources provides a task sandbox
         R->>TS: Create and seed task sandbox
         R-->>P: Seed response with SandboxAccess
-        P->>A: POST /v1/agent_sessions with SandboxAccess
+        P->>A: Seed session with episode tool grants and SandboxAccess
         A->>TS: Connect as borrower
     else Resources provides no task sandbox
         R-->>P: Seed response without SandboxAccess
-        P->>A: POST /v1/agent_sessions without SandboxAccess
+        P->>A: Seed session with episode tool grants
         alt Agent requires its own sandbox
             A->>AS: Create configured fallback sandbox
         else Agent requires no sandbox
@@ -175,6 +176,7 @@ sequenceDiagram
         end
     end
 
+    A->>A: Overlay tool grants onto configured declarations
     A->>A: Start agent-local state and optional observation capture
     A-->>P: AgentSeedSessionResponse
     P->>A: POST /ng-rollout/{capture_key}/v1/responses with agent session ID
@@ -182,7 +184,7 @@ sequenceDiagram
         A->>M: Model request
         M-->>A: Model response or tool call
         opt Resources-server tool call
-            A->>R: Invoke tool with resources-tool access
+            A->>R: Invoke tool through episode-scoped grant
             R-->>A: Model-visible tool result
         end
         opt Agent uses a sandbox
@@ -590,36 +592,86 @@ The processor retains the resources-server reference, session ID, and private tr
 
 Tool schemas may already appear in `responses_create_params.tools`. A resources server may also return `MCPServerMetadata` for tools exposed from the seeded session.
 
-The processor converts the seed result and resources-session HTTP state into explicit agent-visible access:
+Agent-server configuration owns reusable harness defaults, including MCP declarations that are the same for every episode. A configured declaration is not necessarily a server-lifetime connection: an adapter may start its configured stdio server separately for each agent session. The adapter owns that native connection policy and must prevent state from leaking across sessions.
+
+The seed request carries only grants whose access is scoped to the task attempt. Service type does not determine that lifetime. For example, a shared memory service can still require an episode-specific namespace or credential, so its resolved grant belongs in the seed request.
+
+The processor converts resources metadata and any other processor-owned policy into fully resolved grants:
 
 ```python
-class DirectResourcesToolAccess(BaseModel):
+class DirectHTTPToolAccess(BaseModel):
     kind: Literal["direct_http"]
-    base_url: str
+    name: str
+    required: bool
+    base_url: AnyHttpUrl
     cookies: dict[str, str]
     headers: dict[str, str]
 
 
-class MCPResourcesToolAccess(BaseModel):
+class MCPStreamableHTTPConnection(BaseModel):
+    transport: Literal["streamable_http"]
+    url: AnyHttpUrl
+    headers: dict[str, str]
+
+
+class MCPStdioConnection(BaseModel):
+    transport: Literal["stdio"]
+    command: str
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    cwd: str | None = None
+
+
+MCPConnection = Annotated[
+    MCPStreamableHTTPConnection | MCPStdioConnection,
+    Field(discriminator="transport"),
+]
+
+
+class MCPToolAccess(BaseModel):
     kind: Literal["mcp"]
-    metadata: MCPServerMetadata
+    name: str
+    required: bool
+    connection: MCPConnection
 
 
-ResourcesToolAccess = Annotated[
-    DirectResourcesToolAccess | MCPResourcesToolAccess,
+ToolAccess = Annotated[
+    DirectHTTPToolAccess | MCPToolAccess,
     Field(discriminator="kind"),
 ]
+
+
+class BaseResponsesAPIAgentConfig(BaseServerConfig):
+    tool_accesses: list[ToolAccess] = Field(default_factory=list)
 ```
 
-Direct HTTP access is synthesized from the resolved resources-server URL and the cookies established by seed. MCP access uses metadata returned by seed. The processor selects the transport in its configuration and passes the resulting union while seeding the agent session. The discriminator is required in serialized JSON.
+The same canonical list shape is used for configured declarations and seed-request grants so the adapter has one merge path. Existing harness-native static MCP configuration can remain during migration, but each adapter must normalize it into this logical-name model before applying request overrides.
+
+An MCP HTTP grant contains an absolute URL and all scoped headers. An MCP stdio grant contains an executable and arguments rather than a shell command. A direct-HTTP grant preserves the current trusted Python-agent path by carrying one named resources endpoint and its explicit session state; it is not translated into MCP. Neither form carries resources lifecycle authority. Both discriminators are required in serialized JSON.
+
+The adapter validates names within each source, overlays episode grants onto configured declarations by logical name, validates the effective configuration, and translates each supported entry into the harness-native tool configuration. Duplicate names within configuration or within one seed request are invalid. A seed-request grant with the same name as a configured declaration replaces that declaration for this session; request data has precedence because it carries the processor's task-specific authority.
+
+```mermaid
+flowchart LR
+    Config["Agent-server tool declarations"] --> ValidateConfig["Validate configured names"]
+    Seed["Episode-scoped tool grants"] --> ValidateSeed["Validate request names"]
+    ValidateConfig --> Overlay["Overlay by logical name<br/>seed request wins"]
+    ValidateSeed --> Overlay
+    Overlay --> Effective["Effective session tool configuration"]
+    Effective --> Adapter["Harness-native adapter"]
+```
 
 The agent server configures the agent implementation before activation:
 
 - clients that support per-server HTTP headers receive the MCP endpoint and scoped headers;
 - a header-incapable black-box agent requires an agent-server-owned proxy that adds the scoped headers;
-- an agent integration that supports neither path rejects the session.
+- trusted Python agents may consume a direct-HTTP entry through their typed tool client;
+- failure to establish a required grant rejects session seed, while an unavailable optional grant may be omitted with an observation or diagnostic;
+- an agent integration rejects any required access kind or transport it cannot implement.
 
 The processor does not proxy individual tool calls. The resources server authorizes each call against the seeded session and returns the model-visible result. Tool credentials are never placed in model input or episode output.
+
+Declaration lifetime and connection lifetime are independent. On close, the adapter releases connections and subprocesses created for that agent session regardless of whether their declarations came from server configuration or the seed request. Closing an HTTP client never stops its remote service. A request override shadows a configured declaration only for that session and does not mutate or destroy the configured declaration.
 
 ### Verification and cleanup
 
@@ -732,7 +784,7 @@ The processor passes `SandboxAccess` unchanged while seeding the agent session.
 
 Direct handoff is valid when the provider can serialize and reconnect its sandbox across processes. Its access restrictions are limited to what that provider enforces; the agent server must expose only borrower operations and disconnect without destroying the sandbox.
 
-Providers that cannot reconnect directly, or deployments that require server-enforced borrower authorization, use a sandbox server such as the server proposed in [PR #2085](https://github.com/NVIDIA-NeMo/Gym/pull/2085). `SandboxServerConnection.sandbox_ref` carries that server's sandbox ID, operate lease, endpoint, and workdir. Exact lease, revocation, and provider configuration remain part of the sandbox-server design.
+Providers that cannot reconnect directly, or deployments that require server-enforced borrower authorization, use a sandbox server. `SandboxServerConnection.sandbox_ref` carries that server's sandbox ID, operate lease, endpoint, and workdir. Exact lease, revocation, and provider configuration remain part of the sandbox-server design.
 
 ## Agent-server session
 
@@ -752,7 +804,8 @@ NeMoGymResponseCreateParamsNonStreaming
 The agent still needs episode-scoped state that is not part of the Responses API:
 
 - immutable `EpisodeId`
-- resources-tool access
+- immutable `TaskId`
+- optional episode-scoped tool grants
 - optional borrowed sandbox access
 - agent-local subprocess or fallback-sandbox handles
 - optional `AgentObservationBundle` capture state
@@ -769,7 +822,8 @@ class AgentSeedSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     episode_id: EpisodeId
-    resources_access: ResourcesToolAccess | None = None
+    task_id: TaskId
+    tool_accesses: list[ToolAccess] = Field(default_factory=list)
     sandbox_access: SandboxAccess | None = None
 
 
@@ -793,7 +847,7 @@ class AgentCloseSessionResponse(BaseModel):
     resources_cookies: dict[str, str] | None = None
 ```
 
-`agent_observations` contains optional agent-server observability records collected during the session. It is not task or environment state. `resources_cookies` returns cookie updates produced by direct resources-tool calls so verification and resources cleanup continue the same resources session.
+`agent_observations` contains optional agent-server observability records collected during the session. It is not task or environment state. `resources_cookies` carries updates produced only by direct-HTTP tool access so the processor can merge them into the resources-session cookie jar before verification and close. Resources lifecycle authority remains with the processor.
 
 ### `POST /v1/agent_sessions`
 
@@ -801,10 +855,11 @@ The processor sends `AgentSeedSessionRequest` to the configured `AgentServerRef`
 
 The agent server:
 
-1. Validates the episode, tool access, and sandbox access.
-2. Configures resources tools and either connects the borrowed sandbox or creates its configured fallback sandbox.
-3. Starts agent-local state and, when supported, observation capture correlated with `EpisodeId`.
-4. Returns `AgentSeedSessionResponse`.
+1. Validates episode and task identity, unique grant names, access and transport configuration, and sandbox access.
+2. Overlays episode-scoped tool grants onto its configured declarations by logical name, with the seed request taking precedence.
+3. Creates the harness-native tool configuration and either connects the borrowed sandbox or creates its configured fallback sandbox.
+4. Starts agent-local state and, when supported, observation capture correlated with `EpisodeId`.
+5. Returns `AgentSeedSessionResponse`.
 
 If setup fails, the agent server releases anything it already acquired and returns no usable session.
 
@@ -825,13 +880,13 @@ The second route is selected only when token capture is enabled. The prefix pres
 
 The session ID remains HTTP metadata because it identifies agent-server state rather than Responses API input. Agent implementations read it from the FastAPI `Request` through a base helper; it is not an additional parameter in each `responses()` signature.
 
-The processor does not send its episode request or a legacy `BaseRunRequest` to the agent server. Task content visible to the agent belongs in the Responses body. Episode-scoped tool and sandbox setup belongs in `AgentSeedSessionRequest`. Static harness behavior belongs in agent-server configuration.
+The processor does not send its episode request or a legacy `BaseRunRequest` to the agent server. Task content visible to the agent belongs in the Responses body. Episode-scoped grants and sandbox setup belong in `AgentSeedSessionRequest`. Reusable tool declarations and other static harness behavior belong in agent-server configuration.
 
 The agent server:
 
 - rejects a missing, expired, closed, or mismatched session
 - places the session's immutable `EpisodeId` in Gym's request-scoped correlation context
-- exposes `EpisodeId`, resources-tool access, and optional sandbox access to the agent implementation
+- exposes episode and task identity, the effective tool configuration, and optional sandbox access to the agent implementation
 - performs one complete agent activation
 - returns `NeMoGymResponse`
 
@@ -848,8 +903,9 @@ The processor sends `AgentCloseSessionRequest` in the body.
 The agent server:
 
 1. Stops the activation and agent-owned subprocesses.
-2. Stops an agent-owned fallback sandbox or disconnects from a borrowed sandbox.
-3. Flushes observations and returns `AgentCloseSessionResponse`, including updated resources cookies when direct HTTP tools were used.
+2. Releases session-owned tool clients and stdio processes.
+3. Stops an agent-owned fallback sandbox or disconnects from a borrowed sandbox.
+4. Flushes observations and returns `AgentCloseSessionResponse`.
 
 A successful close means agent-controlled activity has stopped. If close fails, the processor does not begin final verification. Session expiry triggers cleanup while the worker remains alive; provider TTLs bound external objects after worker loss.
 
@@ -1064,7 +1120,8 @@ async def process(
         session = await self.create_agent_session(
             AgentSeedSessionRequest(
                 episode_id=request.episode_id,
-                resources_access=self.resources_access(seed),
+                task_id=request.task.task_id,
+                tool_accesses=self.resolve_tool_accesses(seed),
                 sandbox_access=seed.sandbox_access,
             )
         )
@@ -1407,7 +1464,7 @@ Current `SimpleAgent.run()`:
 4. sends the response to the resources server's `/verify`;
 5. projects the verifier result.
 
-The migrated processor owns steps 1, 2, 4, and 5. The agent server retains the model-and-tool loop. Agent-session seed carries episode context and configures resources tools before the Responses call.
+The migrated processor owns steps 1, 2, 4, and 5. The agent server retains the model-and-tool loop. Agent-session seed carries episode context and task-scoped tool grants before the Responses call; the adapter overlays those grants onto its configured declarations.
 
 ### OpenCode sandbox pairings
 
