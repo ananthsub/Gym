@@ -783,6 +783,14 @@ Direct handoff requires a named provider configuration because an inline provide
 
 The Environment Server passes `SandboxAccess` unchanged while seeding the agent session.
 
+### Model access from sandboxed agents
+
+A sandboxed agent may reach the Gym Model Server directly or through an Agent Server-managed relay. This is a transport choice, not a different episode protocol.
+
+Direct access is valid only when configuration supplies a runtime-reachable, scoped model endpoint. The endpoint carries the same `EpisodeId`, capture path, token-capture policy, and model-call identity as the relayed path. The Agent Server injects the endpoint and its short-lived credential while initializing the session; neither value belongs in task data or persisted agent configuration.
+
+When the sandbox cannot reach an authorized model endpoint, the Agent Server may relay model requests without moving the harness out of the sandbox. Both paths return model responses to the same harness adapter and produce the same response, usage, lineage, and observation contracts. Connectivity is resolved before activation rather than discovered by retrying model traffic through progressively broader network access.
+
 ### Optional sandbox server
 
 Direct handoff is valid when the provider can serialize and reconnect its sandbox across processes. Its access restrictions are limited to what that provider enforces; the Agent Server must expose only borrower operations and disconnect without destroying the sandbox.
