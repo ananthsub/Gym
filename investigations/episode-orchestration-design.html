@@ -75,7 +75,7 @@ const flows = [
       ["Simple Agent Server", "Task/Resources Server", "Resources tool call", "Activation", "The Task/Resources Server authorizes the call against its session."],
       ["Simple Agent Server", "Environment Server", "NeMoGymResponse", "Activation", "The Environment Server validates the agent response."],
       ["Environment Server", "Simple Agent Server", "POST /v1/agent_sessions/close with AgentCloseSessionRequest", "Cleanup", "The Agent Server stops agent-controlled activity and flushes observations."],
-      ["Environment Server", "Task/Resources Server", "POST /verify with ResponsesEpisodeResourcesVerifyRequest", "Verify", "The Task/Resources Server returns BaseVerifyResponse, including benchmark-specific fields."],
+      ["Environment Server", "Task/Resources Server", "POST /verify with ResponsesResourcesVerifyRequest", "Verify", "The Task/Resources Server returns BaseVerifyResponse, including benchmark-specific fields."],
       ["Environment Server", "Task/Resources Server", "POST /close_session with ResourcesCloseSessionRequest", "Cleanup", "The Task/Resources Server releases the objects it owns."],
       ["Environment Server", "Rollout caller", "SingleAgentEpisodeResponse", "Result", "The final response contains the agent response, verification, observations, or failure."]
     ]

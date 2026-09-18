@@ -128,6 +128,8 @@ class SandboxServerRef(BaseModel):
 
 Shared Environment Server contracts and `BaseEnvironmentServer` belong in `nemo_gym`. Concrete Environment Server deployments belong in the top-level `environment_servers/` directory, parallel to `responses_api_agents/`, `resources_servers/`, and `responses_api_models/`.
 
+Contract ownership follows the server boundary. `episode_types.py` contains only the shared episode identity and request/response envelope. `tool_access.py` contains agent-visible tool access, and `sandbox/access.py` contains sandbox connection grants. Agent session request and response models live with their routes in `base_responses_api_agent.py`; resources session request and response models live with their routes in `base_resources_server.py`. Concrete single-agent episode types remain separate because they define one Environment Server protocol rather than either participant API.
+
 ## Base episode contracts and concrete protocols
 
 ### Resources-backed single-agent flow
@@ -561,7 +563,7 @@ These contracts define the environment-server-neutral resources-session boundary
 The Task/Resources Server creates its episode state during seed. The Environment Server does not open an empty remote session before calling seed.
 
 ```python
-class ResourcesSeedSessionRequest(BaseSeedSessionRequest):
+class ResourcesSeedSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     episode_id: EpisodeId
@@ -576,15 +578,15 @@ class MCPServerMetadata(BaseModel):
     headers: dict[str, str]
 
 
-class ResourcesSeedSessionResponse(BaseSeedSessionResponse):
+class ResourcesSeedSessionResponse(BaseModel):
     resources_session_id: str
     resources_tools: MCPServerMetadata | None = None
     sandbox_access: SandboxAccess | None = None
 ```
 
-`ResourcesSeedSessionRequest` extends Gym's existing seed request for the native Environment Server path. It carries episode identity, task identity, and benchmark-specific task data. Each Task/Resources Server validates `task_data` with its benchmark-specific Pydantic model before creating state. The Environment Server posts the same JSON without importing or interpreting that model. The resources session retains the validated task data for verification.
+`ResourcesSeedSessionRequest` is the opt-in native resources-session request. It does not extend the empty compatibility `BaseSeedSessionRequest` used by existing Task/Resources Servers. It carries episode identity, task identity, and benchmark-specific task data. Each migrated Task/Resources Server validates `task_data` with its benchmark-specific Pydantic model before creating state. The Environment Server posts the same JSON without importing or interpreting that model. The resources session retains the validated task data for verification.
 
-The native path uses `ResourcesSeedSessionResponse`, a subtype of Gym's existing `BaseSeedSessionResponse`. It requires `resources_session_id` without adding orchestration fields to every existing resources-server response. Task/Resources Servers that do not participate in this protocol can continue returning their current response types, including an empty `BaseSeedSessionResponse`.
+The native path uses `ResourcesSeedSessionResponse` without adding orchestration fields to every existing resources-server response. Task/Resources Servers that do not participate in this protocol continue returning their current response types, including an empty `BaseSeedSessionResponse`.
 
 The Environment Server retains the resources-server reference, session ID, and private transport state established by seed. It uses that state for verification and cleanup. It passes only agent-visible tool access and optional sandbox access to the Agent Server.
 
@@ -679,7 +681,7 @@ Declaration lifetime and connection lifetime are independent. On close, the adap
 VerificationInputT = TypeVar("VerificationInputT", bound=BaseModel)
 
 
-class BaseEpisodeResourcesVerifyRequest(
+class ResourcesVerifyRequest(
     BaseModel,
     Generic[VerificationInputT],
 ):
@@ -689,16 +691,16 @@ class BaseEpisodeResourcesVerifyRequest(
     verification_input: VerificationInputT
 
 
-class ResponsesEpisodeVerificationInput(BaseModel):
+class ResponsesVerificationInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     responses_create_params: NeMoGymResponseCreateParamsNonStreaming
     response: NeMoGymResponse
 
 
-class ResponsesEpisodeResourcesVerifyRequest(
-    BaseEpisodeResourcesVerifyRequest[
-        ResponsesEpisodeVerificationInput
+class ResponsesResourcesVerifyRequest(
+    ResourcesVerifyRequest[
+        ResponsesVerificationInput
     ],
 ):
     pass
@@ -720,7 +722,7 @@ class ResourcesCloseSessionResponse(BaseModel):
 The Environment Server uses three resources-server operations:
 
 - `POST /seed_session`: validates `task_data`, creates resources-server state, and returns `ResourcesSeedSessionResponse`.
-- `POST /verify`: accepts a concrete `BaseEpisodeResourcesVerifyRequest` specialization in the resources session established by seed and returns the Task/Resources Server's concrete `BaseVerifyResponse` subclass.
+- `POST /verify`: accepts a concrete `ResourcesVerifyRequest` specialization in the resources session established by seed and returns the Task/Resources Server's concrete `BaseVerifyResponse` subclass.
 - `POST /close_session`: accepts `ResourcesCloseSessionRequest`, releases resources-server state, and returns `ResourcesCloseSessionResponse`.
 
 The close request identifies the resources session and repeats the immutable `EpisodeId`. The Task/Resources Server validates both against the identity retained at seed. Session authorization remains in HTTP metadata established during seed.
@@ -1143,9 +1145,9 @@ async def run(
             )
 
         verification = await context.resources_server.verify(
-            ResponsesEpisodeResourcesVerifyRequest(
+            ResponsesResourcesVerifyRequest(
                 episode_id=request.episode_id,
-                verification_input=ResponsesEpisodeVerificationInput(
+                verification_input=ResponsesVerificationInput(
                     responses_create_params=(
                         task_input.responses_create_params
                     ),
