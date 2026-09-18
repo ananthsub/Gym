@@ -1,7 +1,5 @@
 # Episode orchestration milestones
 
-Status: proposed delivery plan, 2026-09-11.
-
 This file defines implementation order and integration gates for [`episode-orchestration-design.md`](episode-orchestration-design.md). The architecture document defines the contracts. This file can change as implementation evidence changes without changing those contracts.
 
 ## Foundation milestones
@@ -20,29 +18,29 @@ Record successful and failed paths for:
 
 The tests must distinguish existing behavior from known defects. Missing-sandbox fallback, double stop, leaked sandboxes, lost workdirs, incomplete SWE-bench patch collection, and Terminal Bench's incorrect stateless reverification declaration are not compatibility requirements.
 
-### 1. Add server types and the processor foundation
+### 1. Add server types and the Environment Server foundation
 
 Implement:
 
-- `episode_processors`, `EpisodeProcessorRef`, and their type and instance config models;
-- config discovery, reference validation, host and port assignment, startup, readiness, status, telemetry, dataset loading, test discovery, and manifest handling for episode processors;
-- migration of dataset ownership from each old agent deployment to its processor deployment;
-- legacy `agent_ref` resolution to migrated processor deployment names;
+- `environment_servers`, `EnvironmentServerRef`, and their type and instance config models;
+- config discovery, reference validation, host and port assignment, startup, readiness, status, telemetry, dataset loading, test discovery, and manifest handling for Environment Servers;
+- migration of dataset ownership from each old agent deployment to its Environment Server deployment;
+- legacy `agent_ref` resolution to migrated Environment Server deployment names;
 - `EpisodeId`, `TaskId`, `BaseEpisodeRequest`, `BaseEpisodeResponse`, and concrete single-agent contracts;
 - agent-session seed and close request and response models;
-- processor-neutral resources-session seed and close models, direct-HTTP/MCP tool access, and typed verification inputs;
-- `BaseEpisodeProcessor` and `EpisodeContext`;
-- `SingleAgentEpisodeProcessor`;
+- environment-server-neutral resources-session seed and close models, direct-HTTP/MCP tool access, and typed verification inputs;
+- `BaseEnvironmentServer.run_request()` as the concrete `/run` lifecycle wrapper and `EpisodeContext` as its cleanup registry;
+- `BaseEnvironmentServer.run(request, context)` as the abstract protocol method and `SingleAgentEnvironmentServer` as the first concrete implementation;
 - resources-session seed, verification, and close APIs;
 - validation, optional admission, episode and cleanup timeouts, cancellation-resistant LIFO cleanup, compatibility translation, and HTTP projection.
 
-This milestone is complete when Gym can spawn and address episode processors, the processor validates before side effects, all registered cleanup runs on every exit path, and the processor reproduces the recorded legacy results.
+This milestone is complete when Gym can spawn and address Environment Servers, the Environment Server validates before side effects, all registered cleanup runs on every exit path, and the Environment Server reproduces the recorded legacy results.
 
-### 2. Extract the Simple Agent server
+### 2. Extract the Simple Agent Server
 
 Keep the existing model-and-tool loop behind `/v1/responses`. Add request-scoped agent-session seed and close endpoints, scoped resources access, model-cookie isolation, trajectory capture, usage accumulation, max-step behavior, and skipped-verification compatibility behavior. Keep the `/v1/responses` request and response models unchanged.
 
-This milestone is complete when `simple_agent` with `example_single_tool_call` runs through `SingleAgentEpisodeProcessor` without changing its caller-visible result.
+This milestone is complete when `simple_agent` with `example_single_tool_call` runs through `SingleAgentEnvironmentServer` without changing its caller-visible result.
 
 ### 3. Establish direct sandbox handoff with Hermes and SWE-bench Pro
 
@@ -54,26 +52,26 @@ This milestone is complete when a real standalone rollout performs several model
 
 ### 4. Extract OpenCode and generalize direct sandbox access
 
-Move OpenCode behavior behind its agent server. Preserve installation or discovery, configuration, CLI execution, transcript export, Responses conversion, diagnostics, and output limits.
+Move OpenCode behavior behind its Agent Server. Preserve installation or discovery, configuration, CLI execution, transcript export, Responses conversion, diagnostics, and output limits.
 
 Implement both sandbox paths:
 
 - OpenCode creates and owns its configured sandbox when resources returns no access.
 - OpenCode connects as a borrower when resources returns `sandbox_access`.
 
-Implement direct reconnection through the same named top-level `sandbox_provider` configuration in the resources and agent-server processes. The resources server serializes the sandbox, the agent server reconnects through that provider, and agent close disconnects without destroying the resources-owned sandbox.
+Implement direct reconnection through the same named top-level `sandbox_provider` configuration in the resources and agent-server processes. The Task/Resources Server serializes the sandbox, the Agent Server reconnects through that provider, and agent close disconnects without destroying the resources-owned sandbox.
 
-Migrate SWE-bench Pro and DeepSWE first. Add Terminal Bench after its Gym resources server is ready. This milestone is complete when each pairing preserves benchmark-specific verification and leaves no owned sandbox running.
+Migrate SWE-bench Pro and DeepSWE first. Add Terminal Bench after its Gym Task/Resources Server is ready. This milestone is complete when each pairing preserves benchmark-specific verification and leaves no owned sandbox running.
 
 ### 5. Migrate remaining agent classes
 
-Migrate Hermes, OpenCode, OpenClaw, Pi, and Codex in that order unless benchmark readiness changes the dependency chain. Inventory agents that use direct `responses()`, remote run-only services, step protocols, or local grading. Add behavior endpoints only where an integration must remain a server. Use separate concrete processors for protocols whose ordering differs from the single-agent flow.
+Migrate Hermes, OpenCode, OpenClaw, Pi, and Codex in that order unless benchmark readiness changes the dependency chain. Inventory agents that use direct `responses()`, remote run-only services, step protocols, or local grading. Add behavior endpoints only where an integration must remain a server. Use separate concrete Environment Servers for protocols whose ordering differs from the single-agent flow.
 
-For GDPVal-AA-V2, first move ordinary deliverable harvesting into resources. Add its cached-judging processor branch and separate preparation operation before retiring legacy control modes.
+For GDPVal-AA-V2, first move ordinary deliverable harvesting into resources. Add its cached-judging Environment Server branch and separate preparation operation before retiring legacy control modes.
 
 ### 6. Add native NeMo RL consumption
 
-Define processor routing, `EpisodeId` creation, terminal model-call attribution, capture finalization, retryable failure transport, masking, and chronological projection for every trainable participant. Retain legacy projection until this path is deployed.
+Define Environment Server routing, `EpisodeId` creation, terminal model-call attribution, capture finalization, retryable failure transport, masking, and chronological projection for every trainable participant. Retain legacy projection until this path is deployed.
 
 ## Follow-on milestones
 
@@ -85,13 +83,13 @@ Add `sandbox_servers` and `SandboxServerRef` when a required provider cannot ser
 
 ### User simulation
 
-Allow repeated `/v1/responses` activations within agent sessions used by a user-simulation processor. The processor owns canonical event ordering, role visibility, termination, and verification input. Add another agent endpoint only if a concrete protocol cannot express an activation through the Responses API.
+Allow repeated `/v1/responses` activations within agent sessions used by a user-simulation Environment Server. The Environment Server owns canonical event ordering, role visibility, termination, and verification input. Add another agent endpoint only if a concrete protocol cannot express an activation through the Responses API.
 
-The first protocol binds `assistant` and `simulated_user` agent servers. It records their outputs separately so simulated-user tokens are context rather than trainable assistant actions.
+The first protocol binds `assistant` and `simulated_user` Agent Servers. It records their outputs separately so simulated-user tokens are context rather than trainable assistant actions.
 
 ### Additional multi-agent protocols
 
-Add a concrete processor only when a use case defines its roles, visibility, ordering or concurrency, termination, verification input, and failure semantics. Do not add a generic participant scheduler without those requirements.
+Add a concrete Environment Server only when a use case defines its roles, visibility, ordering or concurrency, termination, verification input, and failure semantics. Do not add a generic participant scheduler without those requirements.
 
 ### Restart-safe attempts
 
@@ -99,7 +97,7 @@ Back `EpisodeId` with atomic claims, leases, ownership epochs, stale-writer fenc
 
 ### Checkpoint restoration
 
-Coordinate snapshots of processor position, resources state, serializable agent state, runtime references, model continuation state, and ownership epoch. A reconnectable sandbox alone is not a restorable episode.
+Coordinate snapshots of Environment Server position, resources state, serializable agent state, runtime references, model continuation state, and ownership epoch. A reconnectable sandbox alone is not a restorable episode.
 
 ### Retained artifacts
 
@@ -107,9 +105,9 @@ Add retained artifacts only for a concrete caller requirement. Define storage ow
 
 ## Integration gates
 
-1. Gym resolves, spawns, and reports health for `episode_processors`.
+1. Gym resolves, spawns, and reports health for `environment_servers`.
 2. Episode contracts and compatibility characterization are agreed.
-3. `simple_agent` runs through `SingleAgentEpisodeProcessor`.
+3. `simple_agent` runs through `SingleAgentEnvironmentServer`.
 4. Hermes runs with resources-provided OpenSandbox access against SWE-bench Pro.
 5. OpenCode runs with an agent-created sandbox against Reasoning Gym.
 6. OpenCode runs with resources-provided sandbox access against SWE-bench Pro and DeepSWE.
@@ -121,8 +119,8 @@ Add retained artifacts only for a concrete caller requirement. Define storage ow
 ## Required foundation tests
 
 - Malformed native and legacy requests fail before admission.
-- Missing or mistyped processor, agent, resources, and model references fail during configuration validation.
-- Episode-processor deployments receive distinct addresses and readiness checks.
+- Missing or mistyped Environment Server, agent, resources, and model references fail during configuration validation.
+- Environment-server deployments receive distinct addresses and readiness checks.
 - Queue timeout creates no resources session.
 - Scope-entry failure cleans partially acquired state.
 - Seed failure never invokes an agent.

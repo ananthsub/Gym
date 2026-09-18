@@ -1,29 +1,27 @@
 # Episode architecture branch guide
 
-Status: orientation, 2026-09-11.
-
-This branch contains the public Gym architecture RFC and a concrete proposal for episode processing, agent-server sessions, and sandbox ownership.
+This branch contains the public Gym architecture RFC and a concrete proposal for Environment Server orchestration, Agent Server sessions, and sandbox ownership.
 
 ## Core design
 
-1. **Episode processor.** Each top-level `episode_processors` deployment hosts one concrete processor. Shared contracts and `BaseEpisodeProcessor` remain in `nemo_gym`. The processor binds concrete request and response models to the shared `POST /run` endpoint. `BaseEpisodeProcessor.run()` supplies optional worker-local admission, queue and episode timeouts, handled-failure conversion, response validation, identity checks, and bounded cancellation-resistant cleanup through `EpisodeContext`. Its cleanup callbacks are process-local; remote owners still require shutdown cleanup and bounded expiry. Setting `max_concurrent_episodes: null` disables processor-level admission control. A concrete `process()` method owns its protocol and participant order.
-2. **Composed Gym servers.** A processor may use independently deployed agent and resources servers when those boundaries fit its protocol. It may instead run a self-contained external integration such as Tau2. Agent servers retain their existing `POST /v1/responses` request and response models.
+1. **Environment Server.** Each top-level `environment_servers` deployment hosts one concrete Environment Server. Shared contracts and `BaseEnvironmentServer` remain in `nemo_gym`. `BaseEnvironmentServer.run_request()` is the concrete `POST /run` lifecycle wrapper. It supplies optional worker-local admission, queue and episode timeouts, handled-failure conversion, response validation, identity checks, and bounded cancellation-resistant cleanup through `EpisodeContext`. Its cleanup callbacks are process-local; remote owners still require shutdown cleanup and bounded expiry. Setting `max_concurrent_episodes: null` disables Environment-Server-level admission control. Each concrete server implements the abstract `run(request, context)` method to define its episode protocol and participant order.
+2. **Composed Gym servers.** An Environment Server may orchestrate independently deployed Agent Servers and Task/Resources Servers when those boundaries fit its protocol. It may instead run a self-contained external integration such as Tau2. Every participant retains ownership of its state and resources. Agent Servers retain their existing `POST /v1/responses` request and response models.
 
-Gym adds `episode_processors` as a fourth server type and `sandbox_servers` as an optional fifth type. A sandbox server is configured only when provider state cannot be reconstructed across the resources-server and agent-server processes. Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available through compatibility adapters. Native run configuration maps tasksets to `EpisodeProcessorRef` values before rollout planning; processor routing is not stored in task data or the episode request.
+Gym adds `environment_servers` as a fourth server type and `sandbox_servers` as an optional fifth type. A sandbox server is configured only when provider state cannot be reconstructed across the Task/Resources Server and Agent Server processes. Existing JSONL, `task_source`, `agent_ref`, `/run`, cookie affinity, and NeMo RL result behavior remain available through compatibility adapters. Native run configuration maps tasksets to `EnvironmentServerRef` values before rollout planning; Environment Server routing is not stored in task data or the episode request.
 
 ## Representative deployment paths
 
 1. A Gym-native `simple_agent` server uses the existing model server and scoped resources tools. It supports no sandbox.
-2. OpenCode paired with `reasoning_gym` receives no sandbox access, so the OpenCode agent server creates and owns its configured sandbox.
+2. OpenCode paired with `reasoning_gym` receives no sandbox access, so the OpenCode Agent Server creates and owns its configured sandbox.
 3. OpenCode paired with SWE-bench or Terminal Bench receives `sandbox_access` because verification requires the CLI to modify the same task sandbox. Resources retains ownership and destroys that sandbox after verification.
 4. Terminus-2 keeps its Python loop and Harbor dependencies in its agent-server virtual environment. Its terminal commands use resources-provided `SandboxAccess` when present and otherwise use its configured local workspace.
-5. Tau2 runs as a self-contained episode processor that calls policy and simulated-user model servers without a Gym agent or resources server.
+5. Tau2 runs as a self-contained Environment Server that calls policy and simulated-user model servers without a Gym agent or Task/Resources Server.
 
-The processor config contains server references and protocol limits. The processor implementation defines its concrete episode input and result models. Every `episode_input` field comes from the materialized task or source dataset; processor and server configuration is never copied into task data. Agent-specific configuration contains behavior settings and any sandbox the agent may create when resources returns no access. Most users select a shipped resources-and-agent preset; the expanded configuration is for authors, operators, and reviewers.
+The Environment Server config contains server references and protocol limits. The Environment Server implementation defines its concrete task input and episode result models. Every `task_input` field comes from the materialized task or source dataset; environment-server and other server configuration is never copied into task data. Agent-specific configuration contains behavior settings and any sandbox the agent may create when resources returns no access. Most users select a shipped resources-and-agent preset; the expanded configuration is for authors, operators, and reviewers.
 
 The proposal also contains complete step-by-step episode flows. Its HTML companion provides interactive walkthroughs for the representative deployments and the optional sandbox-server path.
 
-When used, the resources server owns benchmark state, tools, verification, and task sandboxes. Processor-neutral seed receives `EpisodeId`, `TaskId`, and `task_data`. The typed verification input carries protocol-specific output such as the original Responses input and agent response. Direct resources-tool access carries the resolved base URL and resources-session cookies; MCP access carries server metadata. `sandbox_access` exposes only a sandbox that an agent must operate; it does not list every object owned by the resources server or say where agent-server code runs. Resources cannot implicitly inspect a separate sandbox created by the agent.
+When used, the Task/Resources Server owns benchmark state, tools, verification, and task sandboxes. Environment-server-neutral seed receives `EpisodeId`, `TaskId`, and `task_data`. The typed verification input carries protocol-specific output such as the original Responses input and agent response. Direct resources-tool access carries the resolved base URL and resources-session cookies; MCP access carries server metadata. `sandbox_access` exposes only a sandbox that an agent must operate; it does not list every object owned by the Task/Resources Server or say where agent-server code runs. Resources cannot implicitly inspect a separate sandbox created by the agent.
 
 Agent sessions are process-local. The initial deployment uses one Uvicorn worker per agent-server replica, admits several asynchronous sessions in that worker, and scales through replicas or NeMo RL shards. A future routed pool must keep create, `/v1/responses`, and close on the replica that owns the session.
 
@@ -31,23 +29,23 @@ Agent sessions are process-local. The initial deployment uses one Uvicorn worker
 
 - `EpisodeId`, minimal generic `BaseEpisodeRequest` and `BaseEpisodeResponse` contracts, and protocol-neutral handled failures;
 - concrete single-agent and NeMo-Sim episode inputs, results, requests, and responses;
-- taskset-to-processor routing and processor-specific evaluation and training projection;
-- the `episode_processors` server category, `EpisodeProcessorRef`, and the single-agent protocol;
+- taskset-to-environment-server routing and environment-server-specific evaluation and training projection;
+- the `environment_servers` server category, `EnvironmentServerRef`, and the single-agent protocol;
 - the unchanged `/v1/responses` behavior endpoint;
 - `POST /v1/agent_sessions`, behavior invocation, and `POST /v1/agent_sessions/close`;
-- processor-neutral resources-session seed and close contracts plus typed verification inputs;
-- agent-server bindings validated by each concrete processor;
+- environment-server-neutral resources-session seed and close contracts plus typed verification inputs;
+- agent-server bindings validated by each concrete Environment Server;
 - the optional `sandbox_servers` category, `SandboxServerRef`, resources-provided sandbox access, agent-created sandboxes, direct connections, borrower tokens, and borrower enforcement;
 - typed Simple Agent, OpenCode, and Terminus-2 agent-server configuration with four deployment examples;
 - exact current-to-target behavior mappings for OpenCode and `simple_agent`;
 - discriminated direct-HTTP/MCP resources access, sandbox access, `EpisodeId` checks, attempt-qualified Responses routes, and bounded cleanup;
-- legacy JSONL, `agent_ref`, `/run`, HTTP behavior, and processor-specific NeMo RL projection;
+- legacy JSONL, `agent_ref`, `/run`, HTTP behavior, and environment-server-specific NeMo RL projection;
 - horizontal agent-server scaling through one-worker replicas and session-affine routed pools.
 
 ## Capabilities added after the foundations
 
 1. User simulation adds repeated `/v1/responses` activations, `assistant` and `simulated_user` roles, role visibility, and chronological trainable-role attribution.
-2. Other multi-agent processors add protocol-specific ordering, concurrency, and termination.
+2. Other multi-agent Environment Servers add protocol-specific ordering, concurrency, and termination.
 3. Restart-safe attempts add shared claims, leases, ownership epochs, and stale-writer fencing.
 4. Checkpoint restoration adds coordinated snapshots across every state owner.
 5. Caller-retained artifacts add durable storage and lifecycle policy.
@@ -63,13 +61,12 @@ Implementation order, workstreams, integration gates, and required tests are mai
 1. `episode-orchestration-design.md` for the normative proposal and worked episode flows.
 2. `episode-orchestration-milestones.md` for implementation order and gates.
 3. `episode-orchestration-design.html` for the interactive diagram companion.
-4. `rfcs/gym-architecture.md` for the public RFC being reviewed.
+4. `rfcs/gym-architecture.md` for the public architecture RFC.
 
 ## File map
 
-- `rfcs/gym-architecture.md`: sanitized public RFC snapshot at revision `6c57b803`.
+- `rfcs/gym-architecture.md`: public architecture RFC.
 - `investigations/episode-orchestration-design.md`: normative architecture proposal.
 - `investigations/episode-orchestration-milestones.md`: implementation sequence and integration gates.
 - `investigations/episode-orchestration-design.html`: standalone interactive render.
 - `investigations/episode-orchestration-overview.md`: this guide.
-- `investigations/episode-orchestration-design-review.md`: audit of the proposal against Gym and NeMo RL upstream main, with the change needed for each finding.

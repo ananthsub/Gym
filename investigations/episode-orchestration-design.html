@@ -54,7 +54,7 @@ article h3 { margin-top:6px; font-size:22px; }
 <body>
 <main>
 <h1>Gym episode orchestration walkthroughs</h1>
-<p class="intro">These interactive flows show how an episode processor composes Gym services or runs a self-contained integration. Each <code>POST /run</code> carries one <code>EpisodeId</code>. See the <a href="episode-orchestration-design.md">design</a> for the contracts and the <a href="episode-orchestration-milestones.md">milestones</a> for delivery order.</p>
+<p class="intro">These interactive flows show how an Environment Server orchestrates Agent Servers and Task/Resources Servers or runs a self-contained integration. Each <code>POST /run</code> carries one <code>EpisodeId</code>. The framework-owned <code>run_request()</code> lifecycle wrapper invokes the concrete server's <code>run(request, context)</code> protocol. See the <a href="episode-orchestration-design.md">design</a> for the contracts and the <a href="episode-orchestration-milestones.md">milestones</a> for delivery order.</p>
 <nav class="flow-tabs" aria-label="Episode flows"></nav>
 <div id="walkthroughs"></div>
 </main>
@@ -64,122 +64,122 @@ const flows = [
     id: "simple",
     title: "Simple Agent",
     summary: "A resources-backed episode with tools and no sandbox.",
-    actors: ["Rollout caller", "Episode processor", "Resources server", "Simple Agent server", "Model server"],
+    actors: ["Rollout caller", "Environment Server", "Task/Resources Server", "Simple Agent Server", "Model server"],
     steps: [
-      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol and final result."],
-      ["Episode processor", "Resources server", "POST /seed_session with EpisodeSeedRequest", "Seed", "The resources server creates and owns the resources session."],
-      ["Resources server", "Episode processor", "EpisodeSeedResponse with resources tools", "Seed", "The processor transports tool access but does not proxy tool calls."],
-      ["Episode processor", "Simple Agent server", "POST /v1/agent_sessions with AgentSessionCreateRequest", "Agent session", "The agent server creates and owns its agent session."],
-      ["Episode processor", "Simple Agent server", "POST /v1/responses with agent session ID", "Activation", "The Responses API body remains unchanged; the session ID is carried in an HTTP header."],
-      ["Simple Agent server", "Model server", "Model request", "Activation", "The agent server owns the model-and-tool loop."],
-      ["Simple Agent server", "Resources server", "Resources tool call", "Activation", "The resources server authorizes the call against its session."],
-      ["Simple Agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the agent response."],
-      ["Episode processor", "Simple Agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server stops agent-controlled activity and flushes observations."],
-      ["Episode processor", "Resources server", "POST /verify with EpisodeVerifyRequest", "Verify", "The resources server returns EpisodeVerification, including verifier_data."],
-      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server releases the objects it owns."],
-      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The final response contains the agent response, verification, observations, or failure."]
+      ["Rollout caller", "Environment Server", "POST /run with SingleAgentEpisodeRequest", "Admission", "The Environment Server owns the episode protocol and final result."],
+      ["Environment Server", "Task/Resources Server", "POST /seed_session with ResourcesSeedSessionRequest", "Seed", "The Task/Resources Server creates and owns the resources session."],
+      ["Task/Resources Server", "Environment Server", "ResourcesSeedSessionResponse with resources tools", "Seed", "The Environment Server transports tool access but does not proxy tool calls."],
+      ["Environment Server", "Simple Agent Server", "POST /v1/agent_sessions with AgentSeedSessionRequest", "Agent session", "The Agent Server creates and owns its agent session."],
+      ["Environment Server", "Simple Agent Server", "POST /v1/responses with agent session ID", "Activation", "The Responses API body remains unchanged; the session ID is carried in an HTTP header."],
+      ["Simple Agent Server", "Model server", "Model request", "Activation", "The Agent Server owns the model-and-tool loop."],
+      ["Simple Agent Server", "Task/Resources Server", "Resources tool call", "Activation", "The Task/Resources Server authorizes the call against its session."],
+      ["Simple Agent Server", "Environment Server", "NeMoGymResponse", "Activation", "The Environment Server validates the agent response."],
+      ["Environment Server", "Simple Agent Server", "POST /v1/agent_sessions/close with AgentCloseSessionRequest", "Cleanup", "The Agent Server stops agent-controlled activity and flushes observations."],
+      ["Environment Server", "Task/Resources Server", "POST /verify with ResponsesEpisodeResourcesVerifyRequest", "Verify", "The Task/Resources Server returns BaseVerifyResponse, including benchmark-specific fields."],
+      ["Environment Server", "Task/Resources Server", "POST /close_session with ResourcesCloseSessionRequest", "Cleanup", "The Task/Resources Server releases the objects it owns."],
+      ["Environment Server", "Rollout caller", "SingleAgentEpisodeResponse", "Result", "The final response contains the agent response, verification, observations, or failure."]
     ]
   },
   {
     id: "opencode-owned",
     title: "OpenCode · agent-owned sandbox",
-    summary: "The resources server supplies no task sandbox, so the OpenCode agent server creates a fallback sandbox.",
-    actors: ["Rollout caller", "Episode processor", "Resources server", "OpenCode agent server", "Agent-owned sandbox", "Model server"],
+    summary: "The Task/Resources Server supplies no task sandbox, so the OpenCode Agent Server creates a fallback sandbox.",
+    actors: ["Rollout caller", "Environment Server", "Task/Resources Server", "OpenCode Agent Server", "Agent-owned sandbox", "Model server"],
     steps: [
-      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol."],
-      ["Episode processor", "Resources server", "POST /seed_session", "Seed", "The resources server creates its session and returns no SandboxAccess."],
-      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions without SandboxAccess", "Agent session", "The agent server follows its fallback-sandbox configuration."],
-      ["OpenCode agent server", "Agent-owned sandbox", "Create fallback sandbox", "Agent session", "The agent server owns this sandbox."],
-      ["Episode processor", "OpenCode agent server", "POST /v1/responses", "Activation", "The processor starts one complete OpenCode activation."],
-      ["OpenCode agent server", "Agent-owned sandbox", "Run OpenCode", "Activation", "Commands execute in the agent-owned sandbox."],
-      ["OpenCode agent server", "Model server", "Model requests", "Activation", "The OpenCode integration calls the configured model server."],
-      ["OpenCode agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the response."],
-      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server destroys its fallback sandbox."],
-      ["Episode processor", "Resources server", "POST /verify", "Verify", "Verification can use the response and resources-server-owned state, but not the destroyed fallback sandbox."],
-      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server releases its session."],
-      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The processor publishes the final episode result."]
+      ["Rollout caller", "Environment Server", "POST /run with SingleAgentEpisodeRequest", "Admission", "The Environment Server owns the episode protocol."],
+      ["Environment Server", "Task/Resources Server", "POST /seed_session", "Seed", "The Task/Resources Server creates its session and returns no SandboxAccess."],
+      ["Environment Server", "OpenCode Agent Server", "POST /v1/agent_sessions without SandboxAccess", "Agent session", "The Agent Server follows its fallback-sandbox configuration."],
+      ["OpenCode Agent Server", "Agent-owned sandbox", "Create fallback sandbox", "Agent session", "The Agent Server owns this sandbox."],
+      ["Environment Server", "OpenCode Agent Server", "POST /v1/responses", "Activation", "The Environment Server starts one complete OpenCode activation."],
+      ["OpenCode Agent Server", "Agent-owned sandbox", "Run OpenCode", "Activation", "Commands execute in the agent-owned sandbox."],
+      ["OpenCode Agent Server", "Model server", "Model requests", "Activation", "The OpenCode integration calls the configured model server."],
+      ["OpenCode Agent Server", "Environment Server", "NeMoGymResponse", "Activation", "The Environment Server validates the response."],
+      ["Environment Server", "OpenCode Agent Server", "POST /v1/agent_sessions/close with AgentCloseSessionRequest", "Cleanup", "The Agent Server destroys its fallback sandbox."],
+      ["Environment Server", "Task/Resources Server", "POST /verify", "Verify", "Verification can use the response and state owned by the Task/Resources Server, but not the destroyed fallback sandbox."],
+      ["Environment Server", "Task/Resources Server", "POST /close_session with ResourcesCloseSessionRequest", "Cleanup", "The Task/Resources Server releases its session."],
+      ["Environment Server", "Rollout caller", "SingleAgentEpisodeResponse", "Result", "The Environment Server publishes the final episode result."]
     ]
   },
   {
     id: "opencode-borrowed",
     title: "OpenCode · direct sandbox access",
-    summary: "The resources server owns the task sandbox and returns a direct connection using a shared named provider configuration.",
-    actors: ["Rollout caller", "Episode processor", "Resources server", "OpenCode agent server", "Task sandbox", "Model server", "Verifier sandbox"],
+    summary: "The Task/Resources Server owns the task sandbox and returns a direct connection using a shared named provider configuration.",
+    actors: ["Rollout caller", "Environment Server", "Task/Resources Server", "OpenCode Agent Server", "Task sandbox", "Model server", "Verifier sandbox"],
     steps: [
-      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol."],
-      ["Episode processor", "Resources server", "POST /seed_session", "Seed", "The resources server begins the task lifecycle."],
-      ["Resources server", "Task sandbox", "Create and seed task sandbox", "Seed", "The resources server owns the task sandbox."],
-      ["Resources server", "Episode processor", "EpisodeSeedResponse with DirectSandboxConnection", "Seed", "The connection carries the named sandbox_provider and serialized descriptor."],
-      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions with SandboxAccess", "Agent session", "The processor passes SandboxAccess unchanged."],
-      ["OpenCode agent server", "Task sandbox", "Resolve provider and connect as borrower", "Agent session", "The agent resolves the same top-level provider block and receives only the borrower interface."],
-      ["Episode processor", "OpenCode agent server", "POST /v1/responses", "Activation", "The processor starts one OpenCode activation."],
-      ["OpenCode agent server", "Task sandbox", "Run OpenCode", "Activation", "OpenCode modifies the task sandbox through borrower access."],
-      ["OpenCode agent server", "Model server", "Model requests", "Activation", "The agent server calls the configured model server."],
-      ["OpenCode agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the response."],
-      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server disconnects but does not destroy the task sandbox."],
-      ["Episode processor", "Resources server", "POST /verify", "Verify", "Verification runs only after agent-controlled activity has stopped."],
-      ["Resources server", "Verifier sandbox", "Optional benchmark verification", "Verify", "Any verifier sandbox remains private to the resources server."],
-      ["Resources server", "Episode processor", "EpisodeVerification", "Verify", "Common reward fields are typed; additional validated fields are in verifier_data."],
-      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server destroys the task sandbox and releases its session."],
-      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The processor publishes the full result."]
+      ["Rollout caller", "Environment Server", "POST /run with SingleAgentEpisodeRequest", "Admission", "The Environment Server owns the episode protocol."],
+      ["Environment Server", "Task/Resources Server", "POST /seed_session", "Seed", "The Task/Resources Server begins the task lifecycle."],
+      ["Task/Resources Server", "Task sandbox", "Create and seed task sandbox", "Seed", "The Task/Resources Server owns the task sandbox."],
+      ["Task/Resources Server", "Environment Server", "ResourcesSeedSessionResponse with DirectSandboxConnection", "Seed", "The connection carries the named sandbox_provider and serialized descriptor."],
+      ["Environment Server", "OpenCode Agent Server", "POST /v1/agent_sessions with SandboxAccess", "Agent session", "The Environment Server passes SandboxAccess unchanged."],
+      ["OpenCode Agent Server", "Task sandbox", "Resolve provider and connect as borrower", "Agent session", "The agent resolves the same top-level provider block and receives only the borrower interface."],
+      ["Environment Server", "OpenCode Agent Server", "POST /v1/responses", "Activation", "The Environment Server starts one OpenCode activation."],
+      ["OpenCode Agent Server", "Task sandbox", "Run OpenCode", "Activation", "OpenCode modifies the task sandbox through borrower access."],
+      ["OpenCode Agent Server", "Model server", "Model requests", "Activation", "The Agent Server calls the configured model server."],
+      ["OpenCode Agent Server", "Environment Server", "NeMoGymResponse", "Activation", "The Environment Server validates the response."],
+      ["Environment Server", "OpenCode Agent Server", "POST /v1/agent_sessions/close with AgentCloseSessionRequest", "Cleanup", "The Agent Server disconnects but does not destroy the task sandbox."],
+      ["Environment Server", "Task/Resources Server", "POST /verify", "Verify", "Verification runs only after agent-controlled activity has stopped."],
+      ["Task/Resources Server", "Verifier sandbox", "Optional benchmark verification", "Verify", "Any verifier sandbox remains private to the Task/Resources Server."],
+      ["Task/Resources Server", "Environment Server", "BaseVerifyResponse", "Verify", "Common reward fields are typed; benchmark-specific fields remain attached."],
+      ["Environment Server", "Task/Resources Server", "POST /close_session with ResourcesCloseSessionRequest", "Cleanup", "The Task/Resources Server destroys the task sandbox and releases its session."],
+      ["Environment Server", "Rollout caller", "SingleAgentEpisodeResponse", "Result", "The Environment Server publishes the full result."]
     ]
   },
   {
     id: "opencode-sandbox-server",
     title: "OpenCode · sandbox server",
     summary: "A sandbox server holds provider state when direct cross-process handoff is unavailable.",
-    actors: ["Rollout caller", "Episode processor", "Resources server", "Sandbox server", "OpenCode agent server", "Task sandbox"],
+    actors: ["Rollout caller", "Environment Server", "Task/Resources Server", "Sandbox server", "OpenCode Agent Server", "Task sandbox"],
     steps: [
-      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol."],
-      ["Episode processor", "Resources server", "POST /seed_session", "Seed", "The resources server begins the task lifecycle."],
-      ["Resources server", "Sandbox server", "Create task sandbox", "Seed", "The resources server remains the task-sandbox owner."],
+      ["Rollout caller", "Environment Server", "POST /run with SingleAgentEpisodeRequest", "Admission", "The Environment Server owns the episode protocol."],
+      ["Environment Server", "Task/Resources Server", "POST /seed_session", "Seed", "The Task/Resources Server begins the task lifecycle."],
+      ["Task/Resources Server", "Sandbox server", "Create task sandbox", "Seed", "The Task/Resources Server remains the task-sandbox owner."],
       ["Sandbox server", "Task sandbox", "Allocate provider sandbox", "Seed", "The sandbox server retains process-bound provider state."],
-      ["Resources server", "Episode processor", "EpisodeSeedResponse with SandboxServerConnection", "Seed", "The connection carries the sandbox server's operate-scoped SandboxRef."],
-      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions with SandboxAccess", "Agent session", "The processor transports access without using it."],
-      ["OpenCode agent server", "Sandbox server", "Connect as borrower", "Agent session", "The sandbox server enforces borrower restrictions."],
-      ["Episode processor", "OpenCode agent server", "POST /v1/responses", "Activation", "The processor starts one OpenCode activation."],
-      ["OpenCode agent server", "Sandbox server", "Execute OpenCode operations", "Activation", "Operations use the restricted sandbox connection."],
+      ["Task/Resources Server", "Environment Server", "ResourcesSeedSessionResponse with SandboxServerConnection", "Seed", "The connection carries the sandbox server's operate-scoped SandboxRef."],
+      ["Environment Server", "OpenCode Agent Server", "POST /v1/agent_sessions with SandboxAccess", "Agent session", "The Environment Server transports access without using it."],
+      ["OpenCode Agent Server", "Sandbox server", "Connect as borrower", "Agent session", "The sandbox server enforces borrower restrictions."],
+      ["Environment Server", "OpenCode Agent Server", "POST /v1/responses", "Activation", "The Environment Server starts one OpenCode activation."],
+      ["OpenCode Agent Server", "Sandbox server", "Execute OpenCode operations", "Activation", "Operations use the restricted sandbox connection."],
       ["Sandbox server", "Task sandbox", "Operate provider sandbox", "Activation", "The live provider handle remains in the sandbox server."],
-      ["OpenCode agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the response."],
-      ["Episode processor", "OpenCode agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server disconnects its borrower client."],
-      ["Episode processor", "Resources server", "POST /verify", "Verify", "The resources server retains access through verification."],
-      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server requests destruction of its task sandbox."],
-      ["Resources server", "Sandbox server", "Destroy task sandbox", "Cleanup", "Only the owner can request destruction."],
-      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The processor publishes the final result."]
+      ["OpenCode Agent Server", "Environment Server", "NeMoGymResponse", "Activation", "The Environment Server validates the response."],
+      ["Environment Server", "OpenCode Agent Server", "POST /v1/agent_sessions/close with AgentCloseSessionRequest", "Cleanup", "The Agent Server disconnects its borrower client."],
+      ["Environment Server", "Task/Resources Server", "POST /verify", "Verify", "The Task/Resources Server retains access through verification."],
+      ["Environment Server", "Task/Resources Server", "POST /close_session with ResourcesCloseSessionRequest", "Cleanup", "The Task/Resources Server requests destruction of its task sandbox."],
+      ["Task/Resources Server", "Sandbox server", "Destroy task sandbox", "Cleanup", "Only the owner can request destruction."],
+      ["Environment Server", "Rollout caller", "SingleAgentEpisodeResponse", "Result", "The Environment Server publishes the final result."]
     ]
   },
   {
     id: "terminus",
     title: "Terminus-2",
-    summary: "The Terminus-2 Python loop stays in its agent server; commands run locally or in a borrowed task sandbox.",
-    actors: ["Rollout caller", "Episode processor", "Resources server", "Terminus-2 agent server", "Local workspace or task sandbox", "Model server"],
+    summary: "The Terminus-2 Python loop stays in its Agent Server; commands run locally or in a borrowed task sandbox.",
+    actors: ["Rollout caller", "Environment Server", "Task/Resources Server", "Terminus-2 Agent Server", "Local workspace or task sandbox", "Model server"],
     steps: [
-      ["Rollout caller", "Episode processor", "POST /run with EpisodeRequest", "Admission", "The processor owns the episode protocol."],
-      ["Episode processor", "Resources server", "POST /seed_session", "Seed", "SandboxAccess may be present or absent."],
-      ["Episode processor", "Terminus-2 agent server", "POST /v1/agent_sessions", "Agent session", "The agent server configures local execution or connects borrowed access."],
-      ["Terminus-2 agent server", "Local workspace or task sandbox", "Select command target", "Agent session", "The component that created a sandbox retains ownership."],
-      ["Episode processor", "Terminus-2 agent server", "POST /v1/responses", "Activation", "The Responses API starts one Terminus-2 activation."],
-      ["Terminus-2 agent server", "Model server", "Model requests", "Activation", "The Python loop calls the configured model server."],
-      ["Terminus-2 agent server", "Local workspace or task sandbox", "Execute terminal commands", "Activation", "Commands use the execution access selected at session creation."],
-      ["Terminus-2 agent server", "Episode processor", "NeMoGymResponse", "Activation", "The processor validates the response."],
-      ["Episode processor", "Terminus-2 agent server", "POST /v1/agent_sessions/close with AgentSessionCloseRequest", "Cleanup", "The agent server stops owned activity and disconnects borrowed access."],
-      ["Episode processor", "Resources server", "POST /verify", "Verify", "The resources server returns EpisodeVerification."],
-      ["Episode processor", "Resources server", "POST /close_session with ResourcesSessionCloseRequest", "Cleanup", "The resources server releases its session and owned objects."],
-      ["Episode processor", "Rollout caller", "EpisodeResponse", "Result", "The processor publishes the final result."]
+      ["Rollout caller", "Environment Server", "POST /run with SingleAgentEpisodeRequest", "Admission", "The Environment Server owns the episode protocol."],
+      ["Environment Server", "Task/Resources Server", "POST /seed_session", "Seed", "SandboxAccess may be present or absent."],
+      ["Environment Server", "Terminus-2 Agent Server", "POST /v1/agent_sessions", "Agent session", "The Agent Server configures local execution or connects borrowed access."],
+      ["Terminus-2 Agent Server", "Local workspace or task sandbox", "Select command target", "Agent session", "The component that created a sandbox retains ownership."],
+      ["Environment Server", "Terminus-2 Agent Server", "POST /v1/responses", "Activation", "The Responses API starts one Terminus-2 activation."],
+      ["Terminus-2 Agent Server", "Model server", "Model requests", "Activation", "The Python loop calls the configured model server."],
+      ["Terminus-2 Agent Server", "Local workspace or task sandbox", "Execute terminal commands", "Activation", "Commands use the execution access selected at session creation."],
+      ["Terminus-2 Agent Server", "Environment Server", "NeMoGymResponse", "Activation", "The Environment Server validates the response."],
+      ["Environment Server", "Terminus-2 Agent Server", "POST /v1/agent_sessions/close with AgentCloseSessionRequest", "Cleanup", "The Agent Server stops owned activity and disconnects borrowed access."],
+      ["Environment Server", "Task/Resources Server", "POST /verify", "Verify", "The Task/Resources Server returns BaseVerifyResponse."],
+      ["Environment Server", "Task/Resources Server", "POST /close_session with ResourcesCloseSessionRequest", "Cleanup", "The Task/Resources Server releases its session and owned objects."],
+      ["Environment Server", "Rollout caller", "SingleAgentEpisodeResponse", "Result", "The Environment Server publishes the final result."]
     ]
   },
   {
     id: "tau2",
-    title: "Tau2 · self-contained processor",
-    summary: "Tau2 runs its interaction and verification inside the episode processor without an agent or resources server.",
-    actors: ["Rollout caller", "Tau2 episode processor", "Policy model server", "User model server"],
+    title: "Tau2 · self-contained Environment Server",
+    summary: "Tau2 runs its interaction and verification inside the Environment Server without an agent or Task/Resources Server.",
+    actors: ["Rollout caller", "Tau2 Environment Server", "Policy model server", "User model server"],
     steps: [
-      ["Rollout caller", "Tau2 episode processor", "POST /run with EpisodeRequest", "Admission", "The Tau2 processor owns the complete external protocol."],
-      ["Tau2 episode processor", "Tau2 episode processor", "Validate Tau2 task_data", "Protocol", "The concrete processor validates its protocol-specific input."],
-      ["Tau2 episode processor", "Policy model server", "Policy model requests", "Protocol", "Tau2 schedules the policy participant."],
-      ["Tau2 episode processor", "User model server", "Simulated-user model requests", "Protocol", "Tau2 schedules the simulated user."],
-      ["Tau2 episode processor", "Tau2 episode processor", "Produce NeMoGymResponse and EpisodeVerification", "Verify", "Tau2 converts its typed result to the common episode contract."],
-      ["Tau2 episode processor", "Rollout caller", "EpisodeResponse", "Result", "No agent-server or resources-server session is required."]
+      ["Rollout caller", "Tau2 Environment Server", "POST /run with Tau2EpisodeRequest", "Admission", "The Tau2 Environment Server owns the complete external protocol."],
+      ["Tau2 Environment Server", "Tau2 Environment Server", "Validate Tau2 task_data", "Protocol", "The concrete Environment Server validates its protocol-specific input."],
+      ["Tau2 Environment Server", "Policy model server", "Policy model requests", "Protocol", "Tau2 schedules the policy participant."],
+      ["Tau2 Environment Server", "User model server", "Simulated-user model requests", "Protocol", "Tau2 schedules the simulated user."],
+      ["Tau2 Environment Server", "Tau2 Environment Server", "Produce Tau2 episode result", "Verify", "Tau2 converts its typed result to the common episode contract."],
+      ["Tau2 Environment Server", "Rollout caller", "Tau2EpisodeResponse", "Result", "No Agent Server or Task/Resources Server session is required."]
     ]
   }
 ];
@@ -203,7 +203,7 @@ function panelMarkup(flow) {
           <div class="active-route"><strong data-detail="source"></strong><span>→</span><strong data-detail="target"></strong></div>
           <article><span class="phase" data-detail="phase"></span><h3 data-detail="action"></h3><div class="detail"><label>Responsibility</label><p data-detail="detail"></p></div></article>
         </div>
-      </div>
+</div>
     </section>`;
 }
 
