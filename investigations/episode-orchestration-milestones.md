@@ -1,147 +1,279 @@
 # Episode orchestration milestones
 
-This file defines implementation order and integration gates for [`episode-orchestration-design.md`](episode-orchestration-design.md). The architecture document defines the contracts. This file can change as implementation evidence changes without changing those contracts.
+This file tracks delivery status and remaining integration gates for [`episode-orchestration-design.md`](episode-orchestration-design.md). Status reflects the Environment Server PR stack ending at `ananthsub/episode-orchestration-prototype` as inspected on 2026-09-28.
+
+Status meanings:
+
+- **Implemented:** the prototype contains the end-to-end contract and implementation.
+- **Partial:** a meaningful slice exists, but the milestone still has a named gate.
+- **Deferred:** the design is retained for future work and is not part of the shipped foundation.
 
 ## Foundation milestones
 
-### 0. Record current behavior
+### 0. Record current behavior — Partial
 
-Add characterization tests before moving ownership. Cover `RolloutCollectionHelper`, current `/run` request and response bodies, the simple-agent HTTP self-call, cookie updates, resources calls, result projection, token capture, NeMo RL consumption, and aggregate metrics.
+Focused tests cover Environment Server routing, native request and result projection, failure sidecars, resources and agent sessions, cleanup, direct access models, aggregation, Simple Agent, Hermes, and SWE-bench Pro.
 
-Record successful and failed paths for:
+Remaining gates:
 
-- `simple_agent` with `example_single_tool_call`;
-- OpenCode with SWE-bench;
-- OpenCode with DeepSWE;
-- OpenCode with SWE-bench Pro;
-- OpenCode with Terminal Bench 2.1.
+- preserve behavior for additional legacy agents before migrating them;
+- keep explicit regression coverage for token capture, model-call capture, masking, resume attempts, and aggregate labels across native and compatibility paths;
+- distinguish historical behavior from known ownership and cleanup defects rather than freezing those defects.
 
-The tests must distinguish existing behavior from known defects. Missing-sandbox fallback, double stop, leaked sandboxes, lost workdirs, incomplete SWE-bench patch collection, and Terminal Bench's incorrect stateless reverification declaration are not compatibility requirements.
+### 1. Add the Environment Server foundation — Implemented
 
-### 1. Add server types and the Environment Server foundation
+Implemented:
 
-Implement:
+- `environment_servers` config and references;
+- discovery, startup, addressing, readiness, status, telemetry, and test inclusion;
+- mandatory Agent Server frontends;
+- `EpisodeId`, `TaskId`, `MaterializedTask`, and generic episode request and response envelopes;
+- `BaseEnvironmentServer.run_request()`;
+- `CleanupContext` and idempotent `CleanupHandle`;
+- optional admission, queue timeout, episode deadline, separate cleanup timeout, cancellation shielding, and response identity checks;
+- native Environment Server result and failure projection;
+- Environment Server aggregation routing.
 
-- `environment_servers`, `EnvironmentServerRef`, and their type and instance config models;
-- config discovery, reference validation, host and port assignment, startup, readiness, status, telemetry, dataset loading, test discovery, and manifest handling for Environment Servers;
-- migration of dataset ownership from each old agent deployment to its Environment Server deployment;
-- legacy `agent_ref` resolution to migrated Environment Server deployment names;
-- `EpisodeId`, `TaskId`, `BaseEpisodeRequest`, `BaseEpisodeResponse`, and concrete single-agent contracts;
-- agent-session seed and close request and response models;
-- environment-server-neutral resources-session seed and close models, direct-HTTP/MCP tool access, and typed verification inputs;
-- `BaseEnvironmentServer.run_request()` as the concrete `/run` lifecycle wrapper and `EpisodeContext` as its cleanup registry;
-- `BaseEnvironmentServer.run(request, context)` as the abstract protocol method and `SingleAgentEnvironmentServer` as the first concrete implementation;
-- resources-session seed, verification, and close APIs;
-- validation, optional admission, episode and cleanup timeouts, cancellation-resistant LIFO cleanup, compatibility translation, and HTTP projection.
+Current limit:
 
-This milestone is complete when Gym can spawn and address Environment Servers, the Environment Server validates before side effects, all registered cleanup runs on every exit path, and the Environment Server reproduces the recorded legacy results.
+- admission and cleanup state are worker-local;
+- cleanup is bounded best effort, not durable recovery.
 
-### 2. Extract the Simple Agent Server
+### 2. Add taskset routing and compatibility frontends — Implemented
 
-Keep the existing model-and-tool loop behind `/v1/responses`. Add request-scoped agent-session seed and close endpoints, scoped resources access, model-cookie isolation, trajectory capture, usage accumulation, max-step behavior, and skipped-verification compatibility behavior. Keep the `/v1/responses` request and response models unchanged.
+Implemented:
 
-This milestone is complete when `simple_agent` with `example_single_tool_call` runs through `SingleAgentEnvironmentServer` without changing its caller-visible result.
+- native materialized tasks route through `environment_server_routes` by `TaskId.taskset`;
+- flat rows can route by their agent's mandatory frontend or an explicit compatibility Environment Server;
+- selected deployments are stamped as `_ng_environment_server`;
+- stored results are stamped with `_ng_result_type`;
+- `LegacyAgentEnvironmentServer` relays an unmigrated `/run`;
+- `SingleAgentTurnLegacyEnvironmentServer` converts flat rows to the typed protocol and projects results back;
+- report labels use unique Environment Server run keys when agent names are ambiguous.
 
-### 3. Establish direct sandbox handoff with Hermes and SWE-bench Pro
+Remaining gate:
 
-Keep Hermes behavior behind `/v1/responses`. Add agent-session setup and cleanup, install its sandbox-provider dependency in the agent-server environment, and route terminal commands to a borrowed sandbox by immutable agent session ID.
+- remove direct-agent dispatch code only after every supported path uses a frontend and downstream consumers no longer depend on it.
 
-SWE-bench Pro creates and seeds the task sandbox, returns direct `SandboxAccess`, verifies while the sandbox remains alive, and stops it during resources-session cleanup. Hermes reconnects and disconnects without owner authority. The complete flow must retain the agent response, model/tool observations, benchmark-specific verifier fields, and attempt-qualified capture path.
+### 3. Extract the Simple Agent Server — Implemented for the single-agent protocol
 
-This milestone is complete when a real standalone rollout performs several model/tool iterations, verifies, produces no failure-sidecar row, and leaves no task or verification sandbox running.
+Implemented:
 
-### 4. Extract OpenCode and generalize direct sandbox access
+- caller-assigned agent sessions;
+- episode-scoped `ToolAccess`;
+- configured and request-granted tool overlay by name;
+- `/v1/responses` remains the behavior endpoint;
+- agent close returns observations and final resources cookies;
+- `SingleAgentTurnEnvironmentServer` owns seed → session → activation → close → verify.
 
-Move OpenCode behavior behind its Agent Server. Preserve installation or discovery, configuration, CLI execution, transcript export, Responses conversion, diagnostics, and output limits.
+Remaining gates:
 
-Implement both sandbox paths:
+- complete parity checks for skipped verification, max-step behavior, tool failures, reasoning content, usage, and capture;
+- continue to keep the legacy `/run` path only as compatibility while deployments migrate.
 
-- OpenCode creates and owns its configured sandbox when resources returns no access.
-- OpenCode connects as a borrower when resources returns `sandbox_access`.
+### 4. Establish direct sandbox handoff with Hermes and SWE-bench Pro — Partial
 
-Implement direct reconnection through the same named top-level `sandbox_provider` configuration in the resources and agent-server processes. The Task/Resources Server serializes the sandbox, the Agent Server reconnects through that provider, and agent close disconnects without destroying the resources-owned sandbox.
+Implemented:
 
-Migrate SWE-bench Pro and DeepSWE first. Add Terminal Bench after its Gym Task/Resources Server is ready. This milestone is complete when each pairing preserves benchmark-specific verification and leaves no owned sandbox running.
+- SWE-bench Pro creates and owns the task sandbox;
+- resources seed returns direct `SandboxAccess`;
+- Hermes reconnects as a borrower or creates its own fallback sandbox;
+- Hermes runs its harness in the sandbox and calls the attempt-qualified Gym Model Server endpoint directly;
+- agent close stops the runner, returns observations, and disconnects borrowed access;
+- verification begins only after agent close;
+- SWE-bench Pro extracts the patch, uses fresh verifier sandboxes, and closes resources state idempotently.
 
-### 5. Migrate remaining agent classes
+Remaining gates:
 
-Migrate Hermes, OpenCode, OpenClaw, Pi, and Codex in that order unless benchmark readiness changes the dependency chain. Inventory agents that use direct `responses()`, remote run-only services, step protocols, or local grading. Add behavior endpoints only where an integration must remain a server. Use separate concrete Environment Servers for protocols whose ordering differs from the single-agent flow.
+- run and inspect a real standalone rollout with several model/tool iterations;
+- confirm no task, agent-owned, or verification sandbox remains;
+- record the exact rollout artifact, failure-sidecar outcome, observations, and benchmark fields;
+- test provider and worker failure paths that cannot be proven by unit tests.
 
-For GDPVal-AA-V2, first move ordinary deliverable harvesting into resources. Add its cached-judging Environment Server branch and separate preparation operation before retiring legacy control modes.
+### 5. Extract OpenCode and deduplicate local and sandboxed variants — Deferred
 
-### 6. Add native NeMo RL consumption
+No OpenCode agent-session implementation exists in the inspected prototype.
 
-Define Environment Server routing, `EpisodeId` creation, terminal model-call attribution, capture finalization, retryable failure transport, masking, and chronological projection for every trainable participant. Retain legacy projection until this path is deployed.
+Required gates:
 
-## Follow-on milestones
+- move OpenCode behavior behind agent seed, `/v1/responses`, and close;
+- preserve installation or discovery, CLI configuration, transcript conversion, diagnostics, output limits, and capture;
+- support both agent-owned fallback sandboxes and resources-owned borrowed access;
+- validate SWE-bench Pro and DeepSWE first;
+- prove semantic parity under both placements;
+- retain old deployment names as compatibility aliases before deleting duplicate implementations.
 
-These capabilities are not part of the initial design.
+### 6. Migrate remaining agent classes — Partial
 
-### Sandbox server
+Hermes and Simple Agent demonstrate the session boundary. Unmigrated agents remain reachable through `LegacyAgentEnvironmentServer`.
 
-Add `sandbox_servers` and `SandboxServerRef` when a required provider cannot serialize and reconnect across processes or when a deployment requires server-enforced borrower authorization. Define operate leases, revocation, owner operations, routing, and cleanup in that design. Directly reconnectable providers do not depend on this server.
+Remaining gates:
 
-### User simulation
+- inventory each agent as Responses-capable, run-only, step protocol, or self-contained integration;
+- migrate only where the Agent Server and Task/Resources Server boundaries fit;
+- add concrete Environment Servers for protocols with different ordering;
+- keep self-contained integrations in concrete Environment Servers rather than forcing artificial participant APIs;
+- move benchmark-specific harvesting and verification into the component that owns that state.
 
-Allow repeated `/v1/responses` activations within agent sessions used by a user-simulation Environment Server. The Environment Server owns canonical event ordering, role visibility, termination, and verification input. Add another agent endpoint only if a concrete protocol cannot express an activation through the Responses API.
+### 7. Add native NeMo RL consumption — Partial
 
-The first protocol binds `assistant` and `simulated_user` Agent Servers. It records their outputs separately so simulated-user tokens are context rather than trainable assistant actions.
+Implemented in Gym:
 
-### Additional multi-agent protocols
+- attempt-qualified `EpisodeId`;
+- Environment Server routing and stamps;
+- native result and failure projection;
+- sidecar retry and terminal markers;
+- token and model-call capture correlation;
+- Environment Server-aware aggregation and report labels.
 
-Add a concrete Environment Server only when a use case defines its roles, visibility, ordering or concurrency, termination, verification input, and failure semantics. Do not add a generic participant scheduler without those requirements.
+Remaining gates:
 
-### Restart-safe attempts
+- route NeMo RL directly by Environment Server deployment where appropriate;
+- preserve trainable participant attribution and chronological projection;
+- consume terminal and retryable failures without turning infrastructure loss into reward zero;
+- preserve response token IDs, log probabilities, masks, reward components, multimodal fields, batch cardinality, and row order;
+- validate sharded replica affinity for process-local agent and resources sessions.
 
-Back `EpisodeId` with atomic claims, leases, ownership epochs, stale-writer fencing, and idempotent finalization in a process-shared store. Worker-local admission and dictionaries do not provide these guarantees.
+## Lifecycle and persistence milestones
 
-### Checkpoint restoration
+### 8. Make cleanup restart-safe — Deferred
 
-Coordinate snapshots of Environment Server position, resources state, serializable agent state, runtime references, model continuation state, and ownership epoch. A reconnectable sandbox alone is not a restorable episode.
+`CleanupContext` handles success, handled failure, timeout, and caller cancellation while its Environment Server worker remains alive. It does not survive process or host loss.
 
-### Retained artifacts
+Required gates:
 
-Add retained artifacts only for a concrete caller requirement. Define storage ownership, opaque references, authorization, retention, garbage collection, size limits, and deletion before exposing them in episode results.
+- define external-object TTL requirements;
+- add owner shutdown cleanup;
+- add a durable lease or reaper for resources that must outlive a worker;
+- reconcile cleanup after a lost seed or close response;
+- prove stale attempts cannot destroy a newer attempt's resources.
+
+### 9. Add durable attempt ownership and terminal publication — Deferred
+
+Current resume uses successful rollout JSONL, failure sidecars, and attempt counters. This is useful persistence but not a durable episode ledger.
+
+Required gates:
+
+- atomic attempt claims and ownership epochs;
+- stale-writer fencing at every mutable boundary;
+- explicit per-operation replay policy;
+- immutable terminal result written before completion acknowledgement;
+- recovery that reconciles terminal results before redispatch;
+- fault injection between every lifecycle phase.
+
+### 10. Add checkpoint restoration — Deferred
+
+No coordinated episode checkpoint exists.
+
+Required gates:
+
+- quiesce model, tool, agent, resources, and runtime activity;
+- stage component snapshots;
+- publish one immutable manifest last;
+- resume into a new fenced attempt;
+- declare fidelity as replay, reconnect, or exact snapshot;
+- reject restoration when the weakest required component cannot satisfy the requested fidelity.
+
+## Runtime and security milestones
+
+### 11. Establish direct access contracts — Implemented with trust limits
+
+Implemented:
+
+- named direct-HTTP and MCP tool access;
+- direct sandbox reconnection through a named top-level provider configuration;
+- explicit owner/borrower cleanup order;
+- no infrastructure credentials in the Responses request body.
+
+Current limit:
+
+- direct provider descriptors and credentials do not enforce borrower restrictions.
+
+### 12. Add enforceable runtime grants — Deferred
+
+Required gates:
+
+- authority-held provider credentials;
+- owner and borrower grants scoped to rollout, attempt, subject, operations, workdir, and expiry;
+- durable grant and revocation state;
+- provider admission and attestation;
+- scoped model and tool routes;
+- crash-surviving cleanup and reconciliation;
+- one live-sharing benchmark migrated through the authority before broader adoption.
+
+### 13. Add a sandbox server where required — Deferred
+
+Add a sandbox server only for a provider that cannot reconnect across processes or a deployment that requires server-enforced authorization.
+
+Required gates:
+
+- define `SandboxServerRef` and connection model;
+- define owner and borrower operations;
+- enforce lease expiry and revocation;
+- preserve provider-specific state without exposing owner credentials;
+- prove cleanup under server and client failure.
+
+## Agent architecture milestones
+
+### 14. Add a minimal in-process Agent API — Deferred
+
+The shipped boundary remains Agent Server sessions plus `/v1/responses`.
+
+Required gates:
+
+- define the concrete consumer that benefits from in-process invocation;
+- preserve identity, tool and sandbox access, observations, cancellation, and close semantics;
+- provide an HTTP and in-process client with equivalent behavior;
+- migrate one agent without changing its rollout result.
+
+### 15. Add user simulation and multi-agent scheduling — Deferred
+
+Fan-out remains several independent episodes.
+
+Required gates:
+
+- define one concrete protocol's participant roles;
+- define visibility and private state;
+- define ordering, concurrency, termination, and join behavior;
+- distinguish participant identity from policy identity;
+- preserve simulated-user tokens as context rather than trainable actions;
+- define idempotent steps and checkpoint barriers before restart support.
 
 ## Integration gates
 
-1. Gym resolves, spawns, and reports health for `environment_servers`.
-2. Episode contracts and compatibility characterization are agreed.
-3. `simple_agent` runs through `SingleAgentEnvironmentServer`.
-4. Hermes runs with resources-provided OpenSandbox access against SWE-bench Pro.
-5. OpenCode runs with an agent-created sandbox against Reasoning Gym.
-6. OpenCode runs with resources-provided sandbox access against SWE-bench Pro and DeepSWE.
-7. GDPVal moves ordinary deliverable harvesting into resources.
-8. Cancellation and injected failures leave no owned sandbox running.
-9. Measured latency and throughput regressions remain within an agreed budget.
-10. A provider that cannot reconnect directly runs through a configured sandbox server without exposing owner authority to the agent.
+| Gate | Status | Evidence still required |
+| --- | --- | --- |
+| Gym resolves, starts, and reports Environment Servers | Implemented | Keep configuration and health tests |
+| Every dispatchable agent has an Environment Server frontend | Implemented | Remove bypass only after downstream migration |
+| Native tasksets route by `TaskId.taskset` | Implemented | Add broader mixed-batch coverage |
+| Simple Agent runs through `SingleAgentTurnEnvironmentServer` | Implemented | Maintain result and capture parity |
+| Hermes and SWE-bench Pro share one owner-managed sandbox | Partial | Real rollout and leak inspection |
+| OpenCode uses the agent-session boundary | Deferred | Implementation and parity evidence |
+| OpenCode local and sandboxed code is deduplicated | Deferred | Both placement modes through one implementation |
+| Native NeMo RL consumes Environment Server results | Partial | End-to-end training adapter validation |
+| Timeout and cancellation leave no owned sandbox running | Partial | Real provider and failure-injection evidence |
+| Attempts are restart-safe | Deferred | Durable claims, fences, and result spool |
+| Borrower grants are enforceable | Deferred | Authority service or provider-native restricted credentials |
+| Checkpoint restore is coordinated | Deferred | Immutable manifest and fenced restore |
+| Multi-agent scheduling is concrete and attributable | Deferred | One fully specified protocol |
 
-## Required foundation tests
+## Required checks for the shipped foundation
 
-- Malformed native and legacy requests fail before admission.
-- Missing or mistyped Environment Server, agent, resources, and model references fail during configuration validation.
-- Environment-server deployments receive distinct addresses and readiness checks.
-- Queue timeout creates no resources session.
-- Scope-entry failure cleans partially acquired state.
-- Seed failure never invokes an agent.
-- Resources fails seed when verification requires a shared task sandbox but access cannot be returned.
-- An agent rejects incompatible sandbox access during `POST /v1/agent_sessions`.
-- Direct sandbox access rejects an inline, missing, or unavailable named provider before inference.
-- Closing a resources-provided connection cannot stop the resources-owned sandbox.
-- Closing an agent session stops its agent-owned sandbox on success, failure, timeout, and cancellation.
-- Simple Agent rejects non-null sandbox access while seeding a session.
-- Cancellation during reconnect, guest startup, agent execution, verification, or cleanup runs every registered cleanup.
-- Resources-access unions retain their required discriminator after client serialization.
-- A thinking model can continue after a tool call without losing or rejecting assistant reasoning content.
-- An agent-side model or tool failure fails the episode instead of producing a valid empty response.
-- Agent output limits reject oversized or malformed responses.
-- SWE-bench extraction failure is not verified as an empty patch.
-- SWE-bench submissions include supported new files.
-- Terminal Bench verifies the original live task sandbox.
-- Resources cleanup is idempotent.
-- Verification does not start unless agent-session close reports that no agent activity can continue mutating resources-owned state.
-- Every create, attempt-qualified Responses invocation, and close request for one agent session reaches the same one-worker agent-server replica.
-- Legacy projection preserves response, reward, metrics, tokens, completion accounting, and mask location.
-- One real Hermes and SWE-bench Pro rollout leaves no sandbox running.
-
-Tests for shared claims, owner leases, user-simulation ordering, role visibility, and checkpoint restoration land with their corresponding follow-on milestones.
+- malformed native and compatibility requests fail before task side effects;
+- missing or ambiguous Environment Server routes fail before dispatch;
+- queue timeout creates no resources session;
+- resources and agent cleanup are registered before seed;
+- seed failure never invokes the agent;
+- a required unsupported tool or sandbox access fails agent-session seed;
+- an agent close failure prevents verification;
+- resources verify sees the final direct-tool cookie jar;
+- agent-owned sandboxes stop on success, failure, timeout, and cancellation;
+- borrowed sandbox clients disconnect without destroying resources-owned state;
+- resources close is idempotent and validates episode identity;
+- cleanup runs outside the episode deadline and remains bounded by its own timeout;
+- native responses preserve Environment Server-specific fields;
+- native handled failures go to the sidecar with stage and terminality;
+- failure rows do not enter scoring unless explicitly counted as metrics-only zeros;
+- result and report labels identify the Environment Server when agent names are ambiguous;
+- capture paths include the attempt suffix on retries;
+- one real Hermes and SWE-bench Pro rollout leaves no sandbox running.
