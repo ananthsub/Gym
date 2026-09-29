@@ -150,282 +150,217 @@ Sandboxing:
   * PRs [\#2015](https://github.com/NVIDIA-NeMo/Gym/pull/2015) (sandbox any environment), [\#2758](https://github.com/NVIDIA-NeMo/Gym/pull/2758) (provider image-prepare hook), [\#2604](https://github.com/NVIDIA-NeMo/Gym/pull/2604) (surface sandbox OOM status)
 * ["epic: canonical sandbox patterns" (\#2763)](https://github.com/NVIDIA-NeMo/Gym/issues/2763) -- source of the *agent in sandbox* / *sandbox as tool* vocabulary used in the [Sandboxing](#sandboxing) section
 
-## Proposed solution
+## Implemented solution: Environment Servers
 
-*The proposed solution stems from the analysis of [use cases we want to enable](#use-cases) and problems we identified in the [current implementation](#current-solution). Read these sections if you're looking for motivation for introducing the changes outlined here.*
+The implementation introduces `environment_servers/` as a fourth server type. An Environment Server owns the episode protocol that connects a task, an Agent Server, and a Resources Server. Rollout collection sends every `/run` request to an Environment Server. It does not use an Agent Server's `/run` as the collector target.
 
-### Episode processor as an independent entity
+This is a routing and lifecycle boundary, not a claim that one process owns every runtime resource. The built-in `single_agent_turn` protocol coordinates Resources and Agent sessions, but Resources owns a task sandbox when it creates one. The Agent receives scoped access to that sandbox and disconnects when its session closes. Legacy Environment Servers preserve older components while the catalogue migrates.
 
-*This proposal builds on the [design](https://github.com/NVIDIA-NeMo/Gym/issues/2159) and [prototype \#3100](https://github.com/NVIDIA-NeMo/Gym/pull/3100).*
+### Mandatory Environment Server routing
 
-We will introduce a fourth server type, `episode_processors/`, which is responsible for orchestrating the rollout:
+Every configured, runnable Agent Server must be named by at least one Environment Server. Configuration fails before servers start when a bound agent has no Environment Server. Rollout collection resolves an Environment Server for each row and posts `/run` there.
 
-* the runtime it happens in
-* the turn flow
-* handoff to scoring
+There are two input shapes during migration:
 
-It is the glue code that connects the agent and the environment, and it is the only place a resource shared by both can be owned.
-It differs from the prototype (\#3100) in two ways:
+- **Flat compatibility rows** retain fields such as `responses_create_params`, `agent_ref`, and `task_source`. They are routed through an Environment Server that accepts the legacy shape.
+- **Native materialized tasks** carry an `EpisodeId`, a `TaskId`, and protocol-specific `task_input`. Their taskset selects an Environment Server deployment through `environment_server_routes`.
 
-* there is no opt-out. \#3100 splits the base classes, but keeps a combined `SimpleResponsesAPIAgent(BaseResponsesAPIAgent, BaseProcessor)` that still registers `/run`. We use an inverse approach for backward compatibility (see the [legacy processor](#phase-1-legacy-processor)).
-* the processor also owns the sandbox lifecycle
+The current CLI remains config-driven. `gym env start`, `gym eval run`, and `gym env resolve` compose YAML files and Hydra overrides. Rollout configuration controls `environment_routing_mode`, an optional compatibility `environment_server_name`, and taskset-to-server `environment_server_routes`. These are configuration fields, not a new standalone `--environment-server` product surface.
 
+An agent may be fronted by more than one Environment Server, but an agent-routed flat row is ambiguous unless exactly one server fronts that agent. Native rows avoid that ambiguity because their taskset names the route. The selected Environment Server is stamped into materialized inputs and stored records so retries, aggregation, and later reports use the same route.
 
-1. **Agent servers no longer define `/run`.** The method and the endpoint move to the processor class, and the agent's only responsibility is to define `/v1/responses`. **An external integration, or a benchmark that needs custom orchestration, gets a custom processor -- never a custom agent** (see details [below](#external-integrations-become-custom-processors)).
-2. **`run()` on the processor base class is concrete.** It is no longer an abstract method and its body is what `simple_agent.run()` does today. A benchmark selects a processor instead of writing one. At the end of migration [seven processors](#episode-protocols) cover the catalogue: one per episode protocol, plus one per embedded external framework.
-3. **The processor owns the sandbox.** Neither the agent nor the resources server provisions or tears one down; both are handed a descriptor of one the processor started. The spec comes from the environment (it is a property of the task) and the provider is specified in the run config.
-4. **Environment config / manifest is what composes agent, resources server and the dataset.** Neither the agent nor the resources server points to the other, and neither carries a `datasets` block in its config.
-5. **The rollout collector addresses the processor.** The rollout row's routing key becomes the processor, which names the agent. `--agent-type` then rewrites one reference instead of rehosting and renaming agent instances. `agent_map` and `fan_out` keep their shape, now selecting a processor's seats.
+### Built-in compatibility paths
 
+The migration uses two different adapters because “legacy” covers two contracts:
 
-### Metric aggregation belongs to the resources server
+- `legacy_agent` is an opaque relay for an unmigrated Agent Server that still owns `/run`. The collector calls the Environment Server, which relays the request and response to the agent. It also forwards aggregation to the agent. The relay does not enforce the native episode deadline, admission, or cleanup lifecycle; the legacy agent remains responsible for those behaviors.
+- `single_agent_turn_legacy` accepts an old flat row for a migrated agent/resources pairing. It validates that the row's agent and task source match its configured pair, converts the row to the native single-agent-turn request, runs the native lifecycle, and projects the typed result or failure back into the stored flat-record shape. Aggregation goes to Resources.
 
-**`/aggregate_metrics` is served by whoever serves `/verify`.**
-A standalone processor that owns the entire benchmark logic -- overrides `/run` and owns the scoring -- must serve it (see example in the [next section](#external-integrations-become-custom-processors)).
+`scripts/add_legacy_agent_environment_servers.py` adds compatibility Environment Servers to existing configurations. This makes routing mandatory without requiring every agent and benchmark to adopt native sessions in one change.
 
-The grouping key changes from the agent-server instance name alone to `(verify owner, agent)`, composed at run time. This is not a new key: `gym eval reverify` already groups this way (`rollout_reverification.py:598-604`), so `gym eval run` converges on it and the run-versus-reverify divergence goes away.
+These adapters are migration mechanisms, not the target contract. New protocol work should use a typed Environment Server request and response. A migrated pairing that must continue to read old datasets should use `single_agent_turn_legacy` until those datasets are materialized in the native shape.
 
-**The output does not change**, because the composite is only the grouping key -- each entry keeps `agent_ref.name` as its identity, so `<output>_aggregate_metrics.json` and the agent-namespaced MLflow metric names are unchanged. That has to stay true deliberately: instance names do not encode the pairing (0 of 123 benchmark agent instances are literally `<resources server name>_<agent type>`, and only 68 reproduce it after stripping the `_resources_server` suffix), and downstream consumers index on `agent_ref.name`. One benchmark's numbers *do* change, which is the point: `critpt` defines `compute_metrics` and `get_key_metrics` on its resources server and its agent does not proxy them, so `gym eval run` silently drops metrics that `gym eval reverify` computes.
+### Native single-agent-turn lifecycle
 
-This change is to some extent independent of the introduction of the episode processor and it directly addresses the problems with the current solution described [below](#blurry-ownership-of-metric-aggregation). One implementation note: the route is not inherited for free -- a server that replaces `setup_webserver()` has to register `/aggregate_metrics` itself, and `harbor_agent` once shipped a 404 for exactly that reason.
+`SingleAgentTurnEnvironmentServer` implements the first native protocol. One request executes in this order:
 
-### External integrations become custom processors
+1. The Environment Server admits the episode under its configured concurrency and queue limits.
+2. It assigns a Resources session ID, registers cleanup, and calls Resources `/seed_session` with episode identity, task identity, and task data.
+3. Resources returns its session identity and may return tool metadata and `SandboxAccess`.
+4. The Environment Server constructs the configured `ToolAccess` grants and assigns an Agent session ID.
+5. It calls Agent `/v1/agent_sessions` with task identity, the tool grants, and the Resources-provided sandbox access.
+6. It invokes the Agent's rollout-scoped `/v1/responses` endpoint once with the task's Responses API input.
+7. It closes the Agent session before verification. The close response returns agent observations and may return the final Resources cookie jar.
+8. It calls Resources `/verify` with the typed verification input and the Resources session cookies.
+9. It returns either a typed result or a typed failure.
+10. It closes the Resources session during bounded final cleanup.
 
-*Maintaining support for external integrations is the primary reason for rejecting the idea to move `/run` to the resources server. See [rejected alternatives](#rejected-alternatives) for more details.*
+The base Environment Server supplies queue admission, an episode deadline, identity validation, and LIFO cleanup. Cleanup callbacks are process-local and best-effort. They are shielded from cancellation and bounded by a cleanup timeout, but they are not durable after process or host failure. Remote services therefore still need expiry or reaping for abandoned state.
 
-The four benchmarks that embed a foreign episode engine -- `tau2`, `harbor_agent`, `verifiers_agent`, `pinchbench` -- become **standalone processors** ([class D](#episode-protocols)).
-They no longer define an agent server; they serve their own `/run` and `/verify`. `harbor_agent` is irreducible as a *bridge*, not per benchmark: where Gym already has an environment for what it is running -- Terminal Bench 2.1 has one, with a real `verify()` -- the pairing should use that environment rather than Harbor's in-process scoring.
+```mermaid
+sequenceDiagram
+    participant C as Rollout collector
+    participant E as Environment Server
+    participant R as Resources Server
+    participant A as Agent Server
+    participant M as Model Server
 
-
-Tau2 is the worked case. Everything its [case study](#tau2--tau2-agent-integrating-an-external-benchmark) lists as re-derived by hand is a processor concern: driving the episode, routing model traffic for two seats (policy and simulated user), declaring a row schema, returning trajectory plus reward, and a preparation step that had to be registered as a webserver hook under the current architecture.
-The code that onboards Tau2 is unchanged; what disappears is the interface it cannot satisfy -- the `responses()` that raises `NotImplementedError` behind a `/v1/responses` route that exists and cannot be called (see issue [\#2241](https://github.com/NVIDIA-NeMo/Gym/issues/2241)). The other misfit goes with it: `Tau2VerifyResponse` inherits the run *request*, which carries the run config as a field, so `RewardProfiler` averages debug flags and `get_key_metrics` opens by deleting `mean/seed`, `mean/verbose_logs` and three more by name.
-
-**Not every self-contained agent should stay self-contained.** Eleven agent servers score in-process and never call `/verify`, and they split three ways:
-
-| | servers | what happens |
-|---|---|---|
-| irreducible | `tau2`, `harbor_agent`, `verifiers_agent`, `pinchbench` | a foreign framework owns turn flow *and* scoring -- PinchBench's stock harness drives OpenClaw and grades it, in-sandbox, behind one `bash /opt/run_task.sh`. They become standalone processors |
-| decouple onto an environment that already exists | `anyswe_agent`, `anyterminal_agent`, `mini_swe_agent`, `mini_swe_agent_2`, `swe_agents` | SWE-bench has four independent graders over one dataset -- `anyswe_agent._grade_sandbox_patch` (`app.py:380`), `mini_swe_agent_2` (`app.py:480`), `swe_agents` (`app.py:531`) and `resources_servers/swebench.verify()` (`app.py:320`) -- and they have already diverged: only the resources server carries the multilingual fixups and the anti-cheat history strip. Today `allowed_agents` hides this by preventing the swap. Scoring moves to the environment and they fold into the single-request processor |
-| need an environment written | `osworld_agent`, `vcqa_agent` | scoring moves into a new resources server, or they stay standalone by choice. OSWorld is the interesting one: the foreign package supplies the environment and the evaluator, but Gym writes the turn loop itself (`client.py:2026`), so what it lacks is an environment, not a processor |
-
-The same standalone shape also rehouses the three `conversational_tool_use` generation stages that hardcode `reward=1.0` because `responses_api_agents/` was the only place to put something that calls a model in a loop and has no verifier.
-
-## Accepted downsides
-
-1. Processor-owned sandboxes need a provider that can be shared across processes. As of now this is implemented **only by `opensandbox` and `e2b`**; docker, local, apptainer, enroot, openshell, daytona and ecs_fargate cannot hand a live sandbox to another process. Unblocking other providers requires introducing sandbox server ([\#2082](https://github.com/NVIDIA-NeMo/Gym/issues/2082)) first.
-
-2. Benchmarks define custom artifact-collection logic and these implementations need to be unified. There are no strong reasons for having different mechanisms here -- these were independent pieces of code so they evolved independently to serve the same purpose. With the shared episode processors and agent servers, copying files out of the agent's box and passing a path needs to be replaced by the verifier reading the shared sandbox; what remains is declaring *which* artifacts count, and that becomes an environment tool call. The price is benchmark-side work, and it differs per benchmark:
-
-* **`vibench`** harvests the app out of the sandbox and passes a host `artifact_path` that rides on the verify request through `extra="allow"`. Pure path-to-shared-state; the field disappears.
-* **`gdpval`** copies deliverables to a host `deliverables_dir` and passes the path. The verifier already re-reads that directory and *overrides* whatever the agent computed (`read_deliverable_files` / `convert_deliverables_to_content_blocks`, `resources_servers/gdpval/app.py:392-406`), so the copy is duplicated work rather than a contract.
-* **`cvdp`** carries file *contents* inline as `rtl_files`; those come from the shared sandbox instead. Its fallback, parsing RTL out of the model's text, has nothing to do with sandboxes and is unaffected.
-
-The work is not zero even where the runtime is already shared: `swebench.verify()` pops the agent's sandbox from an in-process dict, executes against it and stops it (`app.py:352-360`), so it must reconnect from the descriptor and stop owning teardown.
-
-3. We'll add another process per configured processor -- with its own port, startup and health check, started by `gym env start` and drained on shutdown. A typical run is three processes (model, agent, resources server); this makes it four. The costs are a process and a port per agent instance, one more startup on the critical path, and one more inter-process hop per rollout. If that is not acceptable, we should consider the [episode-as-a-role alternative](#rejected-alternatives).
-
-
-## Possible future extensions
-
-### Support for a bare policy step (UC5)
-
-
-`/v1/responses` is the agent's whole episode, and the processor calls it once. A harness that supplies only a *policy step* -- one model call, with the driver feeding tool results back and deciding when to stop -- has no instance in the repo; every agent server present in Gym owns the whole episode .
-
-If such a harness appears, the processor is where the loop goes: `drive()` becomes a turn loop that calls `/v1/responses` per turn and dispatches the returned tool calls against the environment itself. **We are not adding it to the initial implementation as this would be dead code.**
-
-### Removal of `rollout_collection_driver`
-
-`rollout_collection_driver` (`nemo_gym/rollout_collection.py:616`, mirrored as the manifest's `rollout_driver`) lets a benchmark replace the whole collection loop. Exactly one config uses it: `benchmarks/gdpval/config.yaml:33`, for two-phase ELO -- balanced sampling to seed ratings, then Elo-informed pairing between similarly-rated models.
-
-**The episode processor does not help here, by construction.** A processor is invoked once per row; the driver decides *which rows exist*, from results already returned, so it needs cross-rollout state and the ability to generate work mid-run. No allocation of `run()` can express that.
-
-Retiring it means changing rollout collection itself: a declared planner above the episode, owning repeats, retries and adaptive sampling, with GDPVal's multistage as a sampling policy plugged into it. That is out of scope here.
-
-## Rejected alternatives
-
-### 1. The episode orchestration is moved to the resources server
-
-The environment drives the episode it defines. `run()` is a concrete method of `SimpleResourcesServer` (matching the current simple agent's logic). Externally-driven benchmarks become standalone resources servers.
-
-It is cheaper to introduce than this proposal. For 108 of 113 environments the episode protocol is entailed by the task, so a *swappable* driver buys nothing.
-
-It has some substantial downsides, though:
-
-* **sandbox ownership and lifecycle land in the resources server**, where they don't belong
-* **the interface mismatch changes sides rather than going away.** Today `tau2` is an agent server whose `responses()` raises `NotImplementedError` (`app.py:245`). As a resources server it would be an environment whose `verify()` -- the one `@abstractmethod` on `SimpleResourcesServer` -- has nothing to do, because tau2's reward comes back from `run_single_task` inside `run()`. The same category error, on the other side of the boundary
-* **an externally-driven benchmark is not an environment.** It exposes no tools, no state and no verifier any other harness can call, so `gym list environments` would advertise something nothing can be paired with, and `allowed_agents` would have nothing to check
-* **the agent seat has no home.** Some of these integrations still select a Gym-side harness -- `harbor_agent` does it today through `harbor_agent_import_path` and `harbor_agent_name`, the plugin-host pattern again. A processor declares `agent:` as a first-class reference; a resources server pointing at an agent inverts the dependency for a component that is not that agent's environment
-
-Both designs end up with two shapes. Under this alternative they are two *types*: environments that orchestrate, and resources servers that are not environments. Under the proposal they are one type, and the difference is whether `resources_server` is set.
-
-
-## Design details
-
-### `EpisodeProcessor`
-
-```python
-class EpisodeProcessorConfig(BaseRunServerInstanceConfig):
-    agent: Optional[AgentServerRef] = None              # absent when the processor owns its model calls
-    resources_server: Optional[ResourcesServerRef] = None   # absent for external integrations
-    sandbox_provider: Optional[str | Mapping] = None    # the runtime, selected per run
-    datasets: list[DatasetConfig] = []                  # only for processors with no environment
-
-
-class EpisodeContext(BaseModel):
-    """What the processor hands to both sides of the episode: one producer, two consumers,
-    a declared shape. Replaces the `sandbox_handle` dict key that crosses a server boundary
-    today, and the `resources_server` reference the agent used to carry in its own config.
-
-    Declared on `BaseRunRequest`, `BaseSeedSessionRequest`, `BaseVerifyRequest` and the
-    responses-create params, so all 118 resources servers and every agent inherit the field
-    instead of each declaring it.
-    """
-    model_config = ConfigDict(extra="forbid")
-
-    rollout_id: str
-    env: Optional[ResourcesServerRef] = None         # where the agent calls /<tool_name>
-    sandbox: Optional[Mapping[str, Any]] = None      # AsyncSandbox.serialize(); rebuilt with .connect()
-
-
-class SimpleEpisodeProcessor(BaseEpisodeProcessor):
-    """Owns one rollout. `run()` is concrete: benchmarks select a processor, they do not write one."""
-
-    async def run(self, body: BaseRunRequest) -> BaseVerifyResponse:
-        async with self.runtime(body) as ctx:
-            await self.env.post("/seed_session", body, ctx)
-            response = await self.agent.post("/v1/responses", body.responses_create_params, ctx)
-            return await self.env.post("/verify", body, response, ctx)
-
-    @asynccontextmanager
-    async def runtime(self, body) -> EpisodeContext:
-        """Spec from the environment (a task property), provider from the config (not one)."""
-        sandbox_spec = await self.env.post("/sandbox_spec", body)   # 204 No Content -> no runtime
-        if sandbox_spec is None:
-            yield EpisodeContext(...); return
-        sandbox = await AsyncSandbox(
-            resolve_provider_config(self.config.sandbox_provider, self.global_config), SandboxSpec(**sandbox_spec)
-        ).start()
-        try:
-            yield EpisodeContext(..., sandbox=await sandbox.serialize())
-        finally:
-            await sandbox.stop()
+    C->>E: POST /run
+    E->>R: POST /seed_session
+    R-->>E: tools and optional SandboxAccess
+    E->>A: POST /v1/agent_sessions
+    E->>A: POST rollout-scoped /v1/responses
+    A->>M: model calls
+    A->>R: granted tool calls
+    E->>A: POST /v1/agent_sessions/close
+    A-->>E: observations and final Resources cookies
+    E->>R: POST /verify
+    R-->>E: result
+    E->>R: POST /close_session
+    E-->>C: result or failure
 ```
 
-| member | default | who overrides it |
-|---|---|---|
-| `run` | the sequence above | one processor per [protocol class](#episode-protocols): the staged and stepwise ones, and the external integrations, which have no environment to call |
-| `runtime` | ask the environment, start, tear down | nobody; a benchmark answers `/sandbox_spec` instead |
-| `aggregate_metrics` | **not served** when there is an environment; served by standalone processors, which own `/verify` | nobody |
+### Agent and Resources sessions
 
-There are no hooks inside `run()`. A protocol that is not seed-once-call-once-verify replaces the method rather than filling a slot in it, which is why the count of processors is the count of protocols.
+Both session APIs use caller-assigned identifiers. Repeating a seed for the same episode is expected to return the existing session, and closing an unknown identifier prevents a racing seed from recreating it later. This makes cleanup safe to register before the seed response arrives.
 
-Two contracts are new and both are declared data: `/sandbox_spec` out of the environment, and `EpisodeContext` into the agent and the verifier. Declaring the context on the *base* request models is what makes `extra="forbid"` meaningful -- the [silent-drop hazard](#resources-server-responsibilities) is that a subclass never declares a field and `extra="ignore"` eats it, so the processor additionally asserts that the context survived the round trip into `verify()`.
+The Environment Server owns orchestration state. The Agent Server owns harness state for the session, such as a running process, conversation, or observation recorder. The Resources Server owns task state, verifier state, and any environment resource it creates. Cookies remain part of the Resources session contract because existing Resources Servers use them to locate per-rollout state.
 
-### New rollout collection flow
+Agent close is part of the protocol rather than only final cleanup. The single-agent-turn verifier needs the observations and final Resources cookies returned by close. If this close fails, the Environment Server returns a cleanup-stage failure and retries the whole episode when the dependency error is retryable.
 
-Against [the current flow](#rollout-collection-in-gym); `P` is the episode processor, and steps not listed are unchanged.
+### Direct tool and sandbox access
 
-```
- 6.       run_examples -> per row, bounded by num_samples_in_parallel:
+`ToolAccess` is a discriminated contract carried when the Agent session is seeded. The implemented variants are:
 
-   C -> P   POST /run                              to the processor the row declares
-   P -> R   |  POST /sandbox_spec                  skipped when the benchmark declares no runtime
-   P        |  start the sandbox
-   P -> R   |  POST /seed_session   {..., episode_context}
-   P -> A   |  POST /ng-rollout/<id>/v1/responses  {..., episode_context}    once
-   A -> M   |    |  POST /v1/responses                                       per turn
-   A -> R   |    |  POST /<tool_name>                                        per env tool call
-   P -> R   |  POST /verify         {..., episode_context}
-   P        |  teardown                            in `finally`
-   P -> C   |  return BaseVerifyResponse
+- `DirectHTTPToolAccess`, for trusted Python agents that call typed Resources routes with a base URL, headers, and session cookies.
+- `MCPToolAccess`, for an MCP streamable-HTTP endpoint returned by Resources.
 
-11.       AGGREGATION
-   C -> R   POST /aggregate_metrics                to the /verify owner; grouped by (owner, agent)
-```
+The Environment Server chooses which Resources transports to grant through `resources_tool_transports`. An empty list grants no Resources tools. Direct HTTP and MCP are explicit access descriptions; they do not make every Resources endpoint available automatically.
 
-### Episode protocols
+`SandboxAccess` describes borrower access to an owner-managed sandbox. The implemented connection is a direct provider reference plus a serializable sandbox descriptor and working directory. In the demonstrated SWE Pro path, Resources creates and owns the sandbox, returns `SandboxAccess`, and receives final session state back through its cookies. Hermes connects to that sandbox for its Agent session and disconnects at close. It does not stop a Resources-owned sandbox. Hermes can still create and stop its own configured sandbox outside that handoff, but that fallback is agent-owned behavior rather than the native Resources handoff.
 
-Clustering the 49 `run()` bodies by the protocol they own, rather than by directory, gives the following patterns present in the repo (measured over `46f5ce8ff`):
+This distinction matters: the Environment Server coordinates access, but it is not the runtime owner. Ownership determines who starts, expires, and stops the sandbox.
 
+### Results, failures, aggregation, and labels
 
-| class | protocol | servers | onboarded coverage |
-|---|---|---|---|
-| **A** single-request | seed -> one agent call -> verify | 38 | 108 of the 113 resources servers with a resolvable agent; 85 of 88 `benchmarks/` configs; 57 `environments/` configs |
-| **B** staged multi-request | the processor issues N agent calls, feeding earlier outputs forward | 5 (`scicode`, `proof_refinement`, the 3 generation stages) | 2 resources servers, 1 benchmark |
-| **C** stepwise environment | reset -> (model -> step)* -> close, reward per step | 2 (`gymnasium`, `osworld`) | 7 resources servers, 1 environment |
-| **D** externally driven | a foreign framework owns the episode, scoring included | 4 (`tau2`, `harbor`, `verifiers`, `pinchbench`) | 7 environment configs, 2 benchmarks |
+The native response is a sum type: exactly one of `result` or `failure` is present. A result contains protocol-specific output. A failure records a message, whether retry is terminal, and, for single-agent-turn, the failed stage and any usable partial Agent response.
 
-Everything separating the 38 servers inside class A is policy or data, not protocol: retries (`browsecomp.max_run_retries`), timeout handling (`remote_agent`), turn budget, `skip_verification`, a row transform (`labbench2_vlm`) -- and runtime, which this design takes away from them, so the sandboxed ones stop being distinct. The [per-agent classification](#agent-servers-by-episode-protocol) in the appendix is the evidence: no class-A row carries anything a parameter cannot express. That gives **A + B + C + one per external framework = 3 + 4 = 7**.
+Rollout collection projects native responses into the existing artifact model:
 
-With more effort it could come down to four:
+- successful results go to the main rollout JSONL;
+- handled Environment Server failures become `environment_server_failed` records in the failures sidecar;
+- terminal failures are not retried;
+- retryable failures consume attempts under the existing attempt cap;
+- failures selected by `count_failure_classes_as_zero` may enter metric computation as zero without rewriting either artifact;
+- kill-shaped failures that cannot establish a trustworthy result remain absent so resume can redispatch them.
 
-* staging expressed as a declared list of stages folds B into A
-* gymnasium's `/reset`, `/step` and `/close` could be served as `/seed_session`, a tool and `/verify` respectively, which folds C into A as well
-* class D is irreducible by construction -- one processor per embedded foreign engine
+Each stored record identifies the Environment Server deployment and the Environment Server implementation that produced its result. This lets mixed runs contain different typed results without pretending they share one Agent `/run` schema.
 
-### Migration plan
+Aggregation follows the same route as execution. Records are grouped by the stamped Environment Server, and rollout collection calls that server's `/aggregate_metrics`. `single_agent_turn` and `single_agent_turn_legacy` forward aggregation to Resources because Resources owns verification. `legacy_agent` forwards it to the old Agent Server until that component migrates.
 
-The processor layer lands first, and **everything routes through it immediately** by way of the legacy processor.
-The agents and environments are then refactored gradually, while the legacy processor keeps backward compatibility.
-When the deprecation period ends, the legacy processor is removed and every component is either migrated or deleted.
+Reports keep familiar agent labels when one Environment Server uniquely represents that agent. When several Environment Servers front the same agent, each run is labeled by its Environment Server name. Label selection is deterministic and collision-free. Aggregate records also retain the Environment Server identity, so a report label does not erase the execution route.
 
-#### Phase 1: legacy processor
+## Compatibility and migration status
 
-Land `episode_processors/` as a server type (config, discovery, packaging, CLI, rollout collection) plus one implementation: `legacy_agent_run`, which calls the agent's existing `/run`, returns the response verbatim, and emits a deprecation warning naming the agent. A benchmark that declares no processor gets one generated, as \#3100 already does for its sidecar.
+### What remains compatible
 
-This phase is a prerequisite for the others. It also allows us to land the change without migrating the existing Gym components and without disrupting the benchmark onboarding work.
+The compatibility layer preserves the current flat rollout inputs, stored successful-result shape, failure sidecar, aggregate-metrics file, token capture, model-call capture, and `agent_ref` labels where they remain unambiguous. Existing Agent Servers can continue to implement `/run` behind `legacy_agent`. Migrated pairings can consume existing flat rows through `single_agent_turn_legacy` while using native sessions internally.
 
-DoD: all benchmarks route through the legacy episode processor.
+Agent selection still composes through configuration. Swapping an agent changes the Environment Server binding and any associated compatibility route. It does not restore direct collector-to-agent dispatch.
 
-#### Phase 2: migration of the general-purpose agents
+### Evidence from the prototype
 
-`SimpleEpisodeProcessor` and the `simple_agent` family, which is most of the catalogue: 124 of the agent blocks declared in resources-server configs name `simple_agent`, and [class A](#episode-protocols) covers 108 of the 113 environments with a resolvable agent. `simple_agent` loses `run()` and its loop moves from `_create_episode` into `responses()`, where it stays; a stepwise processor is created for `gymnasium_agent`. This phase is pure relocation and does not require the unified sandbox logic.
+The prototype demonstrates:
 
-During this phase we also remove aggregation from the refactored agents. `AggregateMetricsMixin` stays on `SimpleResponsesAPIAgent` until Phase 4 -- `mini_swe_agent_2`, `osworld_agent` and `tau2` override the metric hooks and have no resources server to move them to yet.
+- mandatory Environment Server coverage for configured Agent Servers;
+- collector and aggregation routing through Environment Servers;
+- native and legacy rows in one collection path;
+- a native `SingleAgentTurnEnvironmentServer` lifecycle;
+- Resources and Agent session APIs with idempotent cleanup behavior;
+- direct HTTP and MCP tool grants;
+- a Resources-owned sandbox handed to Hermes for SWE Pro;
+- deterministic report labels when several Environment Servers share an agent;
+- migration of the simple agent and an example materialized taskset.
 
-**After this phase we no longer accept PRs that add an agent with a `run` method.**
+This is implementation evidence for evaluation. It is not evidence that every benchmark protocol, sandbox provider, agent harness, or training framework works through the native contract.
 
-DoD: [class A](#episode-protocols) benchmarks with no runtime requirement no longer route through `legacy_agent_run`; `/aggregate_metrics` has one route.
+### Limited NeMo RL compatibility evidence
 
-#### Phase 3: decoupling of P0 benchmarks
+The existing rollout and token-capture paths remain in the collection pipeline, and the native Agent call keeps the rollout-qualified route used by capture. That supports compatibility in principle for consumers that already train from stored Gym rollouts.
 
-**This phase depends on [\#2082](https://github.com/NVIDIA-NeMo/Gym/issues/2082)** (*sandbox server to share sandbox states needed for rollouts*), which is where `ConnectableProvider`, `serialize()` and `connect()` came from and which has to land first.
+The prototype does not demonstrate a full NeMo RL training run through native Environment Server requests. It does not establish online episode control, checkpoint and resume semantics, or training-worker ownership of Environment Server sessions. Claims should therefore be limited to preserved artifact and capture plumbing. Full native RL support is future work.
 
-It will tackle the coupled, sandbox-using agent-env pairs, one group at a time.
-The initial migration priorities are:
-* `swebench`
-* `swebench_pro`
-* `terminal_bench_2_1`
-* `gdpval`
+### Migration sequence
 
-SWE-bench and Terminal Bench follow the same blueprint and can be refactored in one go. GDPVal is an independent case and can be worked on in parallel. Only one version of each benchmark is migrated -- the alternative implementations remain deprecated.
-The sandboxed and non-sandboxed agent pairs collapse into one implementation that optionally reads a sandbox handle from the episode context.
+1. **Route every existing agent through `legacy_agent`.** Configuration becomes valid under mandatory Environment Server routing without changing the agent's episode behavior.
+2. **Migrate one pairing at a time to `single_agent_turn_legacy`.** Add Resources and Agent session implementations, move verification and aggregation ownership to Resources, and keep old flat datasets working.
+3. **Materialize native task inputs.** Give the taskset a typed `task_input` and add its Environment Server route. Native and compatibility rows may coexist while data migrates.
+4. **Remove the compatibility adapter for that pairing.** Once callers use native requests and stored records, use `single_agent_turn` directly.
+5. **Add another Environment Server implementation only for a genuinely different episode protocol.** Do not put benchmark orchestration back into an Agent Server merely because the built-in protocol does not fit.
 
-DoD: P0 benchmarks are migrated and can be executed with any of the supported agents.
+Migration is incremental. There is no requirement to remove all Agent `/run` implementations before Environment Server routing becomes mandatory. The collector boundary changes first; component ownership changes as each pairing adopts sessions.
 
+## Future direction, not implemented architecture
 
-#### Phase 4: deprecation or refactor of the remaining legacy implementations
+The following ideas remain useful, but the prototype does not implement them. They must not be treated as current guarantees.
 
-The remaining components are triaged for migration or removal.
-We notify authors / owners of benchmarks / agents that are not on our priority list and ask them to migrate.
-A component that is not migrated by the end-of-support date is deleted.
+### Processor-owned runtime
 
-When the deprecation period ends we remove the legacy processor and delete `run()` and `AggregateMetricsMixin` from `SimpleResponsesAPIAgent`.
+An earlier proposal gave an episode processor ownership of sandbox creation and teardown. The implemented Environment Server coordinates sessions and access instead. Moving all runtime ownership into that process remains a possible design, but it would require a cross-process sandbox service and a lease model. It is not the current lifecycle.
 
-DoD: no agent server defines `run` or `aggregate_metrics`.
+### Runtime authority
 
+The current contracts describe how an Agent connects to a Resources-owned sandbox. They do not define one authority that decides all runtime placement, image policy, network policy, resource limits, or process identity. A future runtime authority could validate these properties before execution and issue the connection grants.
 
-## Appendix
+### Enforceable sandbox grants
 
+`SandboxAccess` is a connection description, not a security boundary. It does not yet express or enforce filesystem scopes, command allowlists, network egress, credentials, or lease duration. These need provider-backed enforcement before the object can be described as a least-privilege grant.
 
-### Current solution
+### Generalized custom protocols
 
-What the current implementation shows, with the detail behind each finding in the sections that follow.
+`BaseEnvironmentServer` supports typed protocol implementations, but only the single-agent-turn protocol and compatibility adapters are demonstrated here. Staged multi-request, stepwise, simulated-user, multi-agent, and externally driven protocols still need concrete Environment Servers and shared conventions for task input, result types, observations, and aggregation.
+
+### OpenCode deduplication
+
+Environment Servers create the right boundary for removing separate sandboxed and non-sandboxed OpenCode implementations, but that consolidation has not been demonstrated. It depends on OpenCode adopting Agent sessions and consuming `SandboxAccess` without retaining benchmark-specific setup in its own `/run` path.
+
+### Checkpointing
+
+The current lifecycle has no protocol-level checkpoint. Agent and Resources sessions may hold in-memory or remote state, but the Environment Server cannot snapshot and restore a partially completed episode. Checkpoint schemas, ownership, consistency, and capture lineage remain open.
+
+### Durable attempts and cleanup
+
+`EpisodeId.attempt` distinguishes retries, and the collector persists ordinary failures in a sidecar. Environment Server cleanup callbacks are still process-local. A process loss can abandon a remote session, and no durable attempt coordinator resumes cleanup or an in-progress episode. Provider TTLs and reapers are required today; durable attempts remain future work.
+
+### Full native RL
+
+A full training integration must define how RL workers create native tasks, stream or collect trajectories, preserve token identity, control retries, and resume after worker failure. It must also validate at least one end-to-end NeMo RL run. Keeping existing token capture reachable is necessary but not sufficient.
+
+## Rejected and superseded alternatives
+
+### Direct collector-to-agent execution
+
+Keeping Agent `/run` as the collector target preserves the nesting that caused the problem. The implemented architecture rejects this as the default path. `legacy_agent` may relay to an Agent `/run`, but the collector still addresses the Environment Server and the relay is explicitly transitional.
+
+### Put orchestration on the Resources Server
+
+Resources owns task state, tools, verification, and any sandbox it creates. It does not also need to become the public episode driver. Keeping a separate Environment Server allows one Resources implementation to participate in more than one episode protocol and gives externally driven protocols a home without pretending they are ordinary verifiers.
+
+### A separate episode-processor server plus Environment Server
+
+The implemented Environment Server already occupies the orchestration boundary. Adding a second mandatory orchestration server would duplicate routing, startup, health, and ownership questions without evidence that two independent layers are needed. If later protocols require planners above one episode, that planning layer should be designed around cross-episode state rather than renaming the current per-episode server.
+
+## Appendix: historical evidence
+
+The remainder of this appendix records the repository evidence that motivated the design. Counts and behavior descriptions are snapshots of the cited commits, before mandatory Environment Server routing. They explain why the boundary changed; they do not describe the collector target or ownership model after the prototype.
+
+### Solution before Environment Servers
+
+The historical implementation showed the following problems.
 
 - **[Case studies](#case-studies).** GDPVal cannot change harness because of an undeclared deliverable handoff, not an import -- and that adapter relies on no special capability. SWE-bench, Terminal Bench and CVDP each rebuilt the same sandbox `run` under three sets of names. Tau2 required an agent server built around a benchmark that has no agent.
-- **[Environment <> Agent boundary](#environment--agent-boundary).** The collector only ever talks to agent servers. Every call to a resources server is made *by an agent*, on the agent's initiative, at a point the agent chooses. The environment is never addressed directly by the thing running the evaluation.
-- **[Rollout collection](#rollout-collection-in-gym).** The agent is on the critical path twice and neither visit is about running an agent: `/run` is episode orchestration, `/aggregate_metrics` is scoring roll-up. The loop itself is nested inside `/run` and never addressed directly.
+- **[Environment <> Agent boundary](#environment--agent-boundary).** The collector talked only to agent servers. Every call to a resources server was made *by an agent*, on the agent's initiative, at a point the agent chose. The evaluation runner did not address the environment directly.
+- **[Rollout collection](#rollout-collection-in-the-historical-baseline).** The agent was on the critical path twice and neither visit was about running an agent: `/run` was episode orchestration, and `/aggregate_metrics` was scoring roll-up. The loop itself was nested inside `/run` and was never addressed directly.
 - **[Agent server responsibilities](#agent-server-responsibilities).** Harnesses reach the runtime by two routes -- standalone servers, and three plugin hosts -- and a new episode condition adds a directory rather than a flag, hence `opencode_agent` beside `opencode_sandboxed_agent`. `IntegrationProfile` names the patterns and no server ships the `manifest.yaml` that would declare one, so the value is inferred by AST-parsing the body of `responses()`.
 - **[Resources server responsibilities](#resources-server-responsibilities).** The rollout row accumulates rather than being transformed: the same object is the `/run` input, the `/verify` input, the `/verify` output and the line in the rollouts file. No server enforces its own data model.
 - **[Metric aggregation](#blurry-ownership-of-metric-aggregation).** In practice it lives on the verifier -- 46 of 118 resources servers override it against 4 of 49 agents -- but the collection path posts to the agent, so a manual bridge is needed. `critpt` shows one being forgotten.
@@ -438,7 +373,7 @@ What the current implementation shows, with the detail behind each finding in th
 
 **Finding: import-level decoupling is cheap and correct, and does not make GDPVal agent-swappable.**
 
-Once applied, the verifier would no longer import the agent package. It has not landed: at `46f5ce8ff` `resources_servers/gdpval` still imports `responses_api_agents.stirrup_agent` from three non-test sites (`app.py:396`, `multistage_elo.py:196,325`), all lazily, inside functions.
+Once applied, the verifier would no longer import the agent package. It had not landed at `46f5ce8ff`: `resources_servers/gdpval` still imported `responses_api_agents.stirrup_agent` lazily from three non-test sites in `app.py` and `multistage_elo.py`.
 That is worth doing, and it would not be enough. GDPVal still could not run with any other agent, because the coupling that matters is not an import.
 It is an undeclared **deliverable handoff contract** executed during the run:
 
@@ -497,16 +432,16 @@ Tau2-bench is a multi-turn customer-service benchmark maintained outside NVIDIA.
 
 What the bridge had to build:
 
-* **Acquire code and data.** The dependency is a fork; `source.py` clones the same ref again at startup to fetch domain data. With no preparation step in an agent server's lifecycle, that runs from `setup_webserver` (`app.py:225`).
+* **Acquire code and data.** The dependency is a fork; `source.py` clones the same ref again at startup to fetch domain data. With no preparation step in an agent server's lifecycle, that runs from `setup_webserver` (`app.py`).
 * **Route model traffic.** `_run` (111L) rewrites tau2's LiteLLM clients to point at Gym model servers, preserving rollout correlation through `base_url_for_run`. It needs two: the policy and the simulated user. The simulated user is environment-side under the boundary above, but there is no environment here, so it is an agent config field.
-* **Express the task.** `Tau2RunRequest` (`app.py:182`) embeds tau2's `TextRunConfig` and `Task` verbatim and pins nine unsupported fields to `Literal` constants. The Gym-side `TaskData` keeps them as `Dict[str, Any]` and states that their shapes "belong to the tau2 package".
-* **Convert the trajectory back** into Responses API items, dropping the simulated user's tool calls and user-requested tool results when `result.agent_messages` is absent (`app.py:296-306`).
+* **Express the task.** `Tau2RunRequest` (`app.py`) embeds tau2's `TextRunConfig` and `Task` verbatim and pins nine unsupported fields to `Literal` constants. The Gym-side `TaskData` keeps them as `Dict[str, Any]` and states that their shapes "belong to the tau2 package".
+* **Convert the trajectory back** into Responses API items, dropping the simulated user's tool calls and user-requested tool results when `result.agent_messages` is absent (`app.py`).
 * **Aggregate metrics.** `compute_metrics` (113L) of per-domain and per-termination-reason analysis. With no resources server this is one of the three cases where agent-side aggregation is unavoidable rather than misplaced (see [section on metric aggregation](#blurry-ownership-of-metric-aggregation)).
 
 Three places where the interface did not fit:
 
-* `responses()` is `raise NotImplementedError` (`app.py:244`). The base class registers `/v1/responses` regardless, so the agent-loop endpoint exists and cannot be called. A benchmark that owns its loop has nothing to put there.
-* `Tau2VerifyResponse` inherits `Tau2RunRequest` (`app.py:200`), the straightforward way to satisfy `/run`, so the run config becomes part of the result and RewardProfiler averages it. `get_key_metrics` opens by deleting `mean/seed`, `mean/verbose_logs`, `mean/audio_debug`, `mean/audio_taps` and `mean/auto_review`. Nothing in the payload separates inputs from results, so the mean of a boolean debug flag is computed and then removed by name.
+* `responses()` is `raise NotImplementedError` (`app.py`). The base class registers `/v1/responses` regardless, so the agent-loop endpoint exists and cannot be called. A benchmark that owns its loop has nothing to put there.
+* `Tau2VerifyResponse` inherits `Tau2RunRequest` (`app.py`), the straightforward way to satisfy `/run`, so the run config becomes part of the result and RewardProfiler averages it. `get_key_metrics` opens by deleting `mean/seed`, `mean/verbose_logs`, `mean/audio_debug`, `mean/audio_taps` and `mean/auto_review`. Nothing in the payload separates inputs from results, so the mean of a boolean debug flag is computed and then removed by name.
 * Gym can expose only what upstream implements. `configs/tau2_agent_turn_limit.yaml` exists because the capability was landed in the fork first, and says so: "Requires Tau2 PR #7".
 
 Tau2 cannot run with another harness, and the tau2 agent cannot run against another environment. Unlike GDPVal, that is not a misplaced adapter; there is no seam in the benchmark to expose one at. It marks a third category, the benchmark Gym integrates rather than hosts, for which the needed contract is narrow and already visible in the list above: routed model access, a declared task-row schema, trajectory plus reward out, and a preparation step that is not a webserver hook.
@@ -566,9 +501,9 @@ The gray zone:
 
 * task is also to **some extent** independent. E.g. same math problem, with same task specification and golden answer, can be verified with different scoring logic -- e.g. judge vs equivalence of math formulas. If we make it part of the environment, pinned to a particular verifier, we'd need redundant tasks for such cases. However, there's very little wiggle room when it comes to task <> verifier pairing and a strict contract they need to follow. In most cases there's only one verifier that can work for a given task and the example I used is a corner case rather than a typical pattern. The opposite pattern - many tasks sharing the same verifier - is a common case in the repo.
 
-#### Rollout collection in Gym
+#### Rollout collection in the historical baseline
 
-`gym eval run` enters `RolloutCollectionHelper._run_from_config` (`nemo_gym/rollout_collection.py:1244`):
+At the measured commit, `gym eval run` entered `RolloutCollectionHelper._run_from_config` in `nemo_gym/rollout_collection.py`:
 
 Every HTTP call is marked with its caller and callee. `C` is the collector process, `A` the agent server, `R` the resources server, `M` the model server. Steps with no marker are local to the collector and touch no server.
 
@@ -622,7 +557,7 @@ Every HTTP call is marked with its caller and callee. `C` is the collector proce
 13.       rollout health checks -> format_health_report   (reads the jsonl; no server call)
 ```
 
-The collector only ever talks to agent servers: `C -> A` twice, at step 6 and step 11. Every call to a resources server is made *by an agent*, on the agent's initiative, at a point the agent chooses. The environment is never addressed directly by the thing running the evaluation.
+In this historical flow, the collector talked only to agent servers: `C -> A` twice, at step 6 and step 11. Every call to a resources server was made *by an agent*, on the agent's initiative, at a point the agent chose. The evaluation runner did not address the environment directly.
 
 Step 6 already knows the row's resources server, because that is where it routed `/verify`. Step 11 discards that knowledge and routes by agent instead. The reverify path kept it, which is why `rollout_reverification.py` has to rebuild an agent-to-resources-server mapping and carries a comment warning that a remapped row could otherwise "be verified by one server and aggregated by another."
 
@@ -698,8 +633,8 @@ So sandboxing does not stay inside `run()`. It leaks into whichever method touch
 
 The 19 servers missing from the first row are worth naming, because "the agent server does not run the agent loop" is not a rare edge case:
 
-* **An external process calls the model server directly.** `claude_code_agent` puts a rollout-scoped model-server URL in `ANTHROPIC_BASE_URL` so the CLI's own `/v1/messages` calls bypass Gym's agent entirely (`app.py:467`); `codex_agent`, `nemo_fabric_agent`, `terminus_2_sandboxed_agent`, `pinchbench`, `osworld_agent`, `harbor_agent`, `mini_swe_agent`, `mini_swe_agent_2` and `tau2` do the same through `resolve_model_base_url` or LiteLLM. 24 agents post to `server_name=self.config.model_server.name`, against 23 that post to `server_name=self.config.name`.
-* **The loop belongs to the plugged-in harness.** `anyswe_agent` passes the harness class into the sandbox (`NGSWE_AGENT_CLASS`, `app.py:358`) and `anyterminal_agent` templates it into a generated `agent_runner.py` (`app.py:264-275`), so the loop runs in the plugged-in server rather than the host.
+* **An external process calls the model server directly.** `claude_code_agent` puts a rollout-scoped model-server URL in `ANTHROPIC_BASE_URL` so the CLI's own `/v1/messages` calls bypass Gym's agent entirely (`app.py`); `codex_agent`, `nemo_fabric_agent`, `terminus_2_sandboxed_agent`, `pinchbench`, `osworld_agent`, `harbor_agent`, `mini_swe_agent`, `mini_swe_agent_2` and `tau2` do the same through `resolve_model_base_url` or LiteLLM. 24 agents post to `server_name=self.config.model_server.name`, against 23 that post to `server_name=self.config.name`.
+* **The loop belongs to the plugged-in harness.** `anyswe_agent` passes the harness class into the sandbox (`NGSWE_AGENT_CLASS`, `app.py`) and `anyterminal_agent` templates it into a generated `agent_runner.py` (`app.py`), so the loop runs in the plugged-in server rather than the host.
 * **Generating rather than solving.** The three `conversational_tool_use` generation stages call their model server directly, having no episode to drive.
 * **Inherited, not absent.** `labbench2_vlm_agent` and `vcqa_agent` inherit `SimpleAgent`'s loop; `gymnasium_agent` and `image_tools_agent` post straight to the model server.
 
@@ -724,12 +659,12 @@ An agent server is a directory, not a file, and almost everything about that dir
 | `overrides.txt` | 4 | dependency pins |
 | `materialize.py` | 4 | turning generated or downloaded assets into rows |
 
-What the framework actually requires is `app.py` **or** at least one parseable agent config — this is the rule encoded in `_discover_agents_in_dir` (`nemo_gym/agent_registry.py:134`). Everything else in the table above is convention with no check behind it.
+What the framework actually requires is `app.py` **or** at least one parseable agent config — this is the rule encoded in `_discover_agents_in_dir` (`nemo_gym/agent_registry.py`). Everything else in the table above is convention with no check behind it.
 
 *__Note__: The discovery rule also iterates only direct children of `responses_api_agents/`, never recursing. `conversational_tool_use` has neither a top-level `app.py` nor a top-level `configs/`, so it is skipped, and its four nested servers are skipped with it: `discover_agents()` returns __45 entries for 49 servers__.*
 
 
-**The patterns are real and named, but nothing declares them**. `IntegrationProfile` (`nemo_gym/environment/manifest.py:46`) enumerates exactly four of them as a required `manifest.yaml` field, and no environment or agent server in the repo ships a `manifest.yaml`. So the value gets inferred instead: `_infer_profile` (`environment/validation.py:381`) reconstructs it by AST-parsing the body of `responses()`, and `_classify` (`agent_registry.py:101`) decides self-containment by string-matching config keys.
+**The patterns are real and named, but nothing declares them**. `IntegrationProfile` (`nemo_gym/environment/manifest.py`) enumerates exactly four of them as a required `manifest.yaml` field, and no environment or agent server in the repo ships a `manifest.yaml`. So the value gets inferred instead: `_infer_profile` (`environment/validation.py`) reconstructs it by AST-parsing the body of `responses()`, and `_classify` (`agent_registry.py`) decides self-containment by string-matching config keys.
 
 
 **Conventions carry real information.** Several directory entries encode a fact about the server that nothing records:
@@ -748,7 +683,7 @@ Resources server contains components of the environment. As of 2026-09-02 (commi
 * aggregating metrics once every rollout is on disk -> `aggregate_metrics()` method; `/aggregate_metrics` endpoint
 * declaring whether its scoring can be replayed later -> `get_reverify_mode()` method; `/reverify_mode` endpoint
 
-Only `verify()` is `@abstractmethod` on `SimpleResourcesServer` (`nemo_gym/base_resources_server.py:138`); the rest have defaults, and tool handlers are registered by the subclass in `setup_webserver()`:
+Only `verify()` is `@abstractmethod` on `SimpleResourcesServer` (`nemo_gym/base_resources_server.py`); the rest have defaults, and tool handlers are registered by the subclass in `setup_webserver()`:
 
 ```python
 async def verify(body: BaseVerifyRequest) -> BaseVerifyResponse
@@ -782,7 +717,7 @@ async def verify(self, body: CalendarVerifyRequest) -> BaseVerifyResponse:
     return BaseVerifyResponse(**body.model_dump(), reward=reward)
 ```
 
-The class body is empty in 59 of the 67; its only job is to combine two parents. This mirrors the [collection flow](#rollout-collection-in-gym) exactly:
+The class body is empty in 59 of the 67; its only job is to combine two parents. This mirrors the [historical collection flow](#rollout-collection-in-the-historical-baseline) exactly:
 
 * the dataset row is a `<X>RunRequest`
 * the collector posts it to `/run` unchanged
@@ -828,7 +763,7 @@ Environments also use models for simulating users (`conversational_tool_use_simu
 
 #### Blurry ownership of metric aggregation
 
-`AggregateMetricsMixin` (`nemo_gym/reward_profile.py:803`) is mixed into both `SimpleResourcesServer` and `SimpleResponsesAPIAgent`, and both register `POST /aggregate_metrics` over the same `compute_aggregate_metrics(...)` call. Its docstring states the intent: benchmark-specific metric logic "can live on either server type".
+`AggregateMetricsMixin` (`nemo_gym/reward_profile.py`) is mixed into both `SimpleResourcesServer` and `SimpleResponsesAPIAgent`, and both register `POST /aggregate_metrics` over the same `compute_aggregate_metrics(...)` call. Its docstring states the intent: benchmark-specific metric logic "can live on either server type".
 
 In practice it lives on the verifier. 46 of 118 resources servers override `compute_metrics` or `get_key_metrics`; only 4 of the 49 agents do.
 
@@ -836,8 +771,8 @@ The two callers disagree about where to send the request:
 
 | caller | posts to |
 |---|---|
-| `rollout_collection.py:1678` (`gym eval run`) | the **agent** |
-| `rollout_reverification.py:619` (`gym eval reverify`) | the **resources server** |
+| `rollout_collection.py` (`gym eval run`) | the **agent** |
+| `rollout_reverification.py` (`gym eval reverify`) | the **resources server** |
 
 *The reverification is performed without a live agent server, so it cannot point to its endpoint and must use resources servers.*
 
@@ -905,6 +840,8 @@ Putting the three axes together, per integration (the environment column is empt
 Scope: Harbor and Prime Intellect / verifiers v1 only. Scaled Evals is a hosted control plane over evaluation runners, not the benchmark-agent abstraction being compared here.
 
 The categories below are the [personas](#personas): what someone **building** components needs, what someone **measuring** with them needs, and what someone **training** against them needs. Each dimension is ranked best to worst.
+
+The Gym column is the same pre-Environment-Server snapshot used elsewhere in this appendix. The comparison remains useful as motivation, but statements about collector routing, aggregation ownership, and runtime independence are historical rather than claims about the implemented prototype.
 
 #### Summary
 
@@ -987,7 +924,7 @@ Sources:
 
 ### Agent servers by episode protocol
 
-All 49 agent servers at `46f5ce8ff`, classified by the [protocol](#episode-protocols) their `run()` owns, with what else that `run()` carries. **scores in-agent** marks the 11 that never call `/verify`; **no verifier** marks the generation stages that hardcode `reward=1.0`. Everything else in the last column is a parameter, which is the claim the classification exists to test.
+All 49 agent servers at `46f5ce8ff` are classified below by the protocol their `run()` owned and by what else that method carried. **scores in-agent** marks the 11 that never called `/verify`; **no verifier** marks the generation stages that hardcoded `reward=1.0`. Everything else in the last column is a parameter, which is the claim the classification exists to test.
 
 | agent server | class | policy / data it carries |
 |---|---|---|
