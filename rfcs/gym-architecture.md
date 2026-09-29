@@ -41,7 +41,7 @@ The goal: **fix the benchmark, change the agent, and run** -- without editing YA
 The framing above rests on four premises. If any is wrong, the problem is a different one.
 
 - **Runtime composability is worth having.** That users should be able to evaluate an agentic system and not only a model -- selecting an agent the way they already select a model or a task -- is taken as given here, not argued.
-- **The architecture is the root cause; the individual couplings are symptoms.** A previous agent-swappability proposal delivered the `--agent` selector on top of the current architecture and was explicit that it was not a fix:
+- **The architecture is the root cause; the individual couplings are symptoms.** [Agent Swappability](https://rfc.frontier-evals.nvidia.com/r/swappable-agents) delivered the `--agent` selector on top of the current architecture and was explicit that it was not a fix:
   > The config composition mechanism proposed here is a band-aid to enable the selector. The coupling we observe in the repo is a symptom, not a root cause. Nothing stops (or even discourages) contributors from creating new components with the same coupling problems after this RFC is implemented.
 - **The four parts are separable at all.** Some benchmarks arrive as one piece -- Tau2 has no agent to separate out -- so the split is a target, not a property every benchmark already has.
 - **The agent is the axis to take first.** Model, environment and task have composability gaps of their own; this assumes the agent axis can be addressed without settling them.
@@ -131,12 +131,14 @@ UX improvements and agent--env decoupling:
 
 * ["[design] introduce episode processors for rollout orchestration" (\#2159)](https://github.com/NVIDIA-NeMo/Gym/issues/2159)
   * prototype: [\#3100]( https://github.com/NVIDIA-NeMo/Gym/pull/3100)
+  * execution plan: [Gym Episode Orchestration Execution Plan](https://docs.google.com/document/d/1A5HxB1RI1XWh0seUragVzT0MkcCMOAxpvlSVZtDEc2o/edit?tab=t.0#heading=h.xpeqgt48ckwh)
 * ["Epic: Gym CLI usability -- first class CLI experience" (\#1434)](https://github.com/NVIDIA-NeMo/Gym/issues/1434)
-  * Design: CLI foundational UX
+  * Design: [CLI foundational UX](https://docs.google.com/document/d/1z0wLyl6lNpLhLCqd33EH04RdcIl4UTy08_ROEnNRnUA/edit?tab=t.isyl62aq46gr)
   * PR: [\#1630](https://github.com/NVIDIA-NeMo/Gym/pull/1630)
 * ["epic: Agent swappability — first-class --agent-type selector in the CLI" (\#1583)](https://github.com/NVIDIA-NeMo/Gym/issues/1583)
-  * Design: Harness x Benchmark decoupling
-  * Design: Agent Swappability: a first-class `--agent` selector in the CLI
+  * Design: [Harness x Benchmark decoupling](https://docs.google.com/document/d/1z0wLyl6lNpLhLCqd33EH04RdcIl4UTy08_ROEnNRnUA/edit?tab=t.g1th5le1wg6c)
+  * Design: [Agent Swappability: a first-class `--agent` selector in the CLI](https://rfc.frontier-evals.nvidia.com/r/swappable-agents)
+  * Unified harness interface and importable classes: [\#3199](https://github.com/NVIDIA-NeMo/Gym/pull/3199) (draft)
   * PRs: [\#2640](https://github.com/NVIDIA-NeMo/Gym/pull/2640) (swap agents when parsing the config), [\#2641](https://github.com/NVIDIA-NeMo/Gym/pull/2641) (`--agent-type` CLI flag), [\#2661](https://github.com/NVIDIA-NeMo/Gym/pull/2661) (agent <> resources server compatibility safeguard), [\#2757](https://github.com/NVIDIA-NeMo/Gym/pull/2757) (rename agent instance after swapping)
   * Environments onboarded with a swappable agent: [\#2421](https://github.com/NVIDIA-NeMo/Gym/pull/2421) (SWE-bench resources server), [\#2424](https://github.com/NVIDIA-NeMo/Gym/pull/2424) (OpenCode sandboxed agent server), [\#2498](https://github.com/NVIDIA-NeMo/Gym/pull/2498) (SWE-bench Pro resources server), [\#2815](https://github.com/NVIDIA-NeMo/Gym/pull/2815) (Terminal Bench 2.1)
 * ["Decouple SWE environment infrastructure from agent harnesses" (\#1249)](https://github.com/NVIDIA-NeMo/Gym/issues/1249)
@@ -308,7 +310,7 @@ The following ideas remain useful, but the prototype does not implement them. Th
 
 ### Processor-owned runtime
 
-An earlier proposal gave an episode processor ownership of sandbox creation and teardown. The implemented Environment Server coordinates sessions and access instead. Moving all runtime ownership into that process remains a possible design, but it would require a cross-process sandbox service and a lease model. It is not the current lifecycle.
+An earlier proposal gave an episode processor ownership of sandbox creation and teardown. The implemented Environment Server coordinates sessions and access instead. Moving all runtime ownership into that process remains a possible design, but it would require the cross-process sandbox service tracked by [#2082](https://github.com/NVIDIA-NeMo/Gym/issues/2082) and a lease model. It is not the current lifecycle.
 
 ### Runtime authority
 
@@ -373,7 +375,7 @@ The historical implementation showed the following problems.
 
 ##### GDPVal <> stirrup agent
 
-**Finding: import-level decoupling is cheap and correct, and does not make GDPVal agent-swappable.**
+**Finding: the import-level decoupling proposed in [swappable-agents, Pattern 4](https://rfc.frontier-evals.nvidia.com/r/swappable-agents#pattern-4) is cheap and correct, and does not make GDPVal agent-swappable.**
 
 Once applied, the verifier would no longer import the agent package. It had not landed at `46f5ce8ff`: `resources_servers/gdpval` still imported `responses_api_agents.stirrup_agent` lazily from three non-test sites in `app.py` and `multistage_elo.py`.
 That is worth doing, and it would not be enough. GDPVal still could not run with any other agent, because the coupling that matters is not an import.
@@ -391,7 +393,7 @@ However, since the `run` lives in the agent server, we cannot reuse it with othe
 
 ##### SWE-bench / Terminal Bench / CVDP <> anyswe, anyterminal, cvdp
 
-**Finding: wrapping a benchmark-specific agent behind another host reproduces the coupling at a new layer.**
+**Finding: attempts to fix [Pattern 2](https://rfc.frontier-evals.nvidia.com/r/swappable-agents#pattern-2) produce another form of [Pattern 5](https://rfc.frontier-evals.nvidia.com/r/swappable-agents#pattern-5): wrapping a benchmark-specific agent behind another host reproduces the coupling at a new layer.**
 
 `anyswe_agent`, `anyterminal_agent` and `cvdp_agent` each added an `agent_server_module` / `agent_server_class` plugin point.
 This is the right idea at the wrong layer: the plugin point sits *inside* each agent server, so everything around it is rebuilt per host.
@@ -418,7 +420,7 @@ for generic-purpose agent harnesses. These wrappers are related to what the task
 1. agent needs to run in a sandbox
 2. the verifier needs to access the standbox - what it scores is the final state of the sandbox
 
-Pattern 5 already proves the harness is swappable: eight harnesses across three hosts, with Claude Code and Hermes plugging into all three.
+[Pattern 5](https://rfc.frontier-evals.nvidia.com/r/swappable-agents#pattern-5) already proves the harness is swappable: eight harnesses across three hosts, with Claude Code and Hermes plugging into all three.
 What is not reusable is the `run` around it — sandbox provisioning, harness bootstrap, artifact retrieval, scoring.
 The same people built that run three times, in three places, because no layer owns it, and each copy has drifted from the others.
 
@@ -442,7 +444,7 @@ What the bridge had to build:
 
 Three places where the interface did not fit:
 
-* `responses()` is `raise NotImplementedError` (`app.py`). The base class registers `/v1/responses` regardless, so the agent-loop endpoint exists and cannot be called. A benchmark that owns its loop has nothing to put there.
+* `responses()` is `raise NotImplementedError` (`app.py`), the mismatch tracked by [#2241](https://github.com/NVIDIA-NeMo/Gym/issues/2241). The base class registers `/v1/responses` regardless, so the agent-loop endpoint exists and cannot be called. A benchmark that owns its loop has nothing to put there.
 * `Tau2VerifyResponse` inherits `Tau2RunRequest` (`app.py`), the straightforward way to satisfy `/run`, so the run config becomes part of the result and RewardProfiler averages it. `get_key_metrics` opens by deleting `mean/seed`, `mean/verbose_logs`, `mean/audio_debug`, `mean/audio_taps` and `mean/auto_review`. Nothing in the payload separates inputs from results, so the mean of a boolean debug flag is computed and then removed by name.
 * Gym can expose only what upstream implements. `configs/tau2_agent_turn_limit.yaml` exists because the capability was landed in the fork first, and says so: "Requires Tau2 PR #7".
 
