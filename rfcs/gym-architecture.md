@@ -193,11 +193,13 @@ These adapters are migration mechanisms, not the target contract. New protocol w
 5. It calls Agent `/v1/agent_sessions` with task identity, the tool grants, and the Resources-provided sandbox access.
 6. It invokes the Agent's rollout-scoped `/v1/responses` endpoint once with the task's Responses API input.
 7. It closes the Agent session before verification. The close response returns agent observations and may return the final Resources cookie jar.
-8. It calls Resources `/verify` with the typed verification input and the Resources session cookies.
+8. It calls Resources `/verify` with the Resources Server's existing flat verify body: task data, `responses_create_params`, and the Agent `response`. The Resources session cookies identify the seeded episode.
 9. It returns either a typed result or a typed failure.
 10. It closes the Resources session during bounded final cleanup.
 
 The base Environment Server supplies queue admission, an episode deadline, identity validation, and LIFO cleanup. Cleanup callbacks are process-local and best-effort. They are shielded from cancellation and bounded by a cleanup timeout, but they are not durable after process or host failure. Remote services therefore still need expiry or reaping for abandoned state.
+
+`ResourcesVerifyRequest[VerificationInputT]` remains available for protocols that need a typed protocol-specific handoff instead of the flat single-agent body. User-simulation and future multi-agent Environment Servers can define role-attributed verification input and pair it with a Resources Server that explicitly accepts that specialization. The built-in `single_agent_turn` path does not require Resources Servers to import an Environment Server-specific request type.
 
 ```mermaid
 sequenceDiagram
