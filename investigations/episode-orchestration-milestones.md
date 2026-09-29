@@ -64,6 +64,7 @@ Implemented:
 - configured and request-granted tool overlay by name;
 - `/v1/responses` remains the behavior endpoint;
 - agent close returns observations and final resources cookies;
+- the Environment Server sends Resources the same flat verify body used by legacy Agent `/run`;
 - `SingleAgentTurnEnvironmentServer` owns seed → session → activation → close → verify.
 
 Remaining gates:
@@ -78,7 +79,7 @@ Implemented:
 - SWE-bench Pro creates and owns the task sandbox;
 - resources seed returns direct `SandboxAccess`;
 - Hermes reconnects as a borrower or creates its own fallback sandbox;
-- Hermes runs its harness in the sandbox and calls the attempt-qualified Gym Model Server endpoint directly;
+- Hermes runs its harness in the sandbox while the Agent Server relays model requests through Gym's attempt-qualified route;
 - agent close stops the runner, returns observations, and disconnects borrowed access;
 - verification begins only after agent close;
 - SWE-bench Pro extracts the patch, uses fresh verifier sandboxes, and closes resources state idempotently.
@@ -233,6 +234,7 @@ Fan-out remains several independent episodes.
 Required gates:
 
 - define one concrete protocol's participant roles;
+- define its role-attributed `ResourcesVerifyRequest[VerificationInputT]` specialization when flat verification is insufficient;
 - define visibility and private state;
 - define ordering, concurrency, termination, and join behavior;
 - distinguish participant identity from policy identity;

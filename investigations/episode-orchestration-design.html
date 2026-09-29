@@ -99,7 +99,7 @@ const flows = [
       ["Agent Server", "Model Server", "Model and tool loop", "Activation", "One Responses activation can include many model and tool iterations."],
       ["Agent Server", "Environment Server", "NeMoGymResponse", "Activation", "The Environment Server validates the response."],
       ["Environment Server", "Agent Server", "POST /v1/agent_sessions/close", "Agent close", "Close stops agent-controlled activity, releases owned state, and returns observations plus final resources cookies."],
-      ["Environment Server", "Task/Resources Server", "POST /verify", "Verify", "Verification starts only after agent close succeeds and receives the original Responses input plus the agent response."],
+      ["Environment Server", "Task/Resources Server", "POST /verify", "Verify", "The built-in single-agent protocol sends the Resources Server's flat task-data plus Responses body. Other protocols may opt into a typed ResourcesVerifyRequest specialization."],
       ["Task/Resources Server", "Environment Server", "Benchmark-specific verify result", "Verify", "Verifier fields remain at the top level; agent observations are added without discarding benchmark fields."],
       ["Environment Server", "Task/Resources Server", "POST /close_session", "Cleanup", "Resources close runs during final LIFO cleanup after run() returns and outside the episode deadline."],
       ["Environment Server", "Rollout caller", "SingleAgentTurnResponse", "Result", "The response contains exactly one typed result or handled failure."]
@@ -117,7 +117,7 @@ const flows = [
       ["Environment Server", "Hermes Agent Server", "Seed caller-assigned agent session", "Agent session", "The Environment Server transports SandboxAccess unchanged."],
       ["Hermes Agent Server", "Task sandbox", "Reconnect as borrower and install runtime", "Agent session", "Hermes resolves the named provider, connects, uploads its runner and observer, and does not take owner authority."],
       ["Environment Server", "Hermes Agent Server", "Invoke attempt-qualified /v1/responses", "Activation", "Hermes launches one sandbox runner and polls its request and output files."],
-      ["Hermes sandbox runner", "Model Server", "Direct model requests", "Activation", "The Agent Server injects the attempt-qualified Model Server URL before launch; the sandbox calls it directly and keeps capture correlation."],
+      ["Hermes Agent Server", "Model Server", "Relay model requests", "Activation", "The sandbox runner writes each model request into its session directory. Hermes reads it, calls the Model Server through Gym's attempt-qualified route, records the response ID, and writes the response back for the runner."],
       ["Hermes Agent Server", "Environment Server", "Return response", "Activation", "Hermes converts its trajectory to NeMoGymResponse and retains observation state for close."],
       ["Environment Server", "Hermes Agent Server", "Close agent session", "Agent close", "Hermes cancels active work, terminates the runner, removes session files, disconnects the borrowed sandbox, and returns observations."],
       ["Environment Server", "SWE-bench Pro", "Verify stable task state", "Verify", "SWE-bench Pro validates identity and extracts the patch from the original task sandbox."],

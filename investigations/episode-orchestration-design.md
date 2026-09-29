@@ -187,7 +187,9 @@ If agent close fails, verification does not run. The failure stage is `cleanup`;
 
 ### Verify and final result
 
-Verification receives `EpisodeId`, `TaskId`, the original Responses request, and the validated agent response under `SingleAgentTurnResourcesVerifyRequest`. The resources cookie jar authorizes the call.
+The built-in single-agent-turn protocol sends the Resources Server's existing flat verify body: the task's `task_data` fields plus `responses_create_params` and the validated agent `response`. The resources cookie jar identifies and authorizes the seeded session. This keeps the Resources Server independent of `single_agent_turn` request types and lets an existing verifier serve legacy Agent `/run` and native Environment Server callers through the same body model.
+
+`ResourcesVerifyRequest[VerificationInputT]` remains a separate, intentional extension point. A concrete Environment Server may use it when its protocol result cannot be represented by the legacy flat verify body. User-simulation and future multi-agent protocols can define a role-attributed `VerificationInputT`, while the participating Resources Server opts into that concrete generic specialization. The generic request is not required by, and should not be imported into, the built-in single-agent-turn Resources Servers.
 
 The successful `SingleAgentTurnResult` is the Task/Resources Server's `BaseVerifyResponse` subclass with extra benchmark fields preserved at the top level. `ng_agent_observations` is added from agent close. This layout intentionally matches historical stored `/run` results rather than adding a nested `verification` object.
 
@@ -278,7 +280,7 @@ Hermes rejects required tool grants it does not implement. It requires either bo
 
 For borrowed access it resolves the named provider and reconnects to the descriptor. For fallback execution it creates a sandbox and marks itself owner. It installs the pinned Hermes runtime into the sandbox, uploads the runner and observer, and creates a session directory keyed by the caller-assigned agent session ID.
 
-One attempt-qualified `/v1/responses` call launches the Hermes runner in a sandbox PTY. Before launch, the Agent Server resolves the attempt-qualified Model Server base URL and gives that URL to the sandbox runner. Hermes then calls the Gym Model Server directly from the sandbox; there is no host-side model relay or model-request polling loop. The Model Server records the correlated calls, while the Agent Server waits for runner completion, converts the Hermes trajectory to a `NeMoGymResponse`, and captures observations.
+One attempt-qualified `/v1/responses` call launches the Hermes runner in a sandbox PTY. The sandbox runner writes each model request into its session directory. The Agent Server polls for those request files, sends each request to the Model Server through Gym's attempt-qualified route, records the returned response ID, and writes the response back for the runner. When the runner finishes, the Agent Server converts the Hermes trajectory to a `NeMoGymResponse` and captures observations.
 
 On agent close, Hermes cancels an active activation, terminates the runner, removes its session directory, and then either disconnects the borrowed sandbox or stops its own sandbox. It returns observations after mutation has stopped.
 
