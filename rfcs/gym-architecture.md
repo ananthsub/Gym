@@ -239,6 +239,8 @@ The Environment Server chooses which Resources transports to grant through `reso
 
 `SandboxAccess` describes borrower access to an owner-managed sandbox. The implemented connection is a direct provider reference plus a serializable sandbox descriptor and working directory. In the demonstrated SWE Pro path, Resources creates and owns the sandbox, returns `SandboxAccess`, and receives final session state back through its cookies. Hermes connects to that sandbox for its Agent session and disconnects at close. It does not stop a Resources-owned sandbox. Hermes can still create and stop its own configured sandbox outside that handoff, but that fallback is agent-owned behavior rather than the native Resources handoff.
 
+Hermes calls the Gym Model Server directly from the sandbox. The Agent Server resolves the attempt-qualified Model Server URL before launching the sandbox runner and waits for the runner to exit. There is no host-side model relay or file-polled model-request bridge. Direct access therefore requires the sandbox network to reach the configured Model Server host and port.
+
 This distinction matters: the Environment Server coordinates access, but it is not the runtime owner. Ownership determines who starts, expires, and stops the sandbox.
 
 ### Results, failures, aggregation, and labels
